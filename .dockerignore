@@ -1,0 +1,13 @@
+# Docker 构建上下文（仓库根目录）
+# 排除本地产物与参考仓库，避免上下文过大、旧产物污染镜像
+
+.reference/
+**/node_modules/
+**/dist/
+web/public/cesium/
+deploy/.env
+.git/
+.gitignore
+*.log
+README.md
+01-系统设计与3D地球外壳.md

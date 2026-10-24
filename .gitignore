@@ -1,0 +1,25 @@
+# 依赖
+node_modules/
+
+# 构建产物
+dist/
+web/public/cesium/
+
+# 环境变量（保留示例文件）
+.env
+.env.local
+.env.*.local
+deploy/.env
+
+# 日志
+*.log
+npm-debug.log*
+
+# 编辑器 / 系统
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# 参考仓库（仅本地对照，不参与构建）
+.reference/

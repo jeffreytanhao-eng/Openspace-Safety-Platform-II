@@ -1,0 +1,50 @@
+[
+  {
+    "norad": 38128,
+    "name": "STARLINK-38128",
+    "file": "38128.json",
+    "points": 4320
+  },
+  {
+    "norad": 37711,
+    "name": "STARLINK-37711",
+    "file": "37711.json",
+    "points": 4320
+  },
+  {
+    "norad": 38123,
+    "name": "STARLINK-38123",
+    "file": "38123.json",
+    "points": 4320
+  },
+  {
+    "norad": 38107,
+    "name": "STARLINK-38107",
+    "file": "38107.json",
+    "points": 4320
+  },
+  {
+    "norad": 38122,
+    "name": "STARLINK-38122",
+    "file": "38122.json",
+    "points": 4320
+  },
+  {
+    "norad": 38117,
+    "name": "STARLINK-38117",
+    "file": "38117.json",
+    "points": 4320
+  },
+  {
+    "norad": 38054,
+    "name": "STARLINK-38054",
+    "file": "38054.json",
+    "points": 4320
+  },
+  {
+    "norad": 38124,
+    "name": "STARLINK-38124",
+    "file": "38124.json",
+    "points": 4320
+  }
+]

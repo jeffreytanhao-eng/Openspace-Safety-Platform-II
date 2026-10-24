@@ -1,0 +1,811 @@
+/* ============================================================
+ * 态势主场景外壳样式
+ * 包含：页面容器、logo、标题栏、左右面板、仿真时间条、dock、
+ * 双时区时钟图例、复位按钮、边缘浮标。
+ * ============================================================ */
+
+.constel-page {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  min-height: 560px;
+  overflow: hidden;
+  border-radius: var(--r);
+  background: #04060b;
+}
+
+.constel-canvas {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+
+  canvas {
+    display: block;
+  }
+}
+
+/* ---------------- 左上角 logo / 标题栏 ---------------- */
+.app-logo {
+  position: absolute;
+  top: 12px;
+  left: 16px;
+  z-index: 9;
+  height: 60px;
+  width: auto;
+  max-width: 40vw;
+  object-fit: contain;
+  pointer-events: none;
+  user-select: none;
+  filter: drop-shadow(0 0 6px rgba(0, 0, 0, 0.6));
+}
+
+.constel-titlebar {
+  position: absolute;
+  top: 10px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 9;
+  pointer-events: none;
+  user-select: none;
+  white-space: nowrap;
+
+  .tb-frame {
+    position: relative;
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    padding: 9px 30px;
+    background: linear-gradient(180deg, rgba(12, 22, 42, 0.78), rgba(6, 11, 22, 0.6));
+    border: 1px solid rgba(79, 195, 247, 0.32);
+    box-shadow: 0 0 20px rgba(31, 110, 180, 0.28), inset 0 0 24px rgba(79, 195, 247, 0.07);
+    backdrop-filter: blur(8px);
+
+    &::before {
+      content: '';
+      position: absolute;
+      inset: -1px;
+      pointer-events: none;
+      background:
+        linear-gradient(#5fd0ff, #5fd0ff) left top / 16px 2px,
+        linear-gradient(#5fd0ff, #5fd0ff) left top / 2px 16px,
+        linear-gradient(#5fd0ff, #5fd0ff) right top / 16px 2px,
+        linear-gradient(#5fd0ff, #5fd0ff) right top / 2px 16px,
+        linear-gradient(#5fd0ff, #5fd0ff) left bottom / 16px 2px,
+        linear-gradient(#5fd0ff, #5fd0ff) left bottom / 2px 16px,
+        linear-gradient(#5fd0ff, #5fd0ff) right bottom / 16px 2px,
+        linear-gradient(#5fd0ff, #5fd0ff) right bottom / 2px 16px;
+      background-repeat: no-repeat;
+    }
+  }
+
+  .tb-wing {
+    position: relative;
+    width: 52px;
+    height: 1px;
+    flex: none;
+    background: linear-gradient(90deg, transparent, rgba(79, 195, 247, 0.75));
+
+    &::before {
+      content: '';
+      position: absolute;
+      top: -2.5px;
+      right: 0;
+      width: 6px;
+      height: 6px;
+      transform: rotate(45deg);
+      background: #5fd0ff;
+      box-shadow: 0 0 6px rgba(95, 208, 255, 0.9);
+    }
+
+    &.tb-wing-r {
+      transform: scaleX(-1);
+    }
+  }
+
+  .tb-texts {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+  }
+
+  .tb-title {
+    margin: 0;
+    font-size: 21px;
+    font-weight: 800;
+    letter-spacing: 7px;
+    text-indent: 7px;
+    line-height: 1.2;
+    background: linear-gradient(180deg, #f2faff 15%, #a8e2ff 55%, #4fa8f7 100%);
+    -webkit-background-clip: text;
+    background-clip: text;
+    color: transparent;
+    filter: drop-shadow(0 0 9px rgba(79, 195, 247, 0.45));
+  }
+
+  .tb-sub {
+    margin-top: 3px;
+    font-size: 10px;
+    font-weight: 500;
+    letter-spacing: 2.5px;
+    text-indent: 2.5px;
+    color: rgba(168, 226, 255, 0.72);
+    text-shadow: 0 0 6px rgba(79, 195, 247, 0.35);
+  }
+}
+
+/* ---------------- 左侧滑出面板 ---------------- */
+.side-panel {
+  position: absolute;
+  top: 76px;
+  left: 0;
+  bottom: 62px;
+  z-index: 7;
+  width: 300px;
+  display: flex;
+  flex-direction: column;
+  padding: 14px 12px 12px;
+  background: rgba(8, 13, 24, 0.9);
+  border-radius: 12px;
+  border: 1px solid rgba(120, 160, 220, 0.25);
+  backdrop-filter: blur(12px);
+  box-shadow: 0 6px 22px rgba(0, 0, 0, 0.45), inset 0 1px 0 rgba(255, 255, 255, 0.04);
+  /* 面板空白/半透明区域点击穿透到画布拾取卫星；仅需交互的控件恢复事件 */
+  pointer-events: none;
+  user-select: none;
+
+  .sp-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    padding-bottom: 10px;
+    border-bottom: 1px solid rgba(120, 160, 220, 0.16);
+
+    .sp-head-main {
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+      min-width: 0;
+
+      .sp-title {
+        font-size: 14px;
+        font-weight: 700;
+        color: #e8eef7;
+      }
+
+      .sp-count {
+        font-size: 11px;
+        color: #7fb0ff;
+      }
+
+      .sp-meta {
+        font-size: 10px;
+        color: #8fa8c9;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+    }
+
+    .sp-close {
+      flex: none;
+      width: 24px;
+      height: 24px;
+      line-height: 22px;
+      text-align: center;
+      border-radius: 6px;
+      pointer-events: auto; /* 关闭按钮可点击 */
+      background: rgba(120, 160, 220, 0.12);
+      border: 1px solid rgba(120, 160, 220, 0.25);
+      color: #cfdcea;
+      cursor: pointer;
+
+      &:hover {
+        background: rgba(255, 255, 255, 0.14);
+      }
+
+      /* 三角变体（太空安全目标列表收起键）：内联 SVG 替代文本符号，按钮转 flex 居中 */
+      &.sp-close-tri {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        padding: 0;
+        line-height: 0;
+
+        svg {
+          width: 9px;
+          height: 9px;
+          fill: currentColor;
+          display: block;
+        }
+      }
+    }
+  }
+
+  .sp-search {
+    position: relative;
+    margin: 12px 0 10px;
+    pointer-events: auto; /* 搜索框可输入/清除 */
+
+    .sp-input {
+      width: 100%;
+      height: 34px;
+      padding: 0 30px 0 12px;
+      border-radius: 8px;
+      box-sizing: border-box;
+      background: rgba(255, 255, 255, 0.06);
+      border: 1px solid rgba(120, 160, 220, 0.28);
+      color: #e6edf6;
+      font-size: 13px;
+      outline: none;
+
+      &::placeholder {
+        color: #7d8ba3;
+      }
+
+      &:focus {
+        border-color: #4fc3f7;
+      }
+    }
+
+    .sp-clear {
+      position: absolute;
+      top: 50%;
+      right: 8px;
+      transform: translateY(-50%);
+      width: 18px;
+      height: 18px;
+      line-height: 16px;
+      text-align: center;
+      border-radius: 50%;
+      background: rgba(255, 255, 255, 0.16);
+      color: #cfdcea;
+      font-size: 13px;
+      cursor: pointer;
+    }
+  }
+
+  .sp-types {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    margin-bottom: 10px;
+
+    .sp-type {
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+      padding: 4px 8px;
+      border-radius: 14px;
+      cursor: pointer;
+      pointer-events: auto; /* 类型勾选可点击 */
+      background: rgba(255, 255, 255, 0.05);
+      border: 1px solid rgba(120, 160, 220, 0.18);
+      color: #93a4bd;
+      font-size: 11px;
+
+      &.on {
+        background: rgba(79, 195, 247, 0.16);
+        border-color: rgba(79, 195, 247, 0.5);
+        color: #e6edf6;
+      }
+
+      .sp-type-dot {
+        width: 9px;
+        height: 9px;
+        border-radius: 50%;
+        flex: none;
+      }
+    }
+  }
+
+  .sp-list {
+    flex: 1;
+    overflow-y: auto;
+    min-height: 0;
+    /* 面板整体 pointer-events:none 用于空白穿透拾取，但列表滚动区必须恢复事件，否则触摸/滚轮在此滑动会被穿透到画布而无法滚动 */
+    pointer-events: auto;
+    -webkit-overflow-scrolling: touch;
+    touch-action: pan-y;
+
+    &::-webkit-scrollbar {
+      width: 6px;
+    }
+
+    &::-webkit-scrollbar-thumb {
+      background: rgba(120, 160, 220, 0.3);
+      border-radius: 3px;
+    }
+
+    .sp-empty {
+      padding: 28px 0;
+      text-align: center;
+      color: #7d8ba3;
+      font-size: 12px;
+      line-height: 1.8;
+    }
+  }
+}
+
+.panel-enter-active,
+.panel-leave-active {
+  transition: transform 0.28s ease, opacity 0.28s ease;
+}
+
+.panel-enter-from,
+.panel-leave-to {
+  transform: translateX(-100%);
+  opacity: 0;
+}
+
+/* ---------------- 仿真时间条 ---------------- */
+.sim-bar {
+  position: absolute;
+  left: 50%;
+  bottom: 14px;
+  transform: translateX(-50%);
+  z-index: 9;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: min(660px, calc(100% - 32px));
+  padding: 7px 10px;
+  border-radius: 10px;
+  background: #0b1a2b;
+  border: 1px solid rgba(110, 160, 230, 0.38);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45);
+}
+
+.sim-play {
+  flex: none;
+  width: 30px;
+  height: 30px;
+  border-radius: 8px;
+  cursor: pointer;
+  font-size: 10px;
+  color: #dbe9fb;
+  background: rgba(50, 100, 180, 0.45);
+  border: 1px solid rgba(110, 160, 230, 0.4);
+
+  &:hover {
+    color: #fff;
+    border-color: #7fb0ff;
+    background: rgba(60, 125, 215, 0.6);
+  }
+
+  &.sim-reset {
+    font-size: 15px;
+  }
+}
+
+.sim-main {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.sim-line {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  min-width: 0;
+
+  b {
+    flex: none;
+    font-size: 11px;
+    color: #eaf2fc;
+    font-variant-numeric: tabular-nums;
+  }
+
+  .sim-range {
+    flex: 1 1 auto;
+    min-width: 0;
+    font-size: 9.5px;
+    color: #7d92b0;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+}
+
+.sim-slider {
+  width: 100%;
+  height: 14px;
+  accent-color: #7fb0ff;
+  cursor: pointer;
+}
+
+.sim-rates {
+  flex: none;
+  display: flex;
+  gap: 3px;
+
+  button {
+    height: 24px;
+    padding: 0 6px;
+    font-size: 9.5px;
+    border-radius: 5px;
+    cursor: pointer;
+    color: #9dbbdd;
+    background: rgba(30, 60, 110, 0.6);
+    border: 1px solid rgba(110, 150, 210, 0.28);
+
+    &:hover {
+      color: #eaf2fc;
+      border-color: rgba(120, 175, 255, 0.55);
+    }
+
+    &.on {
+      color: #0b1a2b;
+      background: #7fb0ff;
+      border-color: #7fb0ff;
+      font-weight: 700;
+    }
+  }
+}
+
+/* ---------------- 底部 dock ---------------- */
+.constel-dock {
+  position: absolute;
+  bottom: 70px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 9;
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 4px;
+  max-width: calc(100% - 28px);
+  padding: 5px 10px;
+  border-radius: 22px;
+  background: rgba(8, 13, 24, 0.78);
+  border: 1px solid rgba(120, 160, 220, 0.24);
+  backdrop-filter: blur(10px);
+
+  .dock-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    height: 32px;
+    padding: 0 12px;
+    border-radius: 16px;
+    white-space: nowrap;
+    flex-shrink: 0;
+    user-select: none;
+    background: transparent;
+    border: 1px solid transparent;
+    color: #aebacd;
+    font-size: 12px;
+    cursor: pointer;
+    transition: all 0.18s ease;
+
+    &:hover {
+      color: #e6edf6;
+      background: rgba(255, 255, 255, 0.06);
+    }
+
+    &.on {
+      color: #4fc3f7;
+      background: rgba(79, 195, 247, 0.16);
+      border-color: rgba(79, 195, 247, 0.4);
+    }
+
+    .dock-ico {
+      font-size: 13px;
+    }
+  }
+}
+
+/* ---------------- 左下角复位 ---------------- */
+.constel-reset {
+  position: absolute;
+  left: 14px;
+  bottom: 14px;
+  z-index: 9;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  height: 34px;
+  padding: 0 14px;
+  border-radius: 17px;
+  cursor: pointer;
+  user-select: none;
+  touch-action: manipulation;
+  background: rgba(8, 13, 24, 0.78);
+  border: 1px solid rgba(120, 160, 220, 0.24);
+  backdrop-filter: blur(10px);
+  color: #aebacd;
+  font-size: 12px;
+  transition: all 0.18s ease;
+
+  .reset-ico {
+    flex: none;
+    color: #4fc3f7;
+  }
+
+  &:hover {
+    color: #e6edf6;
+    background: rgba(255, 255, 255, 0.08);
+    border-color: rgba(79, 195, 247, 0.55);
+    box-shadow: 0 0 12px rgba(79, 195, 247, 0.25);
+  }
+
+  &:active {
+    transform: scale(0.96);
+  }
+}
+
+/* ---------------- 右下角图例 + 双时区时钟 ---------------- */
+.constel-legend {
+  position: absolute;
+  right: 14px;
+  bottom: 14px;
+  z-index: 5;
+  width: 188px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: rgba(10, 16, 28, 0.72);
+  border: 1px solid rgba(120, 160, 220, 0.25);
+  backdrop-filter: blur(8px);
+
+  .lg-title {
+    min-height: 20px;
+    font-size: 12px;
+    font-weight: 600;
+    color: #7fb0ff;
+    letter-spacing: 0.5px;
+    margin-bottom: 8px;
+
+    .lg-clock {
+      display: flex;
+      flex-direction: column;
+      align-items: flex-start;
+      gap: 1px;
+      width: 100%;
+
+      .lg-clock-line {
+        font-size: 11px;
+        font-weight: 500;
+        color: #cfe0f5;
+        letter-spacing: 0.2px;
+        white-space: nowrap;
+        font-variant-numeric: tabular-nums;
+        line-height: 1.2;
+      }
+    }
+  }
+}
+
+/* 左右边缘外拉 tag */
+.edge-tag {
+  position: absolute;
+  top: 50%;
+  transform: translateY(-50%);
+  z-index: 8;
+  writing-mode: vertical-rl;
+  letter-spacing: 5px;
+  padding: 16px 7px;
+  background: rgba(10, 16, 28, 0.78);
+  backdrop-filter: blur(8px);
+  color: #7fb0ff;
+  font-size: 12px;
+  line-height: 1;
+  cursor: pointer;
+  border-style: solid;
+  border-color: rgba(120, 160, 220, 0.28);
+  transition: color 0.18s ease, background 0.18s ease, border-color 0.18s ease;
+
+  &:hover {
+    color: #4fc3f7;
+    background: rgba(16, 26, 44, 0.92);
+    border-color: rgba(79, 195, 247, 0.55);
+  }
+}
+
+.edge-tag-left {
+  left: 0;
+  border-width: 1px 1px 1px 0;
+  border-radius: 0 10px 10px 0;
+}
+
+.edge-tag-right {
+  right: 0;
+  border-width: 1px 0 1px 1px;
+  border-radius: 10px 0 0 10px;
+  color: #7fd8ff;
+}
+
+/* ---------------- 移动端 ---------------- */
+html.is-mobile {
+  .app-logo {
+    top: 8px;
+    left: 10px;
+    height: 48px;
+  }
+
+  .constel-titlebar {
+    top: 6px;
+
+    .tb-frame {
+      padding: 5px 14px;
+      gap: 8px;
+    }
+
+    .tb-wing {
+      width: 26px;
+    }
+
+    .tb-title {
+      font-size: 14px;
+      letter-spacing: 3px;
+      text-indent: 3px;
+    }
+
+    .tb-sub {
+      font-size: 8px;
+      letter-spacing: 1.5px;
+      text-indent: 1.5px;
+      margin-top: 2px;
+    }
+  }
+
+  /* 列表面板 → 移动端底部抽屉：高度由 --drawer-h 控制，可拖拽（拖拽中 .is-dragging 关闭过渡） */
+  .side-panel {
+    top: auto;
+    left: 0;
+    right: 0;
+    bottom: calc(88px + env(safe-area-inset-bottom));
+    width: auto;
+    height: var(--drawer-h, 20vh);
+    max-height: calc(100% - 128px - env(safe-area-inset-bottom));
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    padding: 7px 9px 7px;
+    background: rgba(8, 13, 24, 0.96);
+    border-right: none;
+    border-top: 1px solid rgba(120, 160, 220, 0.28);
+    border-radius: 14px 14px 0 0;
+    box-shadow: 0 -10px 26px rgba(2, 6, 16, 0.55);
+    pointer-events: auto;
+    transition: height 0.28s ease;
+
+    &.is-dragging {
+      transition: none;
+    }
+  }
+
+  /* 抽屉过渡方向：移动端自底部升起（覆盖桌面「从左滑入」） */
+  .panel-enter-from,
+  .panel-leave-to {
+    transform: translateY(100%);
+  }
+
+  /* 头部触摸拖拽手柄 */
+  .side-panel .sp-head {
+    flex: none;
+    position: relative;
+    padding-bottom: 5px;
+    touch-action: none;
+
+    &::before {
+      content: '';
+      position: absolute;
+      top: -4px;
+      left: 50%;
+      transform: translateX(-50%);
+      width: 30px;
+      height: 3px;
+      border-radius: 2px;
+      background: rgba(255, 255, 255, 0.2);
+    }
+
+    .sp-head-main {
+      flex: 1 1 auto;
+      min-width: 0;
+      flex-direction: row;
+      align-items: baseline;
+      gap: 6px;
+
+      .sp-title {
+        flex: none;
+        font-size: 12px;
+      }
+
+      .sp-count {
+        flex: none;
+        font-size: 10px;
+      }
+
+      .sp-meta {
+        flex: 0 1 auto;
+        min-width: 0;
+        font-size: 9.5px;
+      }
+    }
+  }
+
+  /* 收起按钮：抽屉里改用「✕」；三角变体保持三角 */
+  .side-panel .sp-close {
+    font-size: 0;
+
+    &::after {
+      content: '✕';
+      font-size: 12px;
+    }
+  }
+
+  .side-panel .sp-close.sp-close-tri::after {
+    content: none;
+  }
+
+  .sim-bar {
+    bottom: calc(72px + env(safe-area-inset-bottom));
+    width: calc(100% - 20px);
+    gap: 7px;
+    padding: 6px 8px;
+  }
+
+  .sim-line .sim-range {
+    display: none;
+  }
+
+  .constel-dock {
+    position: absolute;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    transform: none;
+    width: 100%;
+    max-width: 100%;
+    flex-wrap: wrap;
+    gap: 0;
+    padding: 6px 6px calc(6px + env(safe-area-inset-bottom));
+    border-radius: 14px 14px 0 0;
+    border-left: none;
+    border-right: none;
+    border-bottom: none;
+
+    .dock-btn {
+      flex: 1 1 0;
+      flex-direction: column;
+      gap: 2px;
+      height: auto;
+      padding: 7px 2px 5px;
+      border-radius: 10px;
+
+      .dock-ico {
+        font-size: 18px;
+        line-height: 1;
+      }
+
+      .dock-txt {
+        font-size: 11px;
+      }
+    }
+  }
+
+  .constel-reset {
+    left: 10px;
+    bottom: calc(96px + env(safe-area-inset-bottom));
+  }
+
+  .constel-legend {
+    top: 10px;
+    right: 10px;
+    bottom: auto;
+    width: auto;
+    max-width: 46vw;
+    padding: 6px 8px;
+    border-radius: 8px;
+  }
+
+  .edge-tag {
+    font-size: 11px;
+    letter-spacing: 3px;
+    padding: 12px 5px;
+  }
+}
