@@ -1,4 +1,4 @@
-import type { EphemFrame, EphemSet, EphemState, ParseResult, Vec3 } from './types'
+﻿import type { EphemFrame, EphemManSegment, EphemSet, EphemState, ParseResult, Vec3 } from './types'
 import { parseIso } from './time'
 import { frameToEci, uvwCovToEci } from './frames'
 
@@ -55,7 +55,9 @@ export function parseOcm(text: string): ParseResult {
   const lines = text.split(/\r?\n/)
   const states: EphemState[] = []
 
-  let section: 'none' | 'meta' | 'traj' | 'cov' = 'none'
+  let section: 'none' | 'meta' | 'traj' | 'cov' | 'man' = 'none'
+  const maneuvers: EphemManSegment[] = []
+  let manAcc: { id: string | null; t: number | null; dura: number | null; acc: number[] | null } | null = null
   let refFrame: EphemFrame = 'EME2000'
   let timeSystem = 'UTC'
   let objectName = ''
@@ -144,18 +146,39 @@ export function parseOcm(text: string): ParseResult {
       section = 'none'
       continue
     }
-    if (upper.startsWith('COVARIANCE_START')) {
+    if (upper.startsWith('COVARIANCE_START') || upper.startsWith('COV_START')) {
       flushPending()
       attachCov()
       section = 'cov'
       continue
     }
-    if (upper.startsWith('COVARIANCE_STOP')) {
+    if (upper.startsWith('COVARIANCE_STOP') || upper.startsWith('COV_STOP')) {
       attachCov()
       section = 'none'
       continue
     }
     if (upper.startsWith('COMMENT')) continue
+    if (upper.startsWith('MAN_START')) {
+      flushPending()
+      section = 'man'
+      manAcc = { id: null, t: null, dura: null, acc: null }
+      continue
+    }
+    if (upper.startsWith('MAN_STOP')) {
+      if (manAcc && manAcc.t != null && manAcc.dura != null && manAcc.dura > 0) {
+        const ax = manAcc.acc ? Math.hypot(manAcc.acc[0], manAcc.acc[1], manAcc.acc[2]) : 0
+        const dvMps = manAcc.dura * ax * 1000 // km/s^2 * s → m/s
+        maneuvers.push({
+          t0: manAcc.t,
+          t1: manAcc.t + manAcc.dura * 1000,
+          dvMps: Number(dvMps.toFixed(6)),
+          id: manAcc.id || undefined
+        })
+      }
+      manAcc = null
+      section = 'none'
+      continue
+    }
 
     const eq = line.indexOf('=')
     if (eq > 0 && !NUM_RE.test(line.slice(0, eq).trim())) {
@@ -197,21 +220,50 @@ export function parseOcm(text: string): ParseResult {
         timeSystem = value.toUpperCase()
       } else if (key === 'OBJECT_NAME') {
         objectName = value
-      } else if (key === 'OBJECT_ID') {
-        objectId = value
+      } else if (key === 'OBJECT_ID' || key === 'OBJECT_DESIGNATOR') {
+        if (!objectId) objectId = value
+      } else if (key === 'TRAJ_REF_FRAME') {
+        const frameCand = value.toUpperCase().startsWith('ITRF') ? 'ITRF' : value.toUpperCase()
+        if ((FRAME_SET as string[]).indexOf(frameCand) >= 0) refFrame = frameCand as EphemFrame
+      } else if (key === 'COV_REF_FRAME') {
+        covFrame = value
+      } else if (key === 'MAN_ID' && manAcc) {
+        manAcc.id = value
       }
       continue
     }
 
     if (section === 'cov') {
       const tokens = line.split(/\s+/)
+      // Starlink public OCM: "<ISO> c11..c66" (21 LTM values after time)
+      const maybeT = parseIso(tokens[0])
+      if (maybeT !== null && tokens.length >= 22 && tokens.slice(1, 22).every((c) => NUM_RE.test(c))) {
+        attachCov()
+        covEpoch = maybeT
+        covNums = tokens.slice(1, 22).map(Number)
+        attachCov()
+        continue
+      }
       if (tokens.every((c) => NUM_RE.test(c))) {
         for (const c of tokens) covNums.push(Number(c))
       }
       continue
     }
 
-    // 轨迹数值行：第一列为 ISO 时间
+    // MAN 数据行：TIME_ABSOLUTE MAN_DURA ACC_X ACC_Y ACC_Z
+    if (section === 'man' && manAcc) {
+      const toks = line.split(/\s+/)
+      const mt = parseIso(toks[0])
+      if (mt !== null && toks.length >= 5) {
+        manAcc.t = mt
+        manAcc.dura = Number(toks[1])
+        manAcc.acc = [Number(toks[2]), Number(toks[3]), Number(toks[4])]
+      }
+      continue
+    }
+
+    // 轨迹数值行：仅在 TRAJ 段内；第一列为 ISO 时间
+    if (section !== 'traj') continue
     const tokens = line.split(/\s+/)
     const t = parseIso(tokens[0])
     if (t === null) continue
@@ -260,8 +312,9 @@ export function parseOcm(text: string): ParseResult {
 
   const first = states[0]
   const last = states[states.length - 1]
+  const nameMatch = /STARLINK-(\d+)/i.exec(objectName)
   const noradMatch = /\b(\d{5})\b/.exec(objectId)
-  const norad = noradMatch ? Number(noradMatch[1]) : 0
+  const norad = nameMatch ? Number(nameMatch[1]) : noradMatch ? Number(noradMatch[1]) : 0
 
   const set: EphemSet = {
     id: `${norad || 'X'}-${first.t}`,
@@ -276,6 +329,7 @@ export function parseOcm(text: string): ParseResult {
     stepSec: medianStep(states),
     states,
     objectId: objectId || undefined,
+    maneuvers: maneuvers.length ? maneuvers : undefined,
     warnings
   }
 

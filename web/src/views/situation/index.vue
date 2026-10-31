@@ -1,14 +1,8 @@
 <script setup lang="ts">
 /**
- * 态势主页面外壳（第一部分：3D 地球 + UI 框架）
- *
- * 与原系统对齐：
- *   · 底部 dock：安全热力图 / AI专家 / 初始化窗口（前两项本期未实现，点击给出提示）；
- *   · 左侧「太空安全目标列表」由左缘竖排 tag 拉出；
- *   · 右侧为「星历分析」窗口，由右缘竖排 tag「星历与安全分析」拉出；
- *   · 右下角只保留 UTC + 北京时间双时区时钟。
+ * 态势主页面外壳（3D 地球 + UI 框架）
  */
-import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { computed, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import SceneCore from './SceneCore.vue'
@@ -17,63 +11,73 @@ import SiteListPanel from './SiteListPanel.vue'
 import ConstellationPanel from './ConstellationPanel.vue'
 import EphemPanel from './EphemPanel.vue'
 import { useDevice } from '@/composables/useDevice'
+import { useI18n } from '@/composables/useI18n'
 import { ephOpen, simPlaying, simSpeed, simTimeMs } from './scene'
-import logoUrl from '@/assets/logo/openspace-logo.png'
+import {
+  activeEphem,
+  maneuverStates,
+  maneuverBurnMs,
+  clearManeuver,
+  activateEphem,
+  refreshEphemList
+} from './ephem/useUserEphemeris'
+import { listLocalEphemerides, fetchEphemerisText } from '@/api/ephemerides'
+import { parseEphemeris } from './ephem/parse'
+import { putSet } from './ephem/store'
+import type { EphemSet } from './ephem/types'
+import type { CatalogTle } from '@/composables/useCatalog'
 
 type PanelKind = 'sat' | 'site' | 'cons'
 
 const sceneRef = ref<InstanceType<typeof SceneCore>>()
 const { isMobile } = useDevice()
 const route = useRoute()
+const { t } = useI18n()
 
 /* ---------------- 左侧列表面板 ---------------- */
 
-/** 左侧当前展开的面板；空串 = 全部收起 */
 const dockMode = ref<PanelKind | ''>('')
 
 function closePanel() {
   dockMode.value = ''
 }
 
-/** 左缘 tag：拉出「太空安全目标列表」 */
 function openSatPanel() {
   dockMode.value = 'sat'
 }
 
 const showSatTag = computed(() => !isMobile.value && dockMode.value !== 'sat')
-/** 右缘 tag：星历分析与右侧详情同侧，展开时隐藏 */
 const showEphemTag = computed(() => !isMobile.value && !ephOpen.value)
 
 function toggleEphemDock() {
   ephOpen.value = !ephOpen.value
 }
 
-/** URL 深链：/situation/sat|site|cons 打开左侧列表，/situation/eph 打开星历分析 */
 watch(
   () => route.params.type,
-  (t) => {
-    if (t === 'sat' || t === 'site' || t === 'cons') dockMode.value = t
-    else if (t === 'eph') ephOpen.value = true
+  (type) => {
+    const t0 = Array.isArray(type) ? type[0] : type
+    if (t0 === 'sat' || t0 === 'site' || t0 === 'cons') dockMode.value = t0
+    else if (t0 === 'eph') ephOpen.value = true
   },
   { immediate: true }
 )
 
-/* ---------------- dock（与原系统一致，本期仅初始化窗口可用） ---------------- */
-
-/** 本期未实现的功能入口：给出提示，不产生任何三维副作用 */
 function notReady(name: string) {
-  ElMessage.info(`${name}将在后续版本接入`)
+  ElMessage.info(t('sit.later', { name }))
 }
 
-/** dock「初始化窗口」：整页刷新 */
 function reloadSystem() {
-  window.location.reload()
+  void sceneRef.value?.reinitViewport()
+  const now = Date.now()
+  simAnchorMs.value = now
+  simTimeMs.value = now
+  sceneRef.value?.setSimTime(now)
 }
 
 /* ---------------- 仿真时间条 ---------------- */
 
 const SIM_RATE_OPTIONS = [0.1, 1, 10, 60]
-/** 时间轴中心：启动 / 重置 / 拖动后保证「现在」落在进度条中点 */
 const simAnchorMs = ref(Date.now())
 const SIM_HALF_SPAN_MS = 12 * 3600e3
 const simStart = computed(() => simAnchorMs.value - SIM_HALF_SPAN_MS)
@@ -97,20 +101,18 @@ const simRangeText = computed(
   () => `${fmtSimTime(simStart.value, false)} ~ ${fmtSimTime(simStop.value, false)} UTC · 24 h`
 )
 
-/** 拖动播放头：直接改写仿真时刻（晨昏线随之变化） */
 function simSeek(e: Event) {
   const span = simStop.value - simStart.value
   if (span <= 0) return
-  const t = simStart.value + (Number((e.target as HTMLInputElement).value) / 1000) * span
-  simTimeMs.value = t
-  sceneRef.value?.setSimTime(t)
+  const tMs = simStart.value + (Number((e.target as HTMLInputElement).value) / 1000) * span
+  simTimeMs.value = tMs
+  sceneRef.value?.setSimTime(tMs)
 }
 
 function simTogglePlay() {
   simPlaying.value = !simPlaying.value
 }
 
-/** 重置到当前真实 UTC 时刻（时间轴重新以现在为中心） */
 function simResetNow() {
   const now = Date.now()
   simAnchorMs.value = now
@@ -118,77 +120,226 @@ function simResetNow() {
   sceneRef.value?.setSimTime(now)
 }
 
-/** 复位镜头：回到武汉初始视角与初始地球大小 */
 function resetCameraHome() {
   sceneRef.value?.resetCameraHome()
 }
 
-/* ---------------- 右下角双时区时钟 ---------------- */
+/* ---------------- 目录选择 → 三维 ---------------- */
 
-const clockNow = ref(Date.now())
-let clockTimer = 0
-onMounted(() => {
-  clockTimer = window.setInterval(() => { clockNow.value = Date.now() }, 1000)
-})
-onBeforeUnmount(() => clearInterval(clockTimer))
+function onSatSelect(item: CatalogTle) {
+  sceneRef.value?.selectCatalogItem(item)
+}
 
-const clockUtc = computed(() => {
-  const d = new Date(clockNow.value)
-  return `UTC ${d.getUTCFullYear()}-${pad2(d.getUTCMonth() + 1)}-${pad2(d.getUTCDate())} ${pad2(d.getUTCHours())}:${pad2(d.getUTCMinutes())}:${pad2(d.getUTCSeconds())}`
-})
+function onSatTypes(types: string[]) {
+  sceneRef.value?.filterCatalogTypes(types)
+}
 
-const clockBjt = computed(() => {
-  const d = new Date(clockNow.value + 8 * 3600e3)
-  return `北京 ${d.getUTCFullYear()}-${pad2(d.getUTCMonth() + 1)}-${pad2(d.getUTCDate())} ${pad2(d.getUTCHours())}:${pad2(d.getUTCMinutes())}:${pad2(d.getUTCSeconds())}`
-})
+function onStationShow(norad: number) {
+  sceneRef.value?.showStation(norad)
+}
 
-/* ---------------- 星历面板事件（三维图层绘制待后续接入） ---------------- */
+function onConsShow(name: string) {
+  sceneRef.value?.showConstellation(name)
+}
+
+function onConsOrbit(name: string) {
+  sceneRef.value?.showConsOrbit(name)
+}
+
+/* ---------------- 用户星历图层 ---------------- */
 
 function onEphemFocusSet() {
-  // TODO(待后续): 在三维场景绘制星历轨道与当前位置
+  void paintUserEphem({ track: true })
 }
 
 function onEphemFocusEvent() {
-  // TODO(待后续): 在三维场景定位星历威胁事件
+  void paintUserEphem()
 }
+
+/**
+ * IDB 旧版本只存了 states、丢了 maneuvers → 跳转/琥珀段会空。
+ * 用本地 index.maneuverEpochs 补回并写回 IDB（parse 已带 maneuvers 时不覆盖）。
+ */
+async function ensureActiveMansFromLocalIndex(): Promise<void> {
+  const set = activeEphem.value
+  if (!set || set.maneuvers?.length) return
+  try {
+    const list = await listLocalEphemerides()
+    const bare = set.id.startsWith('local-') ? set.id.slice('local-'.length) : set.id
+    const row =
+      list.items.find((x) => x.id === bare) ||
+      list.items.find(
+        (x) =>
+          String(x.norad) === String(set.norad) &&
+          String(x.format || '').toLowerCase() === String(set.format || '').toLowerCase()
+      )
+    if (!row?.maneuverEpochs?.length) return
+    attachMansFromIndex(set, row.maneuverEpochs)
+    if (set.maneuvers?.length) await putSet(set)
+  } catch (e) {
+    console.warn('[situation] ensureActiveMans', e)
+  }
+}
+
+async function paintUserEphem(opts?: { track?: boolean }) {
+  await ensureActiveMansFromLocalIndex()
+  sceneRef.value?.showEphemOrbit?.(activeEphem.value, opts)
+  sceneRef.value?.showEphemManeuver?.(maneuverStates.value, maneuverBurnMs.value)
+}
+
+/** 机动卡片定位：相机对准对应琥珀机动块（不改仿真时刻）；idx=null 取消高亮与标签 */
+function onLocateMan(
+  idx: number | null,
+  info: { t0: number; duraSec: number; lat: string; lon: string } | null
+) {
+  if (idx == null || !info) {
+    sceneRef.value?.focusEphemManIndex?.(null)
+    return
+  }
+  const label = `${fmtSimTime(info.t0)} UTC · ${info.duraSec} s\n${info.lat} / ${info.lon}`
+  const ok = sceneRef.value?.focusEphemManIndex?.(idx, label)
+  if (!ok) {
+    // 兜底：MAN 高亮尚未就绪（如 IDB 旧数据）→ 现场重绘后再定位一次
+    void ensureActiveMansFromLocalIndex().then(() => {
+      sceneRef.value?.showEphemOrbit?.(activeEphem.value, { track: false })
+      if (!sceneRef.value?.focusEphemManIndex?.(idx, label)) {
+        ElMessage.info(t('sit.noManSegment'))
+      }
+    })
+  }
+}
+
+function onViewportReady() {
+  // Restore track zoom if an ephem is already active after viewport rebuild
+  paintUserEphem(activeEphem.value ? { track: true } : undefined)
+}
+
+/** 关联入库前去掉逐点协方差，避免 OCM 撑爆 IndexedDB；轨道绘制不需要 cov */
+function stripStatesCov<T extends { states: { t: number; r: [number, number, number]; v: [number, number, number]; cov?: Float64Array }[] }>(set: T): T {
+  return {
+    ...set,
+    states: set.states.map((s) => ({ t: s.t, r: s.r, v: s.v }))
+  }
+}
+
+/** 把 index 里的 MAN 历元挂到 EphemSet（parse 已带 maneuvers 时不覆盖） */
+function attachMansFromIndex(
+  set: EphemSet,
+  epochs: { t: number; dvMps?: number; duraSec?: number; id?: string }[] | undefined
+) {
+  if (set.maneuvers?.length) return set
+  if (!epochs?.length) return set
+  const t0 = set.states[0]?.t ?? set.start
+  const t1 = set.states[set.states.length - 1]?.t ?? set.stop
+  const segs = epochs
+    .map((m) => {
+      const dura = m.duraSec && m.duraSec > 0 ? m.duraSec : 1
+      return {
+        t0: m.t,
+        t1: m.t + dura * 1000,
+        dvMps: m.dvMps,
+        id: m.id
+      }
+    })
+    .filter((s) => s.t1 >= t0 && s.t0 <= t1)
+  if (segs.length) set.maneuvers = segs
+  return set
+}
+
+watch(
+  activeEphem,
+  () => {
+    paintUserEphem()
+  },
+  { flush: 'post' }
+)
+
+watch(
+  [maneuverStates, maneuverBurnMs],
+  () => {
+    paintUserEphem()
+  },
+  { flush: 'post' }
+)
+
+/** 深链 /situation/eph?ephId=ocm-38054 从本地星历目录载入并展示 */
+watch(
+  () => [route.params.type, route.query.ephId] as const,
+  async ([type, ephId]) => {
+    if (type !== 'eph' && !ephId) return
+    ephOpen.value = true
+    const id = ephId ? String(ephId) : ''
+    if (!id) return
+    if (activeEphem.value?.id === `local-${id}`) {
+      paintUserEphem({ track: true })
+      return
+    }
+    try {
+      const list = await listLocalEphemerides()
+      const row = list.items.find((x) => x.id === id)
+      if (!row) return
+      const body = await fetchEphemerisText(row.file)
+      const parsed = parseEphemeris(body, {
+        fileName: row.file,
+        name: row.name,
+        norad: Number(row.norad) || undefined
+      })
+      if (!parsed.ok || !parsed.set) {
+        console.warn('[situation] eph parse failed', parsed.error)
+        return
+      }
+      let set = parsed.set
+      set.id = `local-${row.id}`
+      set.source = 'builtin'
+      set.name = row.name
+      if (set.format === 'ocm' || set.states.length > 4000) {
+        set = stripStatesCov(set)
+      }
+      set = attachMansFromIndex(set, row.maneuverEpochs)
+      await putSet(set)
+      await refreshEphemList()
+      await activateEphem(set.id)
+      if (!activeEphem.value) {
+        console.warn('[situation] activateEphem failed for', set.id)
+        return
+      }
+      clearManeuver()
+      paintUserEphem({ track: true })
+    } catch (e) {
+      console.warn('[situation] load ephId failed', e)
+    }
+  },
+  { immediate: true }
+)
 </script>
 
 <template>
   <div class="constel-page">
-    <!-- 左上角 logo -->
-    <img class="app-logo" :src="logoUrl" alt="Openspace logo" />
+    <!-- Embedded 态势: no own logo / title / platform clock (AppShell owns those). -->
+    <SceneCore ref="sceneRef" @viewport-ready="onViewportReady" />
 
-    <!-- 正上方标题栏：纯装饰，不拦截画布交互 -->
-    <header class="constel-titlebar">
-      <div class="tb-frame">
-        <span class="tb-wing"></span>
-        <div class="tb-texts">
-          <h1 class="tb-title">开源太空安全平台</h1>
-          <div class="tb-sub">Openspace Space Safety Platform</div>
-        </div>
-        <span class="tb-wing tb-wing-r"></span>
-      </div>
-    </header>
-
-    <!-- 三维地球场景 -->
-    <SceneCore ref="sceneRef" />
-
-    <!-- 左侧列表面板 -->
-    <SatListPanel :open="dockMode === 'sat'" @close="closePanel" />
+    <SatListPanel
+      :open="dockMode === 'sat'"
+      @close="closePanel"
+      @select="onSatSelect"
+      @types="onSatTypes"
+      @station-show="onStationShow"
+      @cons-show="onConsShow"
+      @cons-orbit="onConsOrbit"
+    />
     <SiteListPanel :open="dockMode === 'site'" @close="closePanel" />
     <ConstellationPanel :open="dockMode === 'cons'" @close="closePanel" />
 
-    <!-- 右侧星历分析面板（独立开关，与左侧面板可同时展开） -->
     <EphemPanel
       @close="ephOpen = false"
+      @locate-man="onLocateMan"
       @focus-set="onEphemFocusSet"
       @focus-event="onEphemFocusEvent"
     />
 
-    <!-- 仿真时间条 -->
     <div class="sim-bar">
-      <button class="sim-play sim-reset" title="重置到当前时间" @click="simResetNow">↺</button>
-      <button class="sim-play" :title="simPlaying ? '暂停仿真' : '继续仿真'" @click="simTogglePlay">
+      <button class="sim-play sim-reset" :title="t('sit.resetNowTip')" @click="simResetNow">↻</button>
+      <button class="sim-play" :title="simPlaying ? t('sit.pause') : t('sit.play')" @click="simTogglePlay">
         {{ simPlaying ? '❚❚' : '▶' }}
       </button>
       <div class="sim-main">
@@ -211,60 +362,46 @@ function onEphemFocusEvent() {
           v-for="r in SIM_RATE_OPTIONS"
           :key="r"
           :class="{ on: simSpeed === r }"
-          :title="`仿真倍率 ${r}×`"
+          :title="t('sit.rateTip', { r })"
           @click="simSpeed = r"
         >{{ r }}×</button>
       </div>
     </div>
 
-    <!-- 底部 dock 导航栏（与原系统一致：安全热力图 / AI专家 / 初始化窗口） -->
     <div class="constel-dock">
-      <button class="dock-btn" title="安全热力图：展示交会分析（CRI/CRP）热力事件" @click="notReady('安全热力图')">
-        <span class="dock-ico">✱</span><span class="dock-txt">安全热力图</span>
+      <button class="dock-btn" :title="t('sit.heatTip')" @click="notReady(t('sit.heat'))">
+        <span class="dock-ico">✱</span><span class="dock-txt">{{ t('sit.heat') }}</span>
       </button>
-      <button class="dock-btn" title="太空安全专家：用自然语言查询目标、碰撞风险与空间环境" @click="notReady('AI专家')">
-        <span class="dock-ico">◈</span><span class="dock-txt">AI专家</span>
+      <button class="dock-btn" :title="t('sit.aiTip')" @click="notReady(t('sit.ai'))">
+        <span class="dock-ico">◇</span><span class="dock-txt">{{ t('sit.ai') }}</span>
       </button>
-      <button class="dock-btn" title="初始化窗口：刷新整个页面" @click="reloadSystem">
-        <span class="dock-ico">↺</span><span class="dock-txt">初始化窗口</span>
+      <button class="dock-btn" :title="t('sit.reloadTip')" @click="reloadSystem">
+        <span class="dock-ico">↻</span><span class="dock-txt">{{ t('sit.reload') }}</span>
       </button>
     </div>
 
-    <!-- 左下角复位按钮 -->
-    <button class="constel-reset" title="复位镜头：回到初始位置（武汉）与初始地球大小" @click="resetCameraHome">
+    <button class="constel-reset" :title="t('sit.resetTip')" @click="resetCameraHome">
       <svg class="reset-ico" viewBox="0 0 24 24" width="15" height="15" aria-hidden="true">
         <circle cx="12" cy="12" r="6.5" fill="none" stroke="currentColor" stroke-width="1.8" />
         <path d="M12 2.5v4M12 17.5v4M2.5 12h4M17.5 12h4" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" />
         <circle cx="12" cy="12" r="1.8" fill="currentColor" />
       </svg>
-      <span class="reset-txt">复位</span>
+      <span class="reset-txt">{{ t('sit.reset') }}</span>
     </button>
 
-    <!-- 右下角图例：只保留 UTC + 北京时间双时区时钟 -->
-    <div class="constel-legend">
-      <div class="lg-title">
-        <div class="lg-clock">
-          <span class="lg-clock-line">{{ clockUtc }}</span>
-          <span class="lg-clock-line">{{ clockBjt }}</span>
-        </div>
-      </div>
-    </div>
-
-    <!-- 桌面端左缘外拉 tag：拉出太空安全目标列表 -->
     <button
       v-if="showSatTag"
       class="edge-tag edge-tag-left"
-      title="展开太空安全目标列表"
+      :title="t('sit.satListTip')"
       @click="openSatPanel"
-    >太空安全目标列表</button>
+    >{{ t('sit.satList') }}</button>
 
-    <!-- 桌面端右缘外拉 tag：拉出星历分析 -->
     <button
       v-if="showEphemTag"
       class="edge-tag edge-tag-right"
-      title="展开星历与安全分析"
+      :title="t('sit.ephemAnalTip')"
       @click="toggleEphemDock"
-    >星历与安全分析</button>
+    >{{ t('sit.ephemAnal') }}</button>
   </div>
 </template>
 

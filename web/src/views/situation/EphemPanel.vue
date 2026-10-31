@@ -8,7 +8,7 @@
  * - 一键与在轨目录做 24h / 48h / 72h 交会筛选（Worker 内粗筛 + 精筛 + Pc 计算）；
  * - 事件列表点击即在三维中定位并高亮该次接近。
  */
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 import { ephOpen, fmtNum, drawerHeightVh, isDrawerDragging, useDrawerDrag } from './scene'
 import {
   MAX_FILE_MB,
@@ -19,8 +19,19 @@ import {
   runScreening, selectThreat, DEFAULT_SCREEN,
   type ScreenParams, type BuiltinSample
 } from './ephem/useUserEphemeris'
-import type { ThreatEvent } from './ephem/types'
+import type { ThreatEvent, Vec3 } from './ephem/types'
+import { useI18n } from '@/composables/useI18n'
 import { getSet } from './ephem/store'
+import { interpolateAt } from './ephem/interp'
+import { gmstRad } from './ephem/time'
+import { twoBodyPropagate } from './ephem/screening'
+
+const { t } = useI18n()
+
+/** 机动明细行：每段 MAN 的起始时刻 / 时长 / 位置经纬度（OCM 专有） */
+interface ManRow { t0: number; duraSec: number; lat: string; lon: string; done: boolean }
+/** 机动卡片定位事件负载（发给三维做标签文本与高亮定位） */
+interface ManLocateInfo { idx: number; t0: number; duraSec: number; lat: string; lon: string }
 
 const emit = defineEmits<{
   (e: 'close'): void
@@ -30,6 +41,8 @@ const emit = defineEmits<{
   (e: 'focus-event', ev: ThreatEvent | null): void
   /** 质量卡「AI 解读」：把组织好的评估指标交给智能体抽屉提问 */
   (e: 'ai-explain', text: string): void
+  /** 机动卡片点击：定位到该琥珀 MAN 块（null = 取消选中，撤高亮与标签） */
+  (e: 'locate-man', idx: number | null, info: ManLocateInfo | null): void
 }>()
 
 const { onTouchStart: onDragStart, onTouchMove: onDragMove, onTouchEnd: onDragEnd } = useDrawerDrag(() => emit('close'))
@@ -42,6 +55,73 @@ const params = ref<ScreenParams>({ ...DEFAULT_SCREEN })
 
 const activeName = computed(() => activeEphem.value?.name || '')
 const activeMeta = computed(() => ephemMetas.value.find((m) => m.id === activeEphem.value?.id) || null)
+
+/** ECI 位置 → 地心经纬度（度，东经 ±180°），仅展示用 */
+function eciToLatLon(r: Vec3, tMs: number): { lat: number; lon: number } {
+  const lat = (Math.atan2(r[2], Math.hypot(r[0], r[1])) * 180) / Math.PI
+  let lon = ((Math.atan2(r[1], r[0]) - gmstRad(tMs)) * 180) / Math.PI
+  lon = ((lon + 540) % 360) - 180
+  return { lat, lon }
+}
+
+/** 纬度 → 「北纬 x.x° / 南纬 x.x°」 */
+function fmtLat(lat: number): string {
+  return `${lat >= 0 ? '北纬' : '南纬'} ${Math.abs(lat).toFixed(2)}°`
+}
+
+/** 经度 → 「东经 x.x° / 西经 x.x°」 */
+function fmtLon(lon: number): string {
+  return `${lon >= 0 ? '东经' : '西经'} ${Math.abs(lon).toFixed(2)}°`
+}
+
+/** 机动明细列表：每段 MAN 的起始时刻 / 时长 / 位置经纬度（OCM 专有） */
+const activeManList = computed<ManRow[]>(() => {
+  const mans = activeMeta.value?.maneuvers || []
+  const set = activeEphem.value
+  if (!mans.length || !set) return []
+  return mans.map((m) => {
+    // MAN 可落在 TRAJ 区间外（OCM 的 MAN 窗口常早于首点）：区间外用两端状态做二体推进近似
+    let r: Vec3 | null = null
+    const st = interpolateAt(set.states, m.t0)
+    if (st) r = st.r
+    else if (set.states.length) {
+      const s0 = set.states[0]
+      const sN = set.states[set.states.length - 1]
+      const base = m.t0 < s0.t ? s0 : sN
+      const prop = twoBodyPropagate(base.r, base.v, (m.t0 - base.t) / 1000)
+      if (prop) r = prop.r
+    }
+    const ll = r ? eciToLatLon(r, m.t0) : null
+    return {
+      t0: m.t0,
+      duraSec: Math.max(0, Math.round((m.t1 - m.t0) / 1000)),
+      lat: ll ? fmtLat(ll.lat) : '—',
+      lon: ll ? fmtLon(ll.lon) : '—',
+      done: m.t1 < Date.now()
+    }
+  })
+})
+/** 当前选中的机动卡片下标（null = 无） */
+const selectedMan = ref<number | null>(null)
+
+/** 切换星历（或取消激活）时清空卡片选中态 */
+watch(
+  () => activeEphem.value?.id,
+  () => {
+    selectedMan.value = null
+  }
+)
+
+/** 卡片点击：选中 → 高亮+大屏定位；再点取消；点其它卡片切换（窗口外段由三维二体推进近似定位） */
+function toggleMan(i: number, m: ManRow) {
+  if (selectedMan.value === i) {
+    selectedMan.value = null
+    emit('locate-man', null, null)
+    return
+  }
+  selectedMan.value = i
+  emit('locate-man', i, { idx: i, t0: m.t0, duraSec: m.duraSec, lat: m.lat, lon: m.lon })
+}
 
 /** 事件分档配色（与三维标记同一套） */
 const LEVEL_COLOR: Record<ThreatEvent['level'], string> = {
@@ -209,6 +289,7 @@ function startScreen() {
               <div class="ep-item-main">
                 <b class="ep-item-name" :title="m.name">{{ m.name }}</b>
                 <span class="ep-tag">{{ m.format.toUpperCase() }}</span>
+                <span v-if="m.maneuvers?.length" class="ep-tag man" title="OCM MAN 机动段">{{ m.maneuvers.length }} 处机动</span>
                 <span class="ep-tag" :class="{ cov: m.hasCov }">{{ m.hasCov ? '含协方差' : '无协方差' }}</span>
                 <span class="ep-tag">{{ m.source === 'builtin' ? '样本' : '上传' }}</span>
               </div>
@@ -227,13 +308,15 @@ function startScreen() {
 
         <!-- 内置样本 -->
         <div v-if="builtinSamples.length" class="ep-sec">
-          <div class="ep-sec-title">内置星历样本<span class="ep-sec-sub">Starlink 官方公开星历 · 72h / 60s</span></div>
+          <div class="ep-sec-title">内置星历样本<span class="ep-sec-sub">Starlink 官方公开 · ITC / OCM（OCM 含机动段与协方差）</span></div>
           <div class="ep-list is-builtin">
-            <div v-for="s in builtinSamples" :key="s.norad" class="ep-item is-builtin"
+            <div v-for="s in builtinSamples" :key="s.id" class="ep-item is-builtin"
               @click="chooseBuiltin(s)">
               <div class="ep-item-main">
-                <b class="ep-item-name" :title="`${s.name} · NORAD ${s.norad}`">{{ s.name }}</b>
-                <span class="ep-tag">{{ s.points.toLocaleString() }} 点</span>
+                <b class="ep-item-name" :title="`${s.name} · NORAD ${s.norad} · ${s.points.toLocaleString()} 点${s.maneuverSummary ? ' · ' + s.maneuverSummary : ''}`">{{ s.name }}</b>
+                <span class="ep-tag" :class="{ ocm: s.format === 'OCM' }">{{ s.format }}</span>
+                <span v-if="s.maneuvers > 0" class="ep-tag man" :title="s.maneuverSummary">{{ s.maneuvers }} 处机动</span>
+                <span class="ep-tag" :class="{ cov: s.hasCov }">{{ s.hasCov ? '含协方差' : '无协方差' }}</span>
               </div>
               <span class="ep-load">{{ s.loaded ? '重新载入' : '载入' }}</span>
             </div>
@@ -250,6 +333,30 @@ function startScreen() {
             <div class="ep-kv-row"><span>有效期(UTC)</span><b>{{ fmtUtc(activeEphem.states[0]?.t ?? activeEphem.start, true) }} ~ {{ fmtUtc(activeEphem.states[activeEphem.states.length - 1]?.t ?? activeEphem.stop, true) }}</b></div>
             <div class="ep-kv-row"><span>步长 / 点数</span><b>{{ activeEphem.stepSec }} s · {{ activeEphem.states.length.toLocaleString() }}</b></div>
             <div class="ep-kv-row"><span>协方差</span><b>{{ activeMeta?.hasCov ? '有' : '无' }}</b></div>
+            <div class="ep-kv-row ep-kv-man">
+              <span>机动</span>
+              <b>
+                <template v-if="activeManList.length">
+                  <span class="ep-man-line">{{ activeManList.length }} 处机动段</span>
+                  <button
+                    v-for="(m, i) in activeManList"
+                    :key="i"
+                    type="button"
+                    class="ep-man-card"
+                    :class="{ 'is-active': selectedMan === i }"
+                    :title="t('sit.locateManTip')"
+                    @click="toggleMan(i, m)"
+                  >
+                    <span class="ep-man-line is-head">
+                      <span>{{ i + 1 }}. {{ fmtUtc(m.t0, true) }} UTC · {{ m.duraSec }} s</span>
+                      <em v-if="m.done" class="ep-man-done">已完成</em>
+                    </span>
+                    <span class="ep-man-line is-item">{{ m.lat }} / {{ m.lon }}</span>
+                  </button>
+                </template>
+                <template v-else>无</template>
+              </b>
+            </div>
           </div>
         </div>
 
@@ -394,7 +501,9 @@ function startScreen() {
   .ep-item-name { flex: 1 1 auto; min-width: 0; font-size: 11.5px; color: #eaf2fc; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; } }
 .ep-tag { flex: none; font-size: 9px; line-height: 1; padding: 2px 4px; border-radius: 3px;
   color: #9dbbdd; background: rgba(110,160,230,0.16); border: 1px solid rgba(110,160,230,0.22);
-  &.cov { color: #6fe0c0; background: rgba(80,220,180,0.12); border-color: rgba(80,220,180,0.28); } }
+  &.cov { color: #6fe0c0; background: rgba(80,220,180,0.12); border-color: rgba(80,220,180,0.28); }
+  &.man { color: #ffc98a; background: rgba(255,170,70,0.12); border-color: rgba(255,170,80,0.3); }
+  &.ocm { color: #ffb46f; background: rgba(255,150,50,0.14); border-color: rgba(255,160,60,0.36); } }
 .ep-item-sub { display: flex; flex-wrap: wrap; gap: 4px 10px; margin-top: 4px;
   span { font-size: 9.5px; color: #8ea4c4; } }
 .ep-del { position: absolute; top: 5px; right: 5px; width: 18px; height: 18px; line-height: 16px;
@@ -410,9 +519,44 @@ function startScreen() {
 /* 键值表 */
 .ep-kv { display: flex; flex-direction: column; gap: 4px; }
 .ep-kv-row { display: flex; align-items: baseline; gap: 8px; font-size: 10.5px;
-  span { flex: none; width: 84px; color: #8ea4c4; }
+  > span { flex: none; width: 84px; color: #8ea4c4; }
   b { flex: 1 1 auto; min-width: 0; color: #eaf2fc; font-weight: 600; word-break: break-all; }
   &.is-sub span { width: auto; } &.is-sub b { flex: none; } }
+
+/* 机动明细：首行总数；每段 MAN 为一张琥珀边框卡片（时刻/时长 + 经纬度两行） */
+.ep-man-line { display: block; font-size: 10px; line-height: 1.55; font-weight: 400; color: #cfe0f5;
+  &.is-item { color: #9dbbdd; }
+  &.is-head { display: flex; align-items: baseline; gap: 6px; > span { flex: 1 1 auto; min-width: 0; } } }
+
+/* 「已完成」小字徽标（机动结束时刻早于真实时间） */
+.ep-man-done { flex: none; font-style: normal; font-size: 8.5px; line-height: 1.5;
+  color: #ffb454; background: rgba(255, 180, 84, 0.14);
+  border: 1px solid rgba(255, 180, 84, 0.4); border-radius: 4px; padding: 0 4px; }
+
+/* 机动卡片：点击高亮并在大屏定位对应琥珀机动块（含 TRAJ 窗口外已完成的段） */
+.ep-man-card {
+  display: block;
+  width: 100%;
+  margin-top: 4px;
+  padding: 3px 8px 4px;
+  font-family: inherit;
+  text-align: left;
+  cursor: pointer;
+  background: rgba(255, 180, 84, 0.07);
+  border: 1px solid rgba(255, 180, 84, 0.4);
+  border-radius: 6px;
+  transition: border-color 0.15s, background-color 0.15s, box-shadow 0.15s;
+
+  &:hover {
+    border-color: rgba(255, 180, 84, 0.75);
+    background: rgba(255, 180, 84, 0.12);
+  }
+  &.is-active {
+    border-color: #ffb454;
+    background: rgba(255, 180, 84, 0.18);
+    box-shadow: 0 0 6px rgba(255, 180, 84, 0.35);
+  }
+}
 
 /* 质量卡 */
 .ep-quality { margin-top: 8px; padding: 8px 9px; border-radius: 7px;
@@ -482,6 +626,7 @@ function startScreen() {
 @media (max-width: 720px) {
   .ep-params { flex-wrap: wrap; }
   .ep-param { flex: 1 1 30%; }
-  .ep-kv-row span { width: 74px; }
+  .ep-kv-row > span { width: 74px; }
 }
+
 </style>

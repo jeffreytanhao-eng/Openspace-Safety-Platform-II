@@ -1,0 +1,26 @@
+HTTP/1.1 200 OK
+Connection: keep-alive
+Content-Length: 76777
+Content-Type: text/plain
+Expires: Fri, 30 Oct 2026 06:03:57 GMT
+Last-Modified: Fri, 30 Oct 2026 04:50:34 GMT
+ETag: "ff272cce6fad0e130e1251d48cb18fd1"
+x-goog-generation: 1793335834976885
+x-goog-metageneration: 1
+x-goog-stored-content-encoding: identity
+x-goog-stored-content-length: 825273
+x-amz-checksum-crc32c: Scp7Dg==
+Content-Encoding: gzip
+Accept-Ranges: bytes
+Date: Fri, 30 Oct 2026 06:03:58 GMT
+X-Cache: MISS
+X-Cache-Hits: 0
+X-Timer: S1793340237.983481,VS0,VE1039
+Strict-Transport-Security: max-age=31557600
+X-Robots-Tag: none
+server: whydoyoucare?
+x-content-type-options: nosniff
+x-xss-protection: 1; mode=block
+Vary: Origin, Accept-Encoding
+Cache-Control: max-age=60, must-revalidate
+

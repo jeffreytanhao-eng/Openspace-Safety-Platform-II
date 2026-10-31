@@ -105,7 +105,7 @@ function devGzip() {
 }
 
 /** 代理目标：本地开发默认 127.0.0.1:1234（与 api 端口一致） */
-const PROXY_TARGET = process.env.VITE_PROXY_TARGET || 'http://127.0.0.1:1234/'
+const PROXY_TARGET = process.env.VITE_PROXY_TARGET || 'http://127.0.0.1:1235/'
 
 export default defineConfig(() => ({
   plugins: [

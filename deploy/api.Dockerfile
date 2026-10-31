@@ -1,4 +1,4 @@
-# 后端：Node.js 22 + TypeScript（可读源码，不使用 bytenode / .jsc）
+﻿# 后端：Node.js 22 + TypeScript（可读源码，不使用 bytenode / .jsc）
 # 构建上下文为仓库根目录（见 docker-compose.yml 的 context: ..）
 
 # ---------- 构建阶段 ----------
@@ -21,6 +21,9 @@ COPY api/package.json api/package-lock.json* ./
 RUN npm ci --omit=dev --no-audit --no-fund || npm install --omit=dev --no-audit --no-fund
 
 COPY --from=build /app/dist ./dist
+
+# 本地 Starlink 星历样本（ITC/OCM gzip + index.json）
+COPY data/ephemerides ./data/ephemerides
 
 # 上传目录（可选，接口后续使用）
 RUN mkdir -p /app/uploads

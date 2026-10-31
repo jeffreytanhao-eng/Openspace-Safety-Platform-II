@@ -21,6 +21,7 @@ import type { CatalogSnapshotEntry, PairCompareRow, PairTarget, ScreenOptions } 
 import { deleteSet, getSet, listMetas, putSet, deleteThreatEvents, getThreatEvents, putThreatEvents, type EphemMeta } from './store'
 import type { EphemSet, EphemState, QualityReport, ThreatEvent, Vec3 } from './types'
 import { getSatDetailPublic, listConstellationPublic } from '@/api/sat_public'
+import { listLocalEphemerides, fetchEphemerisText, type EphListItem } from '@/api/ephemerides'
 import { decodeConstellation } from '@/api/satTypes'
 
 /** 单文件上限（MB）：Starlink 72h ITC 约 2 MB，留足余量 */
@@ -151,12 +152,21 @@ export function applyManeuver(): boolean {
   return true
 }
 
-/** 内置样本清单（index.json） */
+/** 内置样本清单（后端 data/ephemerides 索引；后端不可用时回退 public/ephemeris-samples 的 JSON） */
 export interface BuiltinSample {
+  /** 样本 id（itc-xxx / ocm-xxx / json-xxx）：同星 ITC 与 OCM 各一条，列表 key 用 */
+  id: string
   norad: number
   name: string
+  format: 'ITC' | 'OCM' | 'OEM'
+  /** 服务器样本为 data/ephemerides 下的 .txt.gz 相对路径；回退样本为 public 下的 .json */
   file: string
   points: number
+  hasCov: boolean
+  /** MAN 机动段数量（OCM 专有；ITC 恒为 0） */
+  maneuvers: number
+  /** 机动摘要（如「2 处 · max Δv 0.0310 m/s」） */
+  maneuverSummary: string
   loaded: boolean
 }
 export const builtinSamples = ref<BuiltinSample[]>([])
@@ -334,16 +344,54 @@ export async function uploadEphemerides(files: File[]) {
 
 const SAMPLE_INDEX = `${import.meta.env.BASE_URL}ephemeris-samples/index.json`
 
-/** 读取内置样本清单；已入库的样本标 loaded（同一 norad 只提示一次） */
+/** 读取内置样本清单；已入库的样本标 loaded（同一 norad 按 ITC / OCM 分别提示） */
 export async function loadBuiltinIndex() {
   if (builtinSamples.value.length) return
+  // 优先走后端 /cgi/ephemerides（data/ephemerides 索引，16 条含 OCM 机动段 / 协方差元数据）
+  try {
+    const data = await listLocalEphemerides()
+    const items = (data.items || []).filter(
+      (it): it is EphListItem & { format: 'ITC' | 'OCM' | 'OEM' } =>
+        it.format === 'ITC' || it.format === 'OCM' || it.format === 'OEM'
+    )
+    if (items.length) {
+      builtinSamples.value = items.map((it) => {
+        const norad = Number(it.norad) || 0
+        return {
+          id: it.id,
+          norad,
+          name: it.name,
+          format: it.format,
+          file: it.file,
+          points: it.points,
+          hasCov: !!it.covariance,
+          maneuvers: it.maneuvers || 0,
+          maneuverSummary: it.maneuverSummary || '',
+          loaded: ephemMetas.value.some(
+            (m) => m.norad === norad && m.source === 'builtin' && m.format === it.format.toLowerCase()
+          )
+        }
+      })
+      return
+    }
+  } catch {
+    // 后端不可用（纯静态部署 / 本地预览）→ 回退 public 下的 JSON 样本
+  }
   try {
     const res = await fetch(SAMPLE_INDEX, { cache: 'no-cache' })
     if (!res.ok) return
     const list = (await res.json()) as { norad: number; name: string; file: string; points: number }[]
     builtinSamples.value = list.map((s) => ({
-      ...s,
-      loaded: ephemMetas.value.some((m) => m.norad === s.norad && m.source === 'builtin')
+      id: `json-${s.norad}`,
+      norad: s.norad,
+      name: s.name,
+      format: 'ITC' as const,
+      file: s.file,
+      points: s.points,
+      hasCov: false,
+      maneuvers: 0,
+      maneuverSummary: '',
+      loaded: ephemMetas.value.some((m) => m.norad === s.norad && m.source === 'builtin' && m.format === 'itc')
     }))
   } catch {
     // 内置样本缺失（离线部署未带 public 目录）时静默：不影响上传功能
@@ -355,40 +403,27 @@ export async function loadBuiltinSample(s: BuiltinSample) {
   ephemBusy.value = true
   ephemError.value = ''
   uploadName.value = s.name
-  uploadProgress.value = 30
+  uploadProgress.value = 10
   try {
-    // no-cache：样本文件会随抓取脚本重新生成，force-cache 会一直用旧缓存（点「重新载入」也拿不到新数据）
-    const res = await fetch(`${import.meta.env.BASE_URL}ephemeris-samples/${s.file}`, { cache: 'no-cache' })
-    if (!res.ok) throw new Error(`样本文件加载失败（HTTP ${res.status}）`)
-    const raw = (await res.json()) as {
-      norad: number
-      name: string
-      format: 'itc'
-      start: number
-      stop: number
-      stepSec: number
-      states: [number, number, number, number, number, number, number][]
+    if (s.file.endsWith('.json')) {
+      // 回退通道：public/ephemeris-samples 的 JSON 样本（不含协方差 / 机动段）
+      await loadBuiltinJsonSample(s)
+      return
     }
-    uploadProgress.value = 70
-    const states: EphemState[] = raw.states.map((r) => ({
-      t: r[0],
-      r: [r[1], r[2], r[3]] as Vec3,
-      v: [r[4], r[5], r[6]] as Vec3
-    }))
-    const set: EphemSet = {
-      id: `builtin-${raw.norad}`,
-      norad: raw.norad,
-      name: raw.name,
-      format: 'itc',
-      frame: 'UVW',
-      source: 'builtin',
-      createdAt: Date.now(),
-      start: raw.start,
-      stop: raw.stop,
-      stepSec: raw.stepSec,
-      states,
-      warnings: ['Starlink 官方公开星历（ITC/MEME）样本，72h 预报、60s 步长；样本不含协方差']
+    // 服务器样本（data/ephemerides 的 .txt.gz）：后端解压下发纯文本 → 统一解析入库
+    uploadProgress.value = 30
+    const text = await fetchEphemerisText(s.file)
+    uploadProgress.value = 60
+    const res = parseEphemeris(text, { name: s.name, norad: s.norad, fileName: s.file })
+    if (!res.ok || !res.set) {
+      const at = res.line ? `（第 ${res.line} 行）` : ''
+      throw new Error(res.error ? `${res.error}${at}` : '样本解析失败')
     }
+    const set = res.set
+    // OCM 与 ITC 分 id 入库互不覆盖；ITC 沿用历史 builtin-<norad>（覆盖旧 JSON 样本，升级为含协方差版本）
+    set.id = s.format === 'OCM' ? `builtin-ocm-${s.norad}` : `builtin-${s.norad}`
+    set.source = 'builtin'
+    set.createdAt = Date.now()
     await putSet(set)
     uploadProgress.value = 100
     await refreshEphemList()
@@ -400,6 +435,48 @@ export async function loadBuiltinSample(s: BuiltinSample) {
     uploadName.value = ''
     ephemBusy.value = false
   }
+}
+
+/** 旧 JSON 样本通道（public/ephemeris-samples，后端不可用时的回退） */
+async function loadBuiltinJsonSample(s: BuiltinSample) {
+  // no-cache：样本文件会随抓取脚本重新生成，force-cache 会一直用旧缓存（点「重新载入」也拿不到新数据）
+  const res = await fetch(`${import.meta.env.BASE_URL}ephemeris-samples/${s.file}`, { cache: 'no-cache' })
+  if (!res.ok) throw new Error(`样本文件加载失败（HTTP ${res.status}）`)
+  uploadProgress.value = 60
+  const raw = (await res.json()) as {
+    norad: number
+    name: string
+    format: 'itc'
+    start: number
+    stop: number
+    stepSec: number
+    states: [number, number, number, number, number, number, number][]
+  }
+  uploadProgress.value = 80
+  const states: EphemState[] = raw.states.map((r) => ({
+    t: r[0],
+    r: [r[1], r[2], r[3]] as Vec3,
+    v: [r[4], r[5], r[6]] as Vec3
+  }))
+  const set: EphemSet = {
+    id: `builtin-${raw.norad}`,
+    norad: raw.norad,
+    name: raw.name,
+    format: 'itc',
+    frame: 'UVW',
+    source: 'builtin',
+    createdAt: Date.now(),
+    start: raw.start,
+    stop: raw.stop,
+    stepSec: raw.stepSec,
+    states,
+    warnings: ['Starlink 官方公开星历（ITC/MEME）样本，72h 预报、60s 步长；样本不含协方差']
+  }
+  await putSet(set)
+  uploadProgress.value = 100
+  await refreshEphemList()
+  s.loaded = true
+  await activateEphem(set.id)
 }
 
 /* ============================================================

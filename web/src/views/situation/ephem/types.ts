@@ -28,6 +28,17 @@ export interface EphemState {
   cov?: Float64Array
 }
 
+/** OCM MAN 开线段（TIME_ABSOLUTE → +MAN_DURA；不一定闭合） */
+export interface EphemManSegment {
+  /** 机动开始 Unix ms（UTC） */
+  t0: number
+  /** 机动结束 Unix ms（UTC） = t0 + MAN_DURA */
+  t1: number
+  /** 估算 Δv m/s（|acc|×dura），可选 */
+  dvMps?: number
+  id?: string
+}
+
 /** 一条完整的星历序列 */
 export interface EphemSet {
   id: string
@@ -42,6 +53,8 @@ export interface EphemSet {
   stepSec: number
   states: EphemState[]
   objectId?: string
+  /** OCM MAN 开线段；ITC/无机动时为空或缺省 */
+  maneuvers?: EphemManSegment[]
   warnings: string[]
 }
 

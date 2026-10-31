@@ -45,6 +45,8 @@ let widget: CesiumWidget | null = null
 let scene: CesiumScene | null = null
 /** 自定义左键拖拽（绕地心旋转）的事件处理器（initCesium 创建，destroyCesium 销毁） */
 let dragHandler: import('cesium').ScreenSpaceEventHandler | null = null
+/** When set, left-drag orbits around this ECEF point (sat track); else around Earth center. */
+let orbitFocusCart: import('cesium').Cartesian3 | null = null
 let cesiumReady = false
 
 /* ---------------- 离线数据配置（initCesium 前调用 configureEarthBase 生效） ---------------- */
@@ -294,7 +296,7 @@ export async function initCesium(container: HTMLElement, hooks?: CesiumInitHooks
       hooks?.onMoveStart?.()
     }, Cs.ScreenSpaceEventType.LEFT_DOWN)
     dragHandler.setInputAction((m: { endPosition: { x: number; y: number } }) => {
-      if (!dragging || !scene || !widget || widget.isDestroyed()) return
+      if (!dragging || !scene || !widget || widget.isDestroyed() || !Cesium) return
       const dx = m.endPosition.x - lastX
       const dy = m.endPosition.y - lastY
       lastX = m.endPosition.x
@@ -304,11 +306,33 @@ export async function initCesium(container: HTMLElement, hooks?: CesiumInitHooks
       const fovy = (fr as unknown as { fovy?: number }).fovy
       if (!canvas.clientHeight || typeof fovy !== 'number') return
       const k = fovy / canvas.clientHeight
-      // 符号约定（CesiumWidget 已把 constrainedAxis 设为 UNIT_Z，rotateLeft/Up 是绕世界 Z 轴 /
-      // 东向切轴的「转台式」旋转，永不侧滚）：
-      //   拖右（dx>0）→ 地球随光标右移 → 相机绕地心向西（rotateLeft 内部即此符号，实测正确）；
-      //   拖下（dy>0）→ 地球随光标下移 → 相机绕地心向北。注意 rotateUp(+) 语义是「视线上抬」
-      //   即画面上移，与拖拽方向相反，因此取负号。
+      const Cs = Cesium
+      // Track/select focus: orbit around target (old OrbitControls.target = sat), keep looking at it.
+      if (orbitFocusCart) {
+        const cam = scene.camera
+        const focus = orbitFocusCart
+        const offset = Cs.Cartesian3.subtract(cam.positionWC, focus, new Cs.Cartesian3())
+        const up = Cs.Ellipsoid.WGS84.geodeticSurfaceNormal(focus, new Cs.Cartesian3())
+        const qYaw = Cs.Quaternion.fromAxisAngle(up, -dx * k)
+        const mYaw = Cs.Matrix3.fromQuaternion(qYaw)
+        let newOffset = Cs.Matrix3.multiplyByVector(mYaw, offset, new Cs.Cartesian3())
+        const right = Cs.Cartesian3.cross(up, newOffset, new Cs.Cartesian3())
+        if (Cs.Cartesian3.magnitudeSquared(right) > 1e-12) {
+          Cs.Cartesian3.normalize(right, right)
+          const qPitch = Cs.Quaternion.fromAxisAngle(right, -dy * k)
+          const mPitch = Cs.Matrix3.fromQuaternion(qPitch)
+          newOffset = Cs.Matrix3.multiplyByVector(mPitch, newOffset, new Cs.Cartesian3())
+        }
+        const newPos = Cs.Cartesian3.add(focus, newOffset, new Cs.Cartesian3())
+        const dir = Cs.Cartesian3.subtract(focus, newPos, new Cs.Cartesian3())
+        Cs.Cartesian3.normalize(dir, dir)
+        cam.setView({
+          destination: newPos,
+          orientation: { direction: dir, up }
+        })
+        return
+      }
+      // Default: earth-center turntable (keep globe centered).
       scene.camera.rotateLeft(dx * k)
       scene.camera.rotateUp(-dy * k)
     }, Cs.ScreenSpaceEventType.MOUSE_MOVE)
@@ -346,6 +370,14 @@ export async function initCesium(container: HTMLElement, hooks?: CesiumInitHooks
     destroyCesium()
     return false
   }
+}
+
+export function getCesiumScene(): import('cesium').Scene | null {
+  return scene
+}
+
+export function getCesiumModule(): typeof import('cesium') | null {
+  return Cesium
 }
 
 export function isCesiumReady(): boolean {
@@ -423,6 +455,23 @@ export function syncCameraToThree(dst: THREE.PerspectiveCamera, simTimeMs: numbe
  * 焦点飞行逐帧写入（updateCameraFly 调用）：把场景空间的机位/视线/上向量设进 Cesium 相机。
  * 用户交互（未飞行期间）不调用本函数——Cesium 的 ScreenSpaceCameraController 自主驱动相机。
  */
+/**
+ * While tracking a sat/ephem: left-drag orbits around this scene-space point (ECEF).
+ * Pass null to restore earth-center turntable (home / clear selection).
+ */
+export function setCameraOrbitFocusScene(pos: THREE.Vector3 | null, simTimeMs: number): void {
+  if (!pos) {
+    orbitFocusCart = null
+    // Restore earth-orbit zoom floor (~0.08 R above ellipsoid)
+    if (scene) scene.screenSpaceCameraController.minimumZoomDistance = 0.08 * EARTH_RADIUS_KM * 1000
+    return
+  }
+  if (!cesiumReady || !scene) return
+  orbitFocusCart = sceneToCartesian(pos, simTimeMs)
+  // Allow close approach while orbiting sat (old SATELLITE_FOCUS_MIN_DIST = 0.01 R)
+  scene.screenSpaceCameraController.minimumZoomDistance = 0.01 * EARTH_RADIUS_KM * 1000
+}
+
 export function setCameraFromScene(
   pos: THREE.Vector3,
   dir: THREE.Vector3,
@@ -480,6 +529,7 @@ export function pickEarthLonLat(clientX: number, clientY: number): EarthPickResu
 
 /** 销毁 Cesium 底座（BaseScene onBeforeUnmount 调用，先于 Three 资源回收） */
 export function destroyCesium(): void {
+  orbitFocusCart = null
   cesiumReady = false
   scene = null
   if (dragHandler && !dragHandler.isDestroyed()) dragHandler.destroy()

@@ -8,7 +8,7 @@
  *
  * IndexedDB 不可用时（隐私模式 / 受限 WebView）降级为内存 Map，功能仍可用，只是刷新后丢失。
  */
-import type { EphemFormat, EphemFrame, EphemSet, EphemState, ThreatEvent } from './types'
+import type { EphemFormat, EphemFrame, EphemManSegment, EphemSet, EphemState, ThreatEvent } from './types'
 
 const DB_NAME = 'openspace-ephem'
 const DB_VERSION = 2
@@ -32,6 +32,8 @@ export interface EphemMeta {
   points: number
   hasCov: boolean
   warnings: string[]
+  /** OCM MAN open segments (small); restored onto EphemSet in getSet. */
+  maneuvers?: EphemManSegment[]
 }
 
 interface StatesRow {
@@ -109,7 +111,8 @@ export function toMeta(set: EphemSet): EphemMeta {
     stepSec: set.stepSec,
     points: set.states.length,
     hasCov: set.states.some((s) => !!s.cov),
-    warnings: set.warnings
+    warnings: set.warnings,
+    ...(set.maneuvers?.length ? { maneuvers: set.maneuvers } : {})
   }
 }
 
@@ -160,7 +163,8 @@ export async function getSet(id: string): Promise<EphemSet | null> {
     stop: meta.stop,
     stepSec: meta.stepSec,
     states,
-    warnings: meta.warnings
+    warnings: meta.warnings,
+    ...(meta.maneuvers?.length ? { maneuvers: meta.maneuvers } : {})
   }
 }
 

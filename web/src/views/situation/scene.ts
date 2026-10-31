@@ -115,13 +115,23 @@ export const TYPE_COLOR: Record<string, number> = {
 }
 
 export const TYPE_LABEL: Record<string, string> = {
-  PAYLOAD: '载荷卫星',
-  DEBRIS: '空间碎片',
-  'ROCKET BODY': '火箭箭体',
-  UNKNOWN: '未知物体'
+  PAYLOAD: '卫星',
+  DEBRIS: '碎片',
+  'ROCKET BODY': '残骸',
+  UNKNOWN: '未知'
 }
 
 export const TYPE_KEYS = ['PAYLOAD', 'DEBRIS', 'ROCKET BODY', 'UNKNOWN']
+
+/** Space-Track object_type → UI category (卫星/碎片/残骸/未知) */
+export function normalizeObjectType(raw?: string | null): string {
+  const t = String(raw || '').trim().toUpperCase().replace(/_/g, ' ')
+  if (t === 'PAYLOAD' || t === 'SATELLITE' || t === 'SAT') return 'PAYLOAD'
+  if (t === 'DEBRIS' || t === 'DEB') return 'DEBRIS'
+  if (t === 'ROCKET BODY' || t === 'ROCKET' || t === 'R/B' || t === 'RB') return 'ROCKET BODY'
+  // TBA / blank / other → 未知
+  return 'UNKNOWN'
+}
 
 /* ---------------- 天体图层开关 ---------------- */
 

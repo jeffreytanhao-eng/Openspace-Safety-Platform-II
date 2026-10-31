@@ -1,0 +1,31 @@
+HTTP/1.1 200 OK
+Connection: keep-alive
+Content-Length: 1923034
+Content-Type: text/plain
+X-GUploader-UploadID: AFy3sg12xrriN6ZN-HUeCVf3OJNG7bD_YEa4StSsbIVGei2jgajC3rd7GyrNZGn1r34C-nu1
+Expires: Fri, 30 Oct 2026 06:23:42 GMT
+Last-Modified: Fri, 30 Oct 2026 05:21:11 GMT
+ETag: "e49acebfba1a2b9b856f8ae7be36948b"
+x-goog-generation: 1793337671353781
+x-goog-metageneration: 1
+x-goog-stored-content-encoding: identity
+x-goog-stored-content-length: 5026889
+x-goog-hash: crc32c=EPZWWw==
+x-goog-hash: md5=5JrOv7oaK5uFb4rnvjaUiw==
+x-amz-checksum-crc32c: EPZWWw==
+x-goog-storage-class: STANDARD
+Content-Encoding: gzip
+Accept-Ranges: bytes
+Age: 1
+Date: Fri, 30 Oct 2026 06:23:44 GMT
+X-Cache: MISS
+X-Cache-Hits: 0
+X-Timer: S1793341422.804415,VS0,VE2327
+Strict-Transport-Security: max-age=31557600
+X-Svc: 1
+server: whydoyoucare?
+x-content-type-options: nosniff
+x-xss-protection: 1; mode=block
+Vary: Origin
+cache-control: max-age=1800, public
+
