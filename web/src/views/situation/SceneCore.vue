@@ -40,6 +40,7 @@ import {
   setStationFocus,
   getStationFocus,
   getCloudSelectedNorad,
+  isCloudSelectionVisible,
   getCatalogFocusPos,
   refreshCloudVisibility,
   upgradeConsRecsFromTles,
@@ -107,6 +108,8 @@ let resizeObserver: ResizeObserver | null = null
 
 /** 内部仿真时刻（避免每帧写响应式 ref） */
 let simMs = simTimeMs.value
+/** 上次推送到 simTimeMs 的值：用于识别「外部」改动（滑杆/重置/深链），避免把正常推进误判为需要回拉 */
+let lastPushedSim = simTimeMs.value
 let lastWall = 0
 let lastSyncWall = 0
 /** Monotonic paint generation — stale async clears must not wipe newer chip paints. */
@@ -534,9 +537,24 @@ async function showStation(norad: number) {
   return { on: true }
 }
 
+/**
+ * 芯片/星座开关后：选中目标若失去全部可见通道（类型芯片、星座 override；空间站通道除外），
+ * 同步清除选中态与准星——否则选中目标凭 selection 特判永驻，rebuildOrbits 会持续重画其轨道，
+ * 造成「所有开关都关闭却残留一条轨道」的现象。
+ */
+function clearHiddenSelection() {
+  const sel = getCloudSelectedNorad()
+  if (sel == null || sel === getStationFocus()) return
+  // 芯片场景必须传新列表：模块内 activeTypes 要到 paint/init 时才同步，直接读是旧值
+  if (isCloudSelectionVisible(lastFilterTypes)) return
+  setCloudSelection(null, simMs)
+  stopCatalogTrack()
+}
+
 /** 星座「星座展示」：独立通道，不改类型芯片、不写搜索框。 */
 async function showConstellation(name: string) {
   const on = toggleConsShow(name)
+  clearHiddenSelection()
   await paintFromSnapshot(lastFilterTypes)
   if (!on) {
     // turned off this card
@@ -583,6 +601,7 @@ function selectCatalogItem(item: CatalogTle | null) {
 
 function filterCatalogTypes(types: string[]) {
   lastFilterTypes = (types || []).slice()
+  clearHiddenSelection()
   void paintFromSnapshot(lastFilterTypes)
 }
 
@@ -638,7 +657,13 @@ function loop(now: number) {
   const dt = lastWall ? Math.min(0.1, (now - lastWall) / 1000) : 0
   lastWall = now
 
-  if (Math.abs(simTimeMs.value - simMs) > 500) simMs = simTimeMs.value
+  // 仅当 simTimeMs 被外部真正改动（≠ 我们上次推送的值）才跟随回拉；
+  // lastPushedSim 只能随推送/回拉本身更新：若每帧赋值成当前 simMs，
+  // 下一帧「陈旧推送值 ≠ 新鲜 simMs」恒成立 → 高倍速下每隔一帧回拉一次（轨迹不连续、净速率骤降）
+  if (simTimeMs.value !== lastPushedSim) {
+    simMs = simTimeMs.value
+    lastPushedSim = simMs
+  }
 
   // Freeze sim during user drag or camera fly; keep playing while tracking (camera follows)
   const freezeSim = interacting || camFly.active
@@ -701,6 +726,7 @@ function loop(now: number) {
   if (now - lastSyncWall > 200) {
     lastSyncWall = now
     simTimeMs.value = simMs
+    lastPushedSim = simMs
   }
   rafId = requestAnimationFrame(loop)
 }

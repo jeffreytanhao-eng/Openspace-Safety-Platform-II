@@ -535,6 +535,8 @@ const MODEL_MAX_DIM = 0.011
 const MODEL_STATION_SCALE = 3
 /** 碎片 / 箭体额外缩小（老项目同款） */
 const MODEL_TINY_SCALE = 1 / 3
+/** 未知目标十二面体标识模型单独缩小（当前尺寸的 20%） */
+const MODEL_DODECA_SCALE = 0.2
 /** LOD 检查间隔 / 首屏预热（老项目同款） */
 const LOD_CHECK_MS = 1000
 const LOD_WARMUP_MS = 4000
@@ -552,11 +554,12 @@ const MODEL_COARSE: Record<string, string> = {
   osp_yg: 'PAYLOAD', osp_gw: 'PAYLOAD', osp_is: 'PAYLOAD', osp_glo: 'PAYLOAD',
   osp_gs: 'PAYLOAD', osp_gps: 'PAYLOAD', osp_bds: 'PAYLOAD', osp_jl: 'PAYLOAD',
   osp_debris: 'DEBRIS', osp_debris_b: 'DEBRIS', osp_debris_c: 'DEBRIS', osp_debris_d: 'DEBRIS',
-  osp_rbody: 'ROCKET BODY'
+  osp_rbody: 'ROCKET BODY',
+  osp_dodeca: 'UNKNOWN'
 }
-/** 粗类型 → 兜底型号。本地无老项目 unknow.glb，未知目标回退通用卫星。 */
+/** 粗类型 → 兜底型号。未知目标统一十二面体标识（osp_dodeca）。 */
 const COARSE_MODEL: Record<string, string> = {
-  PAYLOAD: 'osp_sat', DEBRIS: 'osp_debris', 'ROCKET BODY': 'osp_rbody', UNKNOWN: 'osp_sat'
+  PAYLOAD: 'osp_sat', DEBRIS: 'osp_debris', 'ROCKET BODY': 'osp_rbody', UNKNOWN: 'osp_dodeca'
 }
 /** 固定单文件模型（不走 LOD 分档，老项目同款） */
 const MODEL_FILE_OVERRIDE: Record<string, string> = {
@@ -565,7 +568,7 @@ const MODEL_FILE_OVERRIDE: Record<string, string> = {
   osp_iss: '/models/iss-detailed.glb'
 }
 /** 无固定机头（自带翻滚），不做头尾翻转（老项目 MODEL_NO_FLIP_Y，unknow 本地无素材不收录） */
-const MODEL_NO_FLIP_Y = new Set(['osp_debris', 'osp_debris_b', 'osp_debris_c', 'osp_debris_d', 'osp_rbody'])
+const MODEL_NO_FLIP_Y = new Set(['osp_debris', 'osp_debris_b', 'osp_debris_c', 'osp_debris_d', 'osp_rbody', 'osp_dodeca'])
 /** 碎片变体池：按目标名 FNV 散列挑选，同空域碎片形状不重样 */
 const DEBRIS_MODELS = ['osp_debris', 'osp_debris_b', 'osp_debris_c', 'osp_debris_d']
 
@@ -612,7 +615,10 @@ function resolveModelKey(p: { object_type: string; object_name: string; cons?: s
   if (norad === 25544 || nameEarly.includes('ISS (ZARYA)')) return 'osp_iss'
   if (norad === 48274 || nameEarly.includes('TIANHE')) return 'osp_css'
   if (coarse === 'DEBRIS') return debrisVariantOf(p.object_name || '')
-  // ROCKET BODY 无型号细分；UNKNOWN（星历等无类型来源）继续走名称关键词，兜底 osp_sat
+  // 编目未知目标（object_type=UNKNOWN）统一十二面体标识；星历等无类型来源（''）不在此列，
+  // 继续走名称关键词，保证星历选中仍显示对应型号模型
+  if (ot === 'UNKNOWN') return COARSE_MODEL.UNKNOWN
+  // ROCKET BODY 无型号细分
   if (coarse === 'ROCKET BODY') return COARSE_MODEL[coarse]
   const name = nameEarly
   const cons = p.cons || []
@@ -720,6 +726,7 @@ async function loadModelGeom(url: string, model: string): Promise<GeomMat | null
     if (model === 'osp_css' || model === 'osp_iss') s *= MODEL_STATION_SCALE
     const coarse = MODEL_COARSE[model] || 'UNKNOWN'
     if (coarse === 'DEBRIS' || coarse === 'ROCKET BODY') s *= MODEL_TINY_SCALE
+    if (model === 'osp_dodeca') s *= MODEL_DODECA_SCALE
     geom.scale(s, s, s)
     geom.computeBoundingBox()
     const center = geom.boundingBox!.getCenter(new THREE.Vector3())
@@ -898,7 +905,10 @@ function rewriteModelMatrices(): void {
   }
 }
 
-/** 逐实例着色：类型色 / 选中提亮（与 Points colorVec 同一口径） */
+/** 空间站模型统一蓝色标识（天宫 osp_css / 国际空间站 osp_iss） */
+const STATION_MODEL_COLOR = 0x3b82f6
+
+/** 逐实例着色：类型色 / 选中提亮（与 Points colorVec 同一口径）；空间站模型固定蓝色 */
 function paintModelColors(): void {
   if (!modelsActive) return
   const tmp = _colTmp
@@ -906,9 +916,12 @@ function paintModelColors(): void {
     const imesh = modelMeshes[model]
     const idxs = modelIndices[model]
     if (!idxs || !idxs.length) continue
+    const station = model === 'osp_iss' || model === 'osp_css'
     for (let local = 0; local < idxs.length; local++) {
       const e = entries[idxs[local]]
-      colorVec(e.type, tmp, e.norad === selectedNorad)
+      if (station) tmp.setHex(STATION_MODEL_COLOR)
+      else colorVec(e.type, tmp, e.norad === selectedNorad)
+      if (e.norad === selectedNorad) tmp.multiplyScalar(1.25)
       imesh.setColorAt(local, tmp)
     }
     if (imesh.instanceColor) imesh.instanceColor.needsUpdate = true
@@ -1947,6 +1960,34 @@ export function getStationFocus(): number | null {
 
 export function getCloudSelectedNorad(): number | null {
   return selectedNorad
+}
+
+/**
+ * 选中目标在当前可见通道（类型芯片 / 星座 override / 空间站）下是否仍可见。
+ * 不含 selection 特判（entryShown 对选中目标恒 true，不能用于判断芯片/星座开关后是否失去可见性）。
+ * @param chips 芯片开关场景传入新芯片列表——模块内 activeTypes 要到 paint/init 时才同步，直接读会拿到旧值误判可见
+ */
+export function isCloudSelectionVisible(chips?: string[]): boolean {
+  if (selectedNorad == null) return false
+  if (selectedNorad === stationFocus) return true
+  const sel = entries.find((e) => e.norad === selectedNorad) ?? focusRef
+  if (!sel) return false
+  const chipsOn = chips ? chips.map(normalizeObjectType) : activeTypes
+  if (sel.type === 'PAYLOAD') {
+    if (consOverrideActive()) {
+      let related = false
+      let anyOn = false
+      for (const [k, on] of Object.entries(consShowMap)) {
+        if (!matchesConsKey(sel, k)) continue
+        related = true
+        if (on) anyOn = true
+      }
+      if (related) return anyOn
+      return chipsOn.includes('PAYLOAD')
+    }
+    return chipsOn.includes('PAYLOAD')
+  }
+  return chipsOn.includes(sel.type)
 }
 
 /**

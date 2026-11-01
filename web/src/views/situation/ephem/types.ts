@@ -55,6 +55,8 @@ export interface EphemSet {
   objectId?: string
   /** OCM MAN 开线段；ITC/无机动时为空或缺省 */
   maneuvers?: EphemManSegment[]
+  /** 集合级协方差标记：逐点 cov 数组被剥离（省 IDB 空间）时保留「含协方差」事实 */
+  hasCov?: boolean
   warnings: string[]
 }
 

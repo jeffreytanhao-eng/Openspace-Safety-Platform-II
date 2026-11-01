@@ -110,7 +110,7 @@ export function toMeta(set: EphemSet): EphemMeta {
     stop: set.stop,
     stepSec: set.stepSec,
     points: set.states.length,
-    hasCov: set.states.some((s) => !!s.cov),
+    hasCov: set.states.some((s) => !!s.cov) || set.hasCov === true,
     warnings: set.warnings,
     ...(set.maneuvers?.length ? { maneuvers: set.maneuvers } : {})
   }

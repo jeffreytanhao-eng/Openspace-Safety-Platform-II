@@ -167,6 +167,13 @@ export interface BuiltinSample {
   maneuvers: number
   /** 机动摘要（如「2 处 · max Δv 0.0310 m/s」） */
   maneuverSummary: string
+  /** 有效期起止（UTC ms；服务端样本提供，回退 JSON 样本无） */
+  startMs?: number
+  stopMs?: number
+  /** 状态点步长（秒） */
+  stepSec?: number
+  /** 文件原大小展示文案（如「4.8 MB」；服务端 raw size） */
+  sizeText?: string
   loaded: boolean
 }
 export const builtinSamples = ref<BuiltinSample[]>([])
@@ -367,6 +374,10 @@ export async function loadBuiltinIndex() {
           hasCov: !!it.covariance,
           maneuvers: it.maneuvers || 0,
           maneuverSummary: it.maneuverSummary || '',
+          startMs: it.startMs,
+          stopMs: it.stopMs,
+          stepSec: it.stepSec,
+          sizeText: it.size,
           loaded: ephemMetas.value.some(
             (m) => m.norad === norad && m.source === 'builtin' && m.format === it.format.toLowerCase()
           )

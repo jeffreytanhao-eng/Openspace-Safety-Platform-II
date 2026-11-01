@@ -2,26 +2,22 @@
 /**
  * 星历分析面板（桌面右侧滑出 / 移动端底部抽屉，由独立开关 ephOpen 控制）
  *
- * 对标 SpaceX Space Safety Platform 的「高精度星历 + 快速交会筛选」：
- * - 上传 / 内置样本 → 解析（ITC / OEM / OCM）→ 本机 IndexedDB 持久化；
- * - 激活后三维绘出该星历的完整轨道与当前位置；
- * - 一键与在轨目录做 24h / 48h / 72h 交会筛选（Worker 内粗筛 + 精筛 + Pc 计算）；
- * - 事件列表点击即在三维中定位并高亮该次接近。
+ * 对标 SpaceX Space Safety Platform 的「高精度星历」：
+ * - 服务端内置样本（data/ephemerides 索引）与本机上传统一为一份合并列表 → 解析（ITC / OEM / OCM）→ IndexedDB 持久化；
+ * - 激活后三维绘出该星历的完整轨道与当前位置。
  */
 import { computed, onMounted, ref, watch } from 'vue'
-import { ephOpen, fmtNum, drawerHeightVh, isDrawerDragging, useDrawerDrag } from './scene'
+import { ephOpen, drawerHeightVh, isDrawerDragging, useDrawerDrag } from './scene'
 import {
   MAX_FILE_MB,
   activeEphem, ephemBusy, ephemError, ephemMetas,
   uploadProgress, uploadName, builtinSamples, loadBuiltinIndex, loadBuiltinSample,
   refreshEphemList, activateEphem, deactivateEphem, removeEphem, uploadEphemerides,
-  threatEvents, threatSelected, screening, screenProgress, screenError, screenStats,
-  runScreening, selectThreat, DEFAULT_SCREEN,
-  type ScreenParams, type BuiltinSample
+  type BuiltinSample
 } from './ephem/useUserEphemeris'
 import type { ThreatEvent, Vec3 } from './ephem/types'
 import { useI18n } from '@/composables/useI18n'
-import { getSet } from './ephem/store'
+import type { EphemMeta } from './ephem/store'
 import { interpolateAt } from './ephem/interp'
 import { gmstRad } from './ephem/time'
 import { twoBodyPropagate } from './ephem/screening'
@@ -50,11 +46,153 @@ const { onTouchStart: onDragStart, onTouchMove: onDragMove, onTouchEnd: onDragEn
 const fileInput = ref<HTMLInputElement | null>(null)
 const dragOver = ref(false)
 
-/** 筛选参数（面板可调；默认 24h / 50 km / Pc 1e-6） */
-const params = ref<ScreenParams>({ ...DEFAULT_SCREEN })
-
 const activeName = computed(() => activeEphem.value?.name || '')
 const activeMeta = computed(() => ephemMetas.value.find((m) => m.id === activeEphem.value?.id) || null)
+
+/* ---------------- 星历搜索（大数量时快速定位；本地过滤 name / NORAD / 格式） ---------------- */
+
+const epInput = ref('')
+const epFilter = ref('')
+const epFilterKey = computed(() => epFilter.value.trim().toLowerCase())
+
+/** 点击「搜索」按钮或回车时应用过滤词（大列表避免逐键过滤） */
+function applySearch() {
+  epFilter.value = epInput.value
+  ;(document.activeElement as HTMLElement | null)?.blur?.()
+}
+
+/** 清空输入框（含原生 × 清除）即时恢复全量列表 */
+watch(epInput, (v) => {
+  if (!v.trim()) epFilter.value = ''
+})
+
+/* ---------------- 合并列表（内置样本 + 本机记录，去重后统一分页展示） ---------------- */
+
+/** 统一卡片数据：服务端样本（载入即用）与本机记录（可删除）归一化 */
+interface EphCard {
+  key: string
+  kind: 'builtin' | 'local'
+  id: string
+  name: string
+  norad: number | string
+  format: string
+  points: number
+  hasCov: boolean
+  maneuvers: number
+  maneuverSummary?: string
+  startMs?: number
+  stopMs?: number
+  stepSec?: number
+  /** 文件原大小展示文案（本机记录为 IndexedDB 占用估算） */
+  sizeText?: string
+  /** builtin：已载入过（角标「重新载入」） */
+  loaded?: boolean
+  /** builtin 原始样本对象（点击载入用） */
+  sample?: BuiltinSample
+  /** local 原始元数据 */
+  meta?: EphemMeta
+}
+
+/** builtin 样本 → 卡片 */
+function builtinCard(s: BuiltinSample): EphCard {
+  return {
+    key: `b-${s.id}`,
+    kind: 'builtin',
+    id: s.id,
+    name: s.name,
+    norad: s.norad,
+    format: s.format,
+    points: s.points,
+    hasCov: s.hasCov,
+    maneuvers: s.maneuvers,
+    maneuverSummary: s.maneuverSummary || undefined,
+    startMs: s.startMs,
+    stopMs: s.stopMs,
+    stepSec: s.stepSec,
+    sizeText: s.sizeText,
+    loaded: s.loaded,
+    sample: s
+  }
+}
+
+/** 本机记录 → 卡片 */
+function localCard(m: EphemMeta): EphCard {
+  return {
+    key: `u-${m.id}`,
+    kind: 'local',
+    id: m.id,
+    name: m.name,
+    norad: m.norad,
+    format: m.format.toUpperCase(),
+    points: m.points,
+    hasCov: m.hasCov,
+    maneuvers: m.maneuvers?.length || 0,
+    startMs: m.start,
+    stopMs: m.stop,
+    stepSec: m.stepSec,
+    sizeText: metaSize(m.points, m.hasCov),
+    meta: m
+  }
+}
+
+/**
+ * 合并列表：服务端内置样本优先；本机记录中 name+format 与样本重复的
+ * （同一样本的旧解析缓存副本，NORAD 口径可能还是旧值）不再重复展示。
+ */
+const mergedEphs = computed<EphCard[]>(() => {
+  const seen = new Set<string>()
+  const cards: EphCard[] = []
+  for (const s of builtinSamples.value) {
+    seen.add(`${s.name}|${s.format}`)
+    cards.push(builtinCard(s))
+  }
+  for (const m of ephemMetas.value) {
+    const key = `${m.name}|${m.format.toUpperCase()}`
+    if (seen.has(key)) continue
+    seen.add(key)
+    cards.push(localCard(m))
+  }
+  return cards
+})
+
+/** 搜索过滤（name / NORAD / 格式子串） */
+const filteredMerged = computed(() => {
+  const k = epFilterKey.value
+  if (!k) return mergedEphs.value
+  return mergedEphs.value.filter(
+    (c) =>
+      c.name.toLowerCase().includes(k) ||
+      String(c.norad || '').includes(k) ||
+      c.format.toLowerCase().includes(k)
+  )
+})
+
+/* ---------------- 分页（每页 6 张卡片） ---------------- */
+
+const EP_PAGE_SIZE = 6
+const epPage = ref(1)
+
+const epTotalPages = computed(() => Math.max(1, Math.ceil(filteredMerged.value.length / EP_PAGE_SIZE)))
+
+/** 搜索/过滤变化后回到第一页，并夹紧越界页码 */
+watch([epFilterKey, mergedEphs], () => {
+  if (epPage.value > epTotalPages.value) epPage.value = epTotalPages.value
+  if (epPage.value < 1) epPage.value = 1
+})
+watch(epFilterKey, () => {
+  epPage.value = 1
+})
+
+const pagedEphs = computed(() =>
+  filteredMerged.value.slice((epPage.value - 1) * EP_PAGE_SIZE, epPage.value * EP_PAGE_SIZE)
+)
+
+function epGoPage(p: number) {
+  epPage.value = Math.min(Math.max(1, p), epTotalPages.value)
+}
+
+/** 头部计数：合并去重后的总份数（与星历管理页口径一致） */
+const totalEphCount = computed(() => mergedEphs.value.length)
 
 /** ECI 位置 → 地心经纬度（度，东经 ±180°），仅展示用 */
 function eciToLatLon(r: Vec3, tMs: number): { lat: number; lon: number } {
@@ -123,43 +261,6 @@ function toggleMan(i: number, m: ManRow) {
   emit('locate-man', i, { idx: i, t0: m.t0, duraSec: m.duraSec, lat: m.lat, lon: m.lon })
 }
 
-/** 事件分档配色（与三维标记同一套） */
-const LEVEL_COLOR: Record<ThreatEvent['level'], string> = {
-  high: '#ff6b6b',
-  medium: '#ffb454',
-  low: '#7fb0ff'
-}
-const LEVEL_TEXT: Record<ThreatEvent['level'], string> = { high: '高危', medium: '警告', low: '关注' }
-
-/** 导出某份星历为 JSON（含完整状态表，协方差转普通数组便于其它工具读取） */
-async function exportSet(id: string) {
-  try {
-    const set = await getSet(id)
-    if (!set) {
-      ephemError.value = '导出失败：星历已不存在'
-      return
-    }
-    const payload = {
-      ...set,
-      states: set.states.map((s) => ({
-        t: s.t,
-        r: [s.r[0], s.r[1], s.r[2]],
-        v: [s.v[0], s.v[1], s.v[2]],
-        ...(s.cov ? { cov: Array.from(s.cov) } : {})
-      }))
-    }
-    const blob = new Blob([JSON.stringify(payload)], { type: 'application/json' })
-    const url = URL.createObjectURL(blob)
-    const a = document.createElement('a')
-    a.href = url
-    a.download = `${(set.name || 'ephemeris').replace(/[\\/:*?"<>|]/g, '_')}-${set.norad || 'x'}.json`
-    a.click()
-    URL.revokeObjectURL(url)
-  } catch (e) {
-    ephemError.value = (e as Error)?.message || '导出失败'
-  }
-}
-
 function fmtUtc(ms?: number, withSec = false) {
   if (!ms || !Number.isFinite(ms)) return '—'
   const d = new Date(ms)
@@ -222,23 +323,20 @@ async function chooseBuiltin(s: BuiltinSample) {
   if (activeEphem.value) emit('focus-set')
 }
 
-function pickEvent(ev: ThreatEvent) {
-  // 已选中的行再点仍保持选中并重新定位（取消高亮用「取消高亮」按钮，避免误触把画面清掉）
-  selectThreat(ev)
-  emit('focus-event', ev)
+/** 合并卡片点击：内置样本走载入流程，本机记录走激活 / 取消激活 */
+function chooseCard(c: EphCard) {
+  if (c.kind === 'builtin' && c.sample) void chooseBuiltin(c.sample)
+  else if (c.kind === 'local') void chooseSet(c.id)
 }
 
-function clearEvent() {
-  selectThreat(null)
-  emit('focus-event', null)
+/** 卡片激活态：本机记录按 id；内置样本载入后 set.id 是 builtin-* 派生键，按 NORAD+格式匹配 */
+function isCardActive(c: EphCard): boolean {
+  const a = activeEphem.value
+  if (!a) return false
+  if (c.kind === 'local') return c.id === a.id
+  return String(c.norad) === String(a.norad) && c.format.toUpperCase() === a.format.toUpperCase()
 }
 
-function startScreen() {
-  void runScreening(params.value).then(() => {
-    // 筛选完成后默认选中第一条最近的接近，用户可继续点其它条目
-    if (threatEvents.value.length) pickEvent(threatEvents.value[0])
-  })
-}
 </script>
 
 <template>
@@ -253,7 +351,7 @@ function startScreen() {
         @touchcancel="onDragEnd">
         <div class="sp-head-main">
           <b class="sp-title">星历分析</b>
-          <span class="sp-count">{{ ephemMetas.length }} 份星历</span>
+          <span class="sp-count">{{ totalEphCount }} 份星历</span>
           <span class="sp-meta">{{ activeName || '上传高精度星历，生成交会威胁分析' }}</span>
         </div>
         <!-- 收起按钮：向右三角（与左侧「太空安全目标列表」收起键配套，方向相反） -->
@@ -262,10 +360,21 @@ function startScreen() {
         </button>
       </div>
 
+      <!-- 搜索（固定于面板顶部，不随下方列表滚动；按名称 / NORAD ID 过滤两区列表） -->
+      <div class="ep-search">
+        <input
+          v-model="epInput"
+          type="search"
+          placeholder="搜索星历（名称 / NORAD ID）"
+          @keyup.enter="applySearch"
+        />
+        <button class="ep-search-btn" type="button" title="应用搜索" @click="applySearch">搜索</button>
+      </div>
+
       <div class="ep-scroll">
-        <!-- 上传 -->
+        <!-- 星历列表（服务端样本 + 本机记录合并、去重后统一分页，每页 6 张） -->
         <div class="ep-sec">
-          <div class="ep-sec-title">我的星历</div>
+          <div class="ep-sec-title">我的星历<span class="ep-sec-sub">含服务端样本 · {{ filteredMerged.length }} 份</span></div>
           <div class="ep-drop" :class="{ on: dragOver, busy: ephemBusy }"
             @click="pickFiles"
             @dragover.prevent="dragOver = true"
@@ -282,45 +391,40 @@ function startScreen() {
           </div>
           <div v-if="ephemError" class="ep-err">{{ ephemError }}</div>
 
-          <div v-if="ephemMetas.length" class="ep-list">
-            <div v-for="m in ephemMetas" :key="m.id" class="ep-item"
-              :class="{ on: m.id === activeEphem?.id }"
-              @click="chooseSet(m.id)">
-              <div class="ep-item-main">
-                <b class="ep-item-name" :title="m.name">{{ m.name }}</b>
-                <span class="ep-tag">{{ m.format.toUpperCase() }}</span>
-                <span v-if="m.maneuvers?.length" class="ep-tag man" title="OCM MAN 机动段">{{ m.maneuvers.length }} 处机动</span>
-                <span class="ep-tag" :class="{ cov: m.hasCov }">{{ m.hasCov ? '含协方差' : '无协方差' }}</span>
-                <span class="ep-tag">{{ m.source === 'builtin' ? '样本' : '上传' }}</span>
+          <template v-if="mergedEphs.length">
+            <div v-if="pagedEphs.length" class="ep-list">
+              <div v-for="c in pagedEphs" :key="c.key" class="ep-item"
+                :class="{ on: isCardActive(c), 'is-builtin': c.kind === 'builtin' }"
+                @click="chooseCard(c)">
+                <b class="ep-name" :title="c.name">{{ c.name }}</b>
+                <div class="ep-tags">
+                  <span class="ep-tag" :class="{ ocm: c.format === 'OCM' }">{{ c.format }}</span>
+                  <span v-if="c.maneuvers > 0" class="ep-tag man" :title="c.maneuverSummary">{{ c.maneuvers }} 处机动</span>
+                  <span class="ep-tag" :class="{ cov: c.hasCov }">{{ c.hasCov ? '含协方差' : '无协方差' }}</span>
+                </div>
+                <div class="ep-meta">
+                  <span>NORAD {{ c.norad || '—' }}</span>
+                  <span>{{ fmtUtc(c.startMs) }} ~ {{ fmtUtc(c.stopMs) }} UTC</span>
+                </div>
+                <div class="ep-meta">
+                  <span>{{ c.points.toLocaleString() }} 点</span>
+                  <span v-if="c.sizeText">{{ c.sizeText }}</span>
+                </div>
+                <button v-if="c.kind === 'builtin'" class="ep-load" type="button"
+                  :title="c.loaded ? '已载入过，点击重新解析载入' : '解析并载入这份样本'"
+                  @click.stop="chooseCard(c)">{{ c.loaded ? '重新载入' : '载入' }}</button>
+                <button v-else class="ep-del" title="删除这份星历" @click.stop="dropSet(c.id)">×</button>
               </div>
-              <div class="ep-item-sub">
-                <span>NORAD {{ m.norad || '—' }}</span>
-                <span>{{ fmtUtc(m.start) }} ~ {{ fmtUtc(m.stop) }} UTC</span>
-                <span>{{ m.points.toLocaleString() }} 点 / {{ m.stepSec }}s</span>
-                <span>{{ metaSize(m.points, m.hasCov) }}</span>
-              </div>
-              <button class="ep-dl" title="导出为 JSON（含完整状态表）" @click.stop="exportSet(m.id)">⇩</button>
-              <button class="ep-del" title="删除这份星历" @click.stop="dropSet(m.id)">×</button>
             </div>
-          </div>
-          <div v-else-if="!ephemBusy" class="ep-empty">还没有星历文件，可先载入下方内置样本体验</div>
-        </div>
-
-        <!-- 内置样本 -->
-        <div v-if="builtinSamples.length" class="ep-sec">
-          <div class="ep-sec-title">内置星历样本<span class="ep-sec-sub">Starlink 官方公开 · ITC / OCM（OCM 含机动段与协方差）</span></div>
-          <div class="ep-list is-builtin">
-            <div v-for="s in builtinSamples" :key="s.id" class="ep-item is-builtin"
-              @click="chooseBuiltin(s)">
-              <div class="ep-item-main">
-                <b class="ep-item-name" :title="`${s.name} · NORAD ${s.norad} · ${s.points.toLocaleString()} 点${s.maneuverSummary ? ' · ' + s.maneuverSummary : ''}`">{{ s.name }}</b>
-                <span class="ep-tag" :class="{ ocm: s.format === 'OCM' }">{{ s.format }}</span>
-                <span v-if="s.maneuvers > 0" class="ep-tag man" :title="s.maneuverSummary">{{ s.maneuvers }} 处机动</span>
-                <span class="ep-tag" :class="{ cov: s.hasCov }">{{ s.hasCov ? '含协方差' : '无协方差' }}</span>
-              </div>
-              <span class="ep-load">{{ s.loaded ? '重新载入' : '载入' }}</span>
+            <div v-else class="ep-empty">无匹配星历</div>
+            <div v-if="epTotalPages > 1" class="ep-pager">
+              <button type="button" :disabled="epPage <= 1" title="上一页" @click="epGoPage(epPage - 1)">‹</button>
+              <button v-for="p in epTotalPages" :key="p" type="button"
+                :class="{ on: p === epPage }" @click="epGoPage(p)">{{ p }}</button>
+              <button type="button" :disabled="epPage >= epTotalPages" title="下一页" @click="epGoPage(epPage + 1)">›</button>
             </div>
-          </div>
+          </template>
+          <div v-else-if="!ephemBusy" class="ep-empty">还没有星历文件，可上传文件，或在星历管理页点「刷新」同步服务端样本</div>
         </div>
 
         <!-- 当前星历信息 + 质量 -->
@@ -360,76 +464,6 @@ function startScreen() {
           </div>
         </div>
 
-        <!-- 威胁筛选 -->
-        <div v-if="activeEphem" class="ep-sec">
-          <div class="ep-sec-title">威胁筛选<span class="ep-sec-sub">与在轨目录做快速交会分析</span></div>
-          <div class="ep-params">
-            <label class="ep-param">
-              <span>时间窗</span>
-              <select v-model.number="params.windowH">
-                <option :value="6">6 小时</option>
-                <option :value="12">12 小时</option>
-                <option :value="24">24 小时</option>
-                <option :value="48">48 小时</option>
-                <option :value="72">72 小时</option>
-              </select>
-            </label>
-            <label class="ep-param">
-              <span>报告距离</span>
-              <select v-model.number="params.maxDistKm">
-                <option :value="10">10 km</option>
-                <option :value="25">25 km</option>
-                <option :value="50">50 km</option>
-                <option :value="100">100 km</option>
-              </select>
-            </label>
-            <label class="ep-param">
-              <span>粗筛步长</span>
-              <select v-model.number="params.coarseStepSec">
-                <option :value="120">120 s</option>
-                <option :value="300">300 s</option>
-                <option :value="600">600 s</option>
-              </select>
-            </label>
-          </div>
-          <button class="ep-run" :disabled="screening" @click="startScreen">
-            {{ screening ? `筛选中 ${Math.round(screenProgress * 100)}%` : '开始威胁筛选' }}
-          </button>
-          <div v-if="screening" class="ep-bar is-run"><i :style="{ width: Math.round(screenProgress * 100) + '%' }"></i></div>
-          <div v-if="screenError" class="ep-err">{{ screenError }}</div>
-          <div v-if="screenStats" class="ep-stat">
-            目录 {{ screenStats.catalog.toLocaleString() }} 个 ·
-            同轨道带 {{ screenStats.kept.toLocaleString() }} 个 ·
-            窗口 {{ screenStats.windowH.toFixed(0) }} h ·
-            耗时 {{ (screenStats.ms / 1000).toFixed(1) }} s
-          </div>
-
-          <div class="ep-events">
-            <div class="ep-ev-head">
-              <b>威胁事件</b>
-              <span>{{ threatEvents.length }} 条</span>
-              <button v-if="threatSelected" class="ep-ev-clear" @click="clearEvent">取消高亮</button>
-            </div>
-            <div v-if="!threatEvents.length && !screening" class="ep-empty is-sm">
-              暂无结果，点击上方按钮开始筛选
-            </div>
-            <div v-for="ev in threatEvents" :key="ev.id" class="ep-ev"
-              :class="{ on: threatSelected?.id === ev.id }"
-              @click="pickEvent(ev)">
-              <div class="ep-ev-top">
-                <span class="ep-ev-name" :title="ev.otherName">{{ ev.otherName }}</span>
-                <span class="ep-ev-miss" :style="{ color: LEVEL_COLOR[ev.level] }">{{ fmtNum(ev.missKm, 2) }} km</span>
-              </div>
-              <div class="ep-ev-sub">
-                <span class="ep-dot" :style="{ background: LEVEL_COLOR[ev.level] }"></span>
-                <span>{{ LEVEL_TEXT[ev.level] }}</span>
-                <span>{{ fmtUtc(ev.tca, true) }} UTC</span>
-                <span>相对速度 {{ fmtNum(ev.relSpeedKmS, 2) }} km/s</span>
-                <span>Pc {{ ev.pc > 0 ? ev.pc.toExponential(1) : '—' }}</span>
-              </div>
-            </div>
-          </div>
-        </div>
       </div>
     </aside>
   </transition>
@@ -461,6 +495,27 @@ function startScreen() {
 .ep-scroll { flex: 1 1 auto; min-height: 0; overflow-y: auto; overflow-x: hidden; padding-top: 8px;
   scrollbar-width: thin; scrollbar-color: rgba(120,160,220,0.35) transparent; }
 
+/* 星历搜索栏（固定在面板头部下方，不随 ep-scroll 内容滚动） */
+.ep-search {
+  display: flex; gap: 6px; align-items: center;
+  padding: 8px 10px; border-bottom: 1px solid rgba(120,160,220,0.18);
+  background: rgba(6, 12, 22, 0.35);
+}
+.ep-search input {
+  flex: 1 1 auto; min-width: 0; appearance: none; border: 1px solid rgba(110,160,230,0.35);
+  background: rgba(8, 16, 28, 0.55); color: var(--text);
+  border-radius: 6px; padding: 6px 9px; font-size: 11.5px; outline: none;
+}
+.ep-search input::placeholder { color: var(--text-dim); }
+.ep-search input:focus { border-color: rgba(110,160,230,0.75); background: rgba(8, 16, 28, 0.8); }
+.ep-search-btn {
+  flex: 0 0 auto; border: 1px solid rgba(110,160,230,0.5); border-radius: 6px;
+  background: rgba(30, 60, 100, 0.45); color: var(--text);
+  padding: 6px 12px; font-size: 11.5px; cursor: pointer; white-space: nowrap;
+  transition: background 0.15s, border-color 0.15s;
+}
+.ep-search-btn:hover { background: rgba(45, 85, 135, 0.6); border-color: rgba(140,190,255,0.75); }
+
 .ep-sec { padding: 8px 0 10px; border-bottom: 1px solid rgba(120,160,220,0.12);
   &:last-child { border-bottom: 0; } }
 .ep-sec-title { display: flex; align-items: baseline; gap: 6px; font-size: 11.5px; font-weight: 700;
@@ -481,40 +536,49 @@ function startScreen() {
 .ep-progress { display: flex; align-items: center; gap: 8px; margin-top: 6px;
   span { font-size: 10px; color: #8ea4c4; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; } }
 .ep-bar { flex: 1 1 auto; height: 4px; border-radius: 2px; background: rgba(120,160,220,0.2); overflow: hidden;
-  i { display: block; height: 100%; background: linear-gradient(90deg, #3f9dff, #6fe0ff); transition: width 0.2s; }
-  &.is-run { margin-top: 6px; } }
+  i { display: block; height: 100%; background: linear-gradient(90deg, #3f9dff, #6fe0ff); transition: width 0.2s; } }
 
 .ep-err { margin-top: 6px; font-size: 10.5px; line-height: 1.45; color: #ff8f8f;
   background: rgba(255,90,90,0.08); border: 1px solid rgba(255,90,90,0.22); border-radius: 6px; padding: 5px 8px; }
 .ep-empty { font-size: 10.5px; color: #7d92b0; padding: 10px 2px; text-align: center;
   &.is-sm { padding: 8px 0; } }
 
-/* 星历列表 */
+/* 星历列表（合并卡片 4 行：行1 名称 / 行2 标签 / 行3 NORAD+时间 / 行4 点数+大小） */
 .ep-list { display: flex; flex-direction: column; gap: 5px; margin-top: 7px; }
-.ep-item { position: relative; padding: 7px 46px 7px 9px; border-radius: 7px;
+.ep-item { position: relative; padding: 7px 26px 8px 9px; border-radius: 7px;
   background: rgba(26,52,96,0.34); border: 1px solid rgba(110,150,210,0.2); cursor: pointer;
   transition: background 0.15s, border-color 0.15s;
   &:hover { background: rgba(40,80,140,0.44); border-color: rgba(120,175,255,0.4); }
   &.on { border-color: #4f8de0; background: rgba(50,100,180,0.42); }
-  &.is-builtin { padding-right: 9px; display: flex; align-items: center; justify-content: space-between; gap: 8px; } }
-.ep-item-main { display: flex; align-items: center; gap: 5px; min-width: 0;
-  .ep-item-name { flex: 1 1 auto; min-width: 0; font-size: 11.5px; color: #eaf2fc; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; } }
+  /* 内置样本：右上角「载入」角标，右侧留出空间避免标题遮挡 */
+  &.is-builtin { padding-right: 76px; } }
+.ep-name { display: block; min-width: 0; font-size: 11.5px; color: #eaf2fc;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ep-tags { display: flex; align-items: center; flex-wrap: wrap; gap: 4px; margin-top: 5px; }
+.ep-meta { display: flex; flex-wrap: wrap; gap: 3px 10px; margin-top: 4px;
+  span { font-size: 9.5px; color: #8ea4c4; } }
 .ep-tag { flex: none; font-size: 9px; line-height: 1; padding: 2px 4px; border-radius: 3px;
   color: #9dbbdd; background: rgba(110,160,230,0.16); border: 1px solid rgba(110,160,230,0.22);
   &.cov { color: #6fe0c0; background: rgba(80,220,180,0.12); border-color: rgba(80,220,180,0.28); }
   &.man { color: #ffc98a; background: rgba(255,170,70,0.12); border-color: rgba(255,170,80,0.3); }
   &.ocm { color: #ffb46f; background: rgba(255,150,50,0.14); border-color: rgba(255,160,60,0.36); } }
-.ep-item-sub { display: flex; flex-wrap: wrap; gap: 4px 10px; margin-top: 4px;
-  span { font-size: 9.5px; color: #8ea4c4; } }
 .ep-del { position: absolute; top: 5px; right: 5px; width: 18px; height: 18px; line-height: 16px;
   border-radius: 4px; border: 0; background: transparent; color: #7d92b0; font-size: 14px; cursor: pointer;
   &:hover { background: rgba(255,90,90,0.18); color: #ff8f8f; } }
-.ep-dl { position: absolute; top: 5px; right: 25px; width: 18px; height: 18px; line-height: 16px;
-  border-radius: 4px; border: 0; background: transparent; color: #7d92b0; font-size: 12px; cursor: pointer;
-  &:hover { background: rgba(80,140,230,0.2); color: #9fc6ff; } }
-.ep-load { flex: none; font-size: 10px; color: #7fb0ff; padding: 3px 7px; border-radius: 9px;
-  background: rgba(80,140,230,0.16); border: 1px solid rgba(110,160,230,0.3); }
-.ep-item.is-builtin:hover .ep-load { background: rgba(80,140,230,0.3); }
+.ep-load { position: absolute; top: 6px; right: 6px; font-family: inherit; font-size: 10px; line-height: 1.3;
+  color: #7fb0ff; padding: 3px 8px; border-radius: 9px; cursor: pointer; white-space: nowrap;
+  background: rgba(80,140,230,0.16); border: 1px solid rgba(110,160,230,0.3);
+  transition: background 0.15s, color 0.15s;
+  &:hover { background: rgba(80,140,230,0.3); color: #9fc6ff; } }
+
+/* 分页导航（每页 6 张卡片） */
+.ep-pager { display: flex; align-items: center; justify-content: center; flex-wrap: wrap; gap: 4px; margin-top: 8px;
+  button { min-width: 22px; height: 22px; padding: 0 5px; font-size: 10.5px; line-height: 1; color: #9dbbdd;
+    background: rgba(30,60,100,0.35); border: 1px solid rgba(110,150,210,0.28); border-radius: 4px; cursor: pointer;
+    transition: background 0.15s, border-color 0.15s;
+    &:hover:not(:disabled):not(.on) { color: #dbe9fb; border-color: rgba(120,175,255,0.5); }
+    &.on { color: #eaf2fc; font-weight: 700; border-color: #4f8de0; background: rgba(50,100,180,0.45); }
+    &:disabled { opacity: 0.4; cursor: default; } } }
 
 /* 键值表 */
 .ep-kv { display: flex; flex-direction: column; gap: 4px; }
@@ -589,43 +653,8 @@ function startScreen() {
   span { font-size: 9px; color: #7d92b0; } }
 .ep-tle-note { margin-top: 3px; font-size: 9px; line-height: 1.45; color: #7d92b0; }
 
-/* 筛选参数 */
-.ep-params { display: flex; gap: 6px; margin-bottom: 7px; }
-.ep-param { flex: 1 1 0; display: flex; flex-direction: column; gap: 3px;
-  span { font-size: 9.5px; color: #8ea4c4; }
-  select { height: 24px; padding: 0 4px; font-size: 10.5px; color: #dbe9fb; border-radius: 5px;
-    background: rgba(20,44,82,0.9); border: 1px solid rgba(110,150,210,0.3); outline: none; } }
-.ep-run { width: 100%; height: 28px; border-radius: 6px; border: 1px solid rgba(90,160,255,0.5);
-  background: linear-gradient(180deg, rgba(60,130,235,0.55), rgba(40,95,190,0.55)); color: #eaf2fc;
-  font-size: 11.5px; font-weight: 700; cursor: pointer;
-  &:hover:not(:disabled) { border-color: #7fb8ff; background: linear-gradient(180deg, rgba(70,145,250,0.7), rgba(45,105,205,0.7)); }
-  &:disabled { opacity: 0.6; cursor: default; } }
-.ep-stat { margin-top: 6px; font-size: 9.5px; color: #7d92b0; line-height: 1.45; }
-
-/* 事件列表 */
-.ep-events { margin-top: 9px; display: flex; flex-direction: column; gap: 5px; }
-.ep-ev-head { display: flex; align-items: baseline; gap: 6px;
-  b { font-size: 11px; color: #cfe0f5; }
-  span { font-size: 9.5px; color: #7fb0ff; }
-  .ep-ev-clear { margin-left: auto; font-size: 9.5px; color: #8ea4c4; background: transparent;
-    border: 1px solid rgba(110,150,210,0.3); border-radius: 4px; padding: 1px 5px; cursor: pointer;
-    &:hover { color: #dbe9fb; border-color: rgba(120,175,255,0.5); } } }
-.ep-ev { padding: 6px 8px; border-radius: 6px; background: rgba(26,52,96,0.3);
-  border: 1px solid rgba(110,150,210,0.18); cursor: pointer; transition: background 0.15s, border-color 0.15s;
-  &:hover { background: rgba(40,80,140,0.42); }
-  &.on { border-color: rgba(120,175,255,0.7); background: rgba(50,100,180,0.44); } }
-.ep-ev-top { display: flex; align-items: baseline; gap: 8px;
-  .ep-ev-name { flex: 1 1 auto; min-width: 0; font-size: 10.5px; color: #eaf2fc;
-    white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-  .ep-ev-miss { flex: none; font-size: 11px; font-weight: 700; } }
-.ep-ev-sub { display: flex; flex-wrap: wrap; align-items: center; gap: 3px 8px; margin-top: 3px;
-  span { font-size: 9.5px; color: #8ea4c4; } }
-.ep-dot { width: 5px; height: 5px; border-radius: 50%; flex: none; }
-
-/* 小屏：面板为底部抽屉，参数区换行 */
+/* 小屏：面板为底部抽屉 */
 @media (max-width: 720px) {
-  .ep-params { flex-wrap: wrap; }
-  .ep-param { flex: 1 1 30%; }
   .ep-kv-row > span { width: 74px; }
 }
 

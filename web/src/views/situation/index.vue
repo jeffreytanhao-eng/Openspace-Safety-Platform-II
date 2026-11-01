@@ -19,6 +19,7 @@ import {
   maneuverBurnMs,
   clearManeuver,
   activateEphem,
+  deactivateEphem,
   refreshEphemList
 } from './ephem/useUserEphemeris'
 import { listLocalEphemerides, fetchEphemerisText } from '@/api/ephemerides'
@@ -68,6 +69,9 @@ function notReady(name: string) {
 }
 
 function reloadSystem() {
+  // 初始化 = 回到最初状态：先清星历激活态（否则视口重建后 onViewportReady 会恢复轨道），右侧星历弹出窗一并收回
+  deactivateEphem()
+  ephOpen.value = false
   void sceneRef.value?.reinitViewport()
   const now = Date.now()
   simAnchorMs.value = now
@@ -214,10 +218,12 @@ function onViewportReady() {
   paintUserEphem(activeEphem.value ? { track: true } : undefined)
 }
 
-/** 关联入库前去掉逐点协方差，避免 OCM 撑爆 IndexedDB；轨道绘制不需要 cov */
-function stripStatesCov<T extends { states: { t: number; r: [number, number, number]; v: [number, number, number]; cov?: Float64Array }[] }>(set: T): T {
+/** 关联入库前去掉逐点协方差，避免 OCM 撑爆 IndexedDB；轨道绘制不需要 cov（保留集合级 hasCov 标记） */
+function stripStatesCov<T extends { states: { t: number; r: [number, number, number]; v: [number, number, number]; cov?: Float64Array }[]; hasCov?: boolean }>(set: T): T {
+  const hadCov = set.states.some((s) => !!s.cov) || set.hasCov === true
   return {
     ...set,
+    hasCov: hadCov,
     states: set.states.map((s) => ({ t: s.t, r: s.r, v: s.v }))
   }
 }
@@ -270,7 +276,8 @@ watch(
     ephOpen.value = true
     const id = ephId ? String(ephId) : ''
     if (!id) return
-    if (activeEphem.value?.id === `local-${id}`) {
+    const activeId = activeEphem.value?.id
+    if (activeId && (activeId === `local-${id}` || activeId.startsWith('builtin-'))) {
       paintUserEphem({ track: true })
       return
     }
@@ -289,7 +296,9 @@ watch(
         return
       }
       let set = parsed.set
-      set.id = `local-${row.id}`
+      // 与星历面板内置样本同 ID（builtin[-ocm]-<norad>）→ 面板卡片可正确高亮
+      const n = Number(row.norad) || set.norad
+      set.id = set.format === 'ocm' && n ? `builtin-ocm-${n}` : n ? `builtin-${n}` : `local-${row.id}`
       set.source = 'builtin'
       set.name = row.name
       if (set.format === 'ocm' || set.states.length > 4000) {
