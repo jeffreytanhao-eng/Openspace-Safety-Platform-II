@@ -381,9 +381,6 @@ watch(
       <button class="dock-btn" :title="t('sit.heatTip')" @click="notReady(t('sit.heat'))">
         <span class="dock-ico">✱</span><span class="dock-txt">{{ t('sit.heat') }}</span>
       </button>
-      <button class="dock-btn" :title="t('sit.aiTip')" @click="notReady(t('sit.ai'))">
-        <span class="dock-ico">◇</span><span class="dock-txt">{{ t('sit.ai') }}</span>
-      </button>
       <button class="dock-btn" :title="t('sit.reloadTip')" @click="reloadSystem">
         <span class="dock-ico">↻</span><span class="dock-txt">{{ t('sit.reload') }}</span>
       </button>

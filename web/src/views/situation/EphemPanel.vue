@@ -329,12 +329,12 @@ function chooseCard(c: EphCard) {
   else if (c.kind === 'local') void chooseSet(c.id)
 }
 
-/** 卡片激活态：本机记录按 id；内置样本载入后 set.id 是 builtin-* 派生键，按 NORAD+格式匹配 */
+/** 卡片激活态：本机记录按 id；内置样本载入后 set.id 是 builtin-* 派生键，按 名称+格式 匹配（与合并列表去重同口径，对旧缓存记录的 NORAD 旧值免疫） */
 function isCardActive(c: EphCard): boolean {
   const a = activeEphem.value
   if (!a) return false
   if (c.kind === 'local') return c.id === a.id
-  return String(c.norad) === String(a.norad) && c.format.toUpperCase() === a.format.toUpperCase()
+  return c.name.toUpperCase() === a.name.toUpperCase() && c.format.toUpperCase() === a.format.toUpperCase()
 }
 
 </script>
@@ -350,7 +350,7 @@ function isCardActive(c: EphCard): boolean {
         @touchend="onDragEnd"
         @touchcancel="onDragEnd">
         <div class="sp-head-main">
-          <b class="sp-title">星历分析</b>
+          <b class="sp-title">星历文件解析</b>
           <span class="sp-count">{{ totalEphCount }} 份星历</span>
           <span class="sp-meta">{{ activeName || '上传高精度星历，生成交会威胁分析' }}</span>
         </div>
@@ -549,7 +549,13 @@ function isCardActive(c: EphCard): boolean {
   background: rgba(26,52,96,0.34); border: 1px solid rgba(110,150,210,0.2); cursor: pointer;
   transition: background 0.15s, border-color 0.15s;
   &:hover { background: rgba(40,80,140,0.44); border-color: rgba(120,175,255,0.4); }
-  &.on { border-color: #4f8de0; background: rgba(50,100,180,0.42); }
+  /* 激活（已载入/当前显示）的星历卡片：高亮边框 + 亮底 + 微光，与未选中卡片拉开层次 */
+  &.on {
+    border-color: #6fb4ff;
+    background: rgba(64,128,220,0.58);
+    box-shadow: 0 0 10px rgba(80,150,255,0.4), inset 0 0 0 1px rgba(140,190,255,0.4);
+    .ep-name { color: #ffffff; }
+  }
   /* 内置样本：右上角「载入」角标，右侧留出空间避免标题遮挡 */
   &.is-builtin { padding-right: 76px; } }
 .ep-name { display: block; min-width: 0; font-size: 11.5px; color: #eaf2fc;

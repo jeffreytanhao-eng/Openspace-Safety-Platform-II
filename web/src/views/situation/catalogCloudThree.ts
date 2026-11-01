@@ -219,6 +219,8 @@ export function consShowOf(name: string): boolean {
 
 /** Old BaseScene mask: type chips + consShowMap + stationFocus + selection channels. */
 function entryShown(e: CloudEntry): boolean {
+  // 星历激活目标由 ephemOrbitThree 通道渲染（3D 模型 + 轨道），编目云一律排除防重复渲染
+  if (ephemNorad != null && e.norad === ephemNorad) return false
   if (e.norad === selectedNorad) return true
   if (stationFocus != null && e.norad === stationFocus) return true
   const t = e.type
@@ -1817,6 +1819,7 @@ export function updateCatalogCloud(whenMs: number, camera?: THREE.Camera | null)
       if (e.pi < 0 || !e.rec) continue
       if (!entryShown(e)) continue
       if (e.norad === selectedNorad || (stationFocus != null && e.norad === stationFocus)) continue
+      if (ephemNorad != null && e.norad === ephemNorad) continue
       writeOne(e, whenMs, tmp, true)
       spent++
     }
@@ -1879,6 +1882,29 @@ export function setCloudSelection(item: CatalogTle | null, whenMs = Date.now()):
 
 export function ensureCloudSelected(item: CatalogTle, whenMs = Date.now()): void {
   setCloudSelection(item, whenMs)
+}
+
+/**
+ * 星历激活目标 NORAD：该目标由星历通道（ephemOrbitThree）渲染 3D 模型与轨道，
+ * 编目云芯片 / 模型实例必须排除，否则大屏出现两个重复目标。
+ */
+let ephemNorad: number | null = null
+
+export function setEphemNorad(norad: number | null, whenMs = Date.now()): void {
+  const n = norad != null && Number.isFinite(Number(norad)) ? Number(norad) : null
+  if (n === ephemNorad) return
+  ephemNorad = n
+  if (!cloudGate()) {
+    if (positions) positions.fill(0)
+    bufDirty = true
+    touchGeometry()
+    rewriteModelMatrices()
+    return
+  }
+  const tmp = new THREE.Color()
+  for (const e of entries) writeOne(e, whenMs, tmp)
+  touchGeometry()
+  rewriteModelMatrices()
 }
 
 export function setCloudTypeFilter(types: string[], whenMs = Date.now()): void {

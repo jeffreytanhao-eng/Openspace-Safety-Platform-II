@@ -45,6 +45,7 @@ import {
   refreshCloudVisibility,
   upgradeConsRecsFromTles,
   prewarmCatalogModels,
+  setEphemNorad,
 } from './catalogCloudThree'
 import {
   setEphemOrbit,
@@ -843,6 +844,8 @@ function flushUserEphem() {
 function showEphemOrbit(set: EphemSet | null, opts?: { track?: boolean }) {
   const setChanged = lastEphemSet !== set
   lastEphemSet = set
+  // 同步给编目云：星历激活目标由 ephem 通道渲染，编目芯片/模型实例排除该 NORAD 防重复
+  setEphemNorad(set ? Number(set.norad) || null : null)
   const scene = threeScene
   if (!scene) {
     if (!set) stopEphemTrack()

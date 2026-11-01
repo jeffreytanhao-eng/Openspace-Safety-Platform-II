@@ -383,6 +383,16 @@ export async function loadBuiltinIndex() {
           )
         }
       })
+      // 旧解析缓存清理：本机 builtin 记录与服务端样本 name+格式 相同但 NORAD 不一致，
+      // 是 NORAD 解析修正前的错误数据（服务端值已与 TLE 编目库交叉验证）。不清理会导致：
+      // ① 激活旧记录时卡片 NORAD 不匹配无法高亮；② 编目云排除错 NORAD，真实目标重复渲染
+      for (const m of ephemMetas.value) {
+        if (m.source !== 'builtin') continue
+        const match = items.find(
+          (it) => it.name === m.name && it.format.toLowerCase() === String(m.format).toLowerCase()
+        )
+        if (match && Number(match.norad) !== Number(m.norad)) await removeEphem(m.id)
+      }
       return
     }
   } catch {
