@@ -282,7 +282,8 @@ watch(
       return
     }
     try {
-      const list = await listLocalEphemerides()
+      // 显式拉全量（默认分页只有前 20 条，目标行排在后面时会 find 失败 → 深链静默失效）
+      const list = await listLocalEphemerides({ page: 1, size: 500 })
       const row = list.items.find((x) => x.id === id)
       if (!row) return
       const body = await fetchEphemerisText(row.file)
