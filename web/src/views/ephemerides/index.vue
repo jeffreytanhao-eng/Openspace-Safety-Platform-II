@@ -447,6 +447,13 @@ function attachMansFromIndex(set: EphemSet, epochs: { t: number; dvMps?: number;
   return set
 }
 
+function viewRawFile() {
+  const f = selected.value?.file
+  if (!f) return
+  // 新标签打开服务端解压后的明文（.gz 自动 gunzip，text/plain 浏览器直接渲染；浏览器沙箱无法调起系统默认应用）
+  window.open(`/cgi/ephemerides/file?path=${encodeURIComponent(f)}`, '_blank', 'noopener')
+}
+
 async function openInSituation() {
   const row = selected.value
   if (!row) return
@@ -721,7 +728,7 @@ onMounted(() => {
             </div>
             <div><dt>{{ t('eph.updated') }}</dt><dd>{{ selected.updatedAt }}</dd></div>
             <div class="span-all"><dt>来源</dt><dd>{{ selected.originator || '—' }}</dd></div>
-            <div class="span-all"><dt>{{ t('eph.file') }}</dt><dd class="mono">{{ selected.file || '本机导入（IndexedDB）' }}</dd></div>
+            <div class="span-all"><dt>{{ t('eph.file') }}</dt><dd class="mono file-row"><span>{{ selected.file || '本机导入（IndexedDB）' }}</span><button v-if="selected.file" type="button" class="view-raw" :title="t('eph.viewRawTip')" @click="viewRawFile">{{ t('eph.viewRaw') }}</button></dd></div>
           </dl>
 
           <div class="man-block">
@@ -876,6 +883,22 @@ h1 { margin: 0; font-size: 16px; font-weight: 650; }
 .kv dd { margin: 4px 0 0; font-size: 12px; font-weight: 600; color: var(--text); word-break: break-all; }
 .kv dd.mono { font-family: var(--mono); font-size: 12px; font-weight: 600; }
 .kv dd.ok { color: var(--ok); }
+/* 文件行：路径文本 + 右侧「查看原文件」小按钮 */
+.kv dd.file-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.kv dd.file-row span { flex: 1; min-width: 0; }
+.view-raw {
+  flex: none;
+  padding: 3px 10px;
+  font-size: 11px;
+  color: var(--accent, #7fb0ff);
+  background: rgba(127, 176, 255, 0.08);
+  border: 1px solid rgba(127, 176, 255, 0.45);
+  border-radius: 6px;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background 0.15s ease, border-color 0.15s ease;
+}
+.view-raw:hover { background: rgba(127, 176, 255, 0.18); border-color: rgba(127, 176, 255, 0.7); }
 .kv .span2 { grid-column: span 2; }
 .kv .span-all { grid-column: 1 / -1; }
 .man-block {

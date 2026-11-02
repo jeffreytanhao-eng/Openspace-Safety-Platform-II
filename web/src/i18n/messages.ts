@@ -151,6 +151,8 @@ export const messages = {
     'eph.uzTitleLive': '本地星历目录（data/ephemerides）',
     'eph.uzSubLive': 'ITC / CCSDS OCM · gzip 存储 · 由 Starlink 公开镜像抽样',
     'eph.uploadHint': '当前列表来自本地目录；上传入库仍走态势「星历分析」面板',
+    'eph.viewRaw': '查看原文件',
+    'eph.viewRawTip': '在新标签页打开原文件（.gz 自动解压为明文显示）',
 
     "sim.title": '仿真 / 3D',
     "sim.sub": '选择数据源后进入既有 3D 态势页（Stage 1：源选择为 mock，3D 复用现有视口）',
@@ -376,6 +378,8 @@ export const messages = {
     'eph.uzTitleLive': 'Local ephemeris folder (data/ephemerides)',
     'eph.uzSubLive': 'ITC / CCSDS OCM · stored gzip · sampled from Starlink public mirror',
     'eph.uploadHint': 'List is from the local folder; upload still goes through Situation Ephem panel',
+    'eph.viewRaw': 'View raw',
+    'eph.viewRawTip': 'Open the raw file in a new tab (.gz auto-decompressed as plain text)',
 
     "sim.title": 'Simulation / 3D',
     "sim.sub": 'Pick a source then open the existing 3D situation page (Stage 1: source mock, 3D reuses viewport)',
