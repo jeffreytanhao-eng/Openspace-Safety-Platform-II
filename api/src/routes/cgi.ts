@@ -7,6 +7,7 @@ import satTle from './satTle.js'
 import satConstellation from './satConstellation.js'
 import ephemerides from './ephemerides.js'
 import auth from './auth.js'
+import org from './org.js'
 
 const router = Router()
 
@@ -27,6 +28,9 @@ router.get('/config', (_req, res) => {
 
 // Epic A: 组织认证（register/login/me，公开挂载，受保护路由在内部用 requireAuth）
 router.use(auth)
+
+// Epic A: 组织资料与配额（内部全部 requireAuth）
+router.use(org)
 
 // New catalog helpers (stats / paginated tles / cdms)
 router.use(catalog)
