@@ -5,7 +5,10 @@
  *  - GET  /cgi/events/:key            事件详情：成员 CDM 列表 + 双方 sat_tle 档案；
  *  - GET  /cgi/events/:key/cdm/:id/raw 单条 CDM 原文（raw_json）；
  *  - POST /cgi/events/pc-compare    多算法 Pc 比对（E3）：同源输入 = 双方 TLE 传播 +
- *                                   龄期协方差，Foster/Chan/Alfano + 官方 CDM Pc 对照行。
+ *                                   龄期协方差，Foster/Chan/Alfano + 官方 CDM Pc 对照行；
+ *  - POST /cgi/events/:key/recompute  参数重算（F1）：组织默认/仅本次参数 → 共享计算核 →
+ *                                   落 conjunction_pc_runs（新 run_id），计入 recompute_day 配额；
+ *  - GET  /cgi/events/:key/recompute  本事件 run 历史（本组织隔离，旧 run 可对比）。
  *
  * 聚合口径：默认窗口 tca ∈ [now-1d, now+3d]（window 参数可调），按无序对分组后
  * 相邻 TCA gap ≤ 3h 归并为同一事件（防 90min 轨道周期把多次交会误并）；
@@ -16,6 +19,7 @@ import type { RowDataPacket } from 'mysql2/promise'
 import { pool } from '../db/pool.js'
 import { ok, fail } from '../utils/response.js'
 import { requireAuth, type AuthContext } from './auth.js'
+import { quotaExceeded } from '../middleware/plan.js'
 import { parseCdmText } from '../services/cdmParse.js'
 import { buildSatrec, propagateJ2000 } from '../screen/coarse.js'
 import { tleCovariance } from '../screen/covariance.js'
@@ -23,6 +27,7 @@ import { encounterPlane, foster2D } from '../screen/pc.js'
 import { alfano1D, chan2D } from '../screen/pcMethods.js'
 import { norm3 } from '../screen/frames.js'
 import type { CatalogObject, Vec3 } from '../screen/types.js'
+import { ensureCaSchema, getCaDefaults, createPcRun, listPcRuns } from '../db/caDb.js'
 
 const router = Router()
 
@@ -443,10 +448,12 @@ router.get('/events/:key/cdm/:cdmId/raw', async (req, res) => {
   }))
 })
 
-/* --------------------- Pc 多算法比对（E3） --------------------------- */
+/* --------------------- Pc 多算法比对（E3）与参数重算（F1） --------------------------- */
+
+export type PcMethodName = 'official' | 'foster' | 'chan' | 'alfano'
 
 interface PcCompareRow {
-  method: 'official' | 'foster' | 'chan' | 'alfano'
+  method: PcMethodName
   pc: number | null
   missKm: number | null
   tca: string
@@ -457,29 +464,34 @@ interface PcCompareRow {
   note: string
 }
 
-/** 多算法 Pc 比对：统一走服务端 TLE 传播（同源输入）——
- * 双方 sat_tle → SGP4 到 TCA → miss/relVel → 根数龄期协方差 → 交会平面投影，
- * Foster（数值基准）/ Chan（级数）/ Alfano（Bessel 一维积分）各计时一次；
- * 官方 CDM Pc / miss / relSpeed 仅作对照行（不参与计算）。
+type PcAgreement = 'green' | 'yellow' | 'red'
+
+interface PcComputeInput {
+  noradA: number
+  noradB: number
+  tcaMs: number
+  /** 生效 HBR（m），single 合并值或 both 组合值，由调用方解析 */
+  hbrM: number
+  officialPc?: number | null
+  officialMissKm?: number | null
+  officialRelSpeedKms?: number | null
+  /** 参与计算的方法（官方 CDM 始终作对照行） */
+  methods: Array<Exclude<PcMethodName, 'official'>>
+}
+
+interface PcComputeResult {
+  rows: PcCompareRow[]
+  agreement: PcAgreement
+  plane: { missKm: number; inPlaneKm: number; relSpeedKms: number } | null
+  cov: { sigmaT: [number, number]; ageHours: [number, number] } | null
+  disableNote: string
+}
+
+/** 共享计算核：双方 TLE → SGP4 到 TCA → miss/relVel → 根数龄期协方差 → 交会平面投影，
+ * 按请求方法各计时计算一次；官方 CDM Pc / miss / relSpeed 仅作对照行（不参与计算）。
  * 方法行禁用语义：缺 TLE 档案 / SGP4 失败 / 几何退化 → disabled + 原因，绝不静默给数。 */
-router.post('/events/pc-compare', async (req, res) => {
-  const body = (req.body ?? {}) as {
-    noradA?: unknown
-    noradB?: unknown
-    tcaMs?: unknown
-    hbrM?: unknown
-    officialPc?: unknown
-    officialMissKm?: unknown
-    officialRelSpeedKms?: unknown
-  }
-  const noradA = Number(body.noradA)
-  const noradB = Number(body.noradB)
-  const tcaMs = Number(body.tcaMs)
-  if (!Number.isInteger(noradA) || !Number.isInteger(noradB) || !Number.isFinite(tcaMs) || noradA === noradB) {
-    res.status(400).json(fail(400, '参数无效（noradA / noradB / tcaMs）'))
-    return
-  }
-  const hbrM = Number.isFinite(Number(body.hbrM)) && Number(body.hbrM) > 0 ? Number(body.hbrM) : 15
+async function computePcCompare(input: PcComputeInput): Promise<PcComputeResult> {
+  const { noradA, noradB, tcaMs, hbrM, methods } = input
   const hbrKm = hbrM / 1000
   const tcaIso = new Date(tcaMs).toISOString()
   const num = (v: unknown): number | null => (Number.isFinite(Number(v)) ? Number(v) : null)
@@ -487,14 +499,14 @@ router.post('/events/pc-compare', async (req, res) => {
   const rows: PcCompareRow[] = [
     {
       method: 'official',
-      pc: num(body.officialPc),
-      missKm: num(body.officialMissKm),
+      pc: num(input.officialPc),
+      missKm: num(input.officialMissKm),
       tca: tcaIso,
       hbrM,
       covSource: 'cdm',
       ms: 0,
-      disabled: num(body.officialPc) === null,
-      note: num(body.officialPc) === null ? 'CDM 未提供官方 Pc' : ''
+      disabled: num(input.officialPc) === null,
+      note: num(input.officialPc) === null ? 'CDM 未提供官方 Pc' : ''
     }
   ]
 
@@ -520,8 +532,8 @@ router.post('/events/pc-compare', async (req, res) => {
   const pB = recB ? propagateJ2000(recB, tcaMs) : null
 
   let plane: ReturnType<typeof encounterPlane> = null
-  let cov: { sigmaT: [number, number]; ageHours: [number, number] } | null = null
-  let planeResp: { missKm: number; inPlaneKm: number; relSpeedKms: number } | null = null
+  let cov: PcComputeResult['cov'] = null
+  let planeResp: PcComputeResult['plane'] = null
   let disableNote = ''
   if (!ta || !tb) {
     disableNote = '缺一方 TLE 档案，无法同源传播'
@@ -545,12 +557,13 @@ router.post('/events/pc-compare', async (req, res) => {
         return { pc, ms: Number(process.hrtime.bigint() - t0) / 1e6 }
       }
       const missInPlane = Math.hypot(plane.mx, plane.my)
-      const results = [
-        ['foster', timed(() => foster2D(plane!.mx, plane!.my, plane!.c2, hbrKm))],
-        ['chan', timed(() => chan2D(plane!.mx, plane!.my, plane!.c2, hbrKm))],
-        ['alfano', timed(() => alfano1D(plane!.mx, plane!.my, plane!.c2, hbrKm))]
-      ] as const
-      for (const [method, r] of results) {
+      const all = {
+        foster: () => foster2D(plane!.mx, plane!.my, plane!.c2, hbrKm),
+        chan: () => chan2D(plane!.mx, plane!.my, plane!.c2, hbrKm),
+        alfano: () => alfano1D(plane!.mx, plane!.my, plane!.c2, hbrKm)
+      } as const
+      for (const method of methods) {
+        const r = timed(all[method])
         rows.push({
           method,
           pc: r.pc,
@@ -566,23 +579,266 @@ router.post('/events/pc-compare', async (req, res) => {
     }
   }
   if (disableNote) {
-    for (const method of ['foster', 'chan', 'alfano'] as const) {
+    for (const method of methods) {
       rows.push({ method, pc: null, missKm: null, tca: tcaIso, hbrM, covSource: '—', ms: 0, disabled: true, note: disableNote })
     }
   }
 
-  // 一致性灯：取可比 Pc（三方法 + 官方若有）的 max/min 比 —— ≤10 绿 / ≤100 黄 / 其余红；
+  // 一致性灯：取可比 Pc（已选方法 + 官方若有）的 max/min 比 —— ≤10 绿 / ≤100 黄 / 其余红；
   // 任一方法行禁用或可比值不足 2 个 → 红（无法评估一致性，如实降级）
   const methodRows = rows.filter((r) => r.method !== 'official')
   const pcs = methodRows.filter((r) => !r.disabled && r.pc !== null).map((r) => r.pc as number)
   if (rows[0].pc !== null) pcs.push(rows[0].pc)
-  let agreement: 'green' | 'yellow' | 'red' = 'red'
+  let agreement: PcAgreement = 'red'
   if (!methodRows.some((r) => r.disabled) && pcs.length >= 2) {
     const ratio = Math.min(...pcs) > 0 ? Math.max(...pcs) / Math.min(...pcs) : Infinity
     agreement = ratio <= 10 ? 'green' : ratio <= 100 ? 'yellow' : 'red'
   }
 
-  res.json(ok({ rows, agreement, plane: planeResp, cov }))
+  return { rows, agreement, plane: planeResp, cov, disableNote }
+}
+
+/** E3 多算法比对（公开，全方法）：入参校验后走共享计算核 */
+router.post('/events/pc-compare', async (req, res) => {
+  const body = (req.body ?? {}) as {
+    noradA?: number
+    noradB?: number
+    tcaMs?: number
+    hbrM?: number
+    officialPc?: number | null
+    officialMissKm?: number | null
+    officialRelSpeedKms?: number | null
+  }
+  const noradA = Number(body.noradA)
+  const noradB = Number(body.noradB)
+  const tcaMs = Number(body.tcaMs)
+  if (!Number.isInteger(noradA) || !Number.isInteger(noradB) || !Number.isFinite(tcaMs) || noradA === noradB) {
+    res.status(400).json(fail(400, '参数无效（noradA / noradB / tcaMs）'))
+    return
+  }
+  const hbrM = Number.isFinite(Number(body.hbrM)) && Number(body.hbrM) > 0 ? Number(body.hbrM) : 15
+  const result = await computePcCompare({
+    noradA,
+    noradB,
+    tcaMs,
+    hbrM,
+    officialPc: body.officialPc,
+    officialMissKm: body.officialMissKm,
+    officialRelSpeedKms: body.officialRelSpeedKms,
+    methods: ['foster', 'chan', 'alfano']
+  })
+  res.json(ok(result))
 })
+
+/* ----------------------- 参数重算（F1）：run 化 + 配额 + 对比 ----------------------- */
+
+/** 系统级缺省 CA 参数（与 ca.ts CA_SUGGESTIONS 的数值保持一致） */
+const CA_SYSTEM_DEFAULTS = {
+  hbr_mode: 'single',
+  hbr_m: 15,
+  hbr_a_m: null as number | null,
+  hbr_b_m: null as number | null,
+  accepted_pc: 1e-4,
+  accepted_miss_km: 1,
+  screen_distance_km: 10,
+  covariance_mode: 'tle-age',
+  propagator: 'sgp4',
+  window_h: 72,
+  step_s: 30,
+  methods: ['foster', 'chan'] as Array<'foster' | 'chan' | 'alfano'>
+}
+
+function parseEventKey(raw: string): { a: number; b: number; tcaMs: number } | null {
+  const m = /^(\d+):(\d+):(\d+)$/.exec(raw)
+  if (!m) return null
+  const a = Number(m[1])
+  const b = Number(m[2])
+  const tcaMs = Number(m[3])
+  if (a === b) return null
+  return { a, b, tcaMs }
+}
+
+/** POST /cgi/events/:key/recompute —— 按配置重算（登录组织，计入 recompute_day 配额）。
+ * 参数解析顺序：请求体（仅本次）> 组织默认（ca_org_defaults）> 系统缺省；
+ * 结果落 conjunction_pc_runs（新 run_id），旧 run 经 GET 同路径可对比。 */
+router.post('/events/:key/recompute', requireAuth, async (req: ScopedRequest, res) => {
+  const auth = req.auth
+  if (!auth?.org || !auth.user.orgId) {
+    res.status(403).json(fail(403, '需要组织账号'))
+    return
+  }
+  if (!(await ensureCaSchema())) {
+    res.status(503).json(fail(503, '数据库不可用'))
+    return
+  }
+  const parsed = parseEventKey(String(req.params.key ?? ''))
+  if (!parsed) {
+    res.status(400).json(fail(400, '事件 key 无效'))
+    return
+  }
+  const { a, b, tcaMs } = parsed
+
+  // 配额：recompute_day（参数校验通过后再拦，避免 403 掩盖 400 语义）
+  const exceeded = await quotaExceeded('recompute_day', auth.org)
+  if (exceeded) {
+    res.status(exceeded.status).json(exceeded.body)
+    return
+  }
+
+  const orgDefaults = await getCaDefaults(auth.org.id)
+  const body = (req.body ?? {}) as Record<string, unknown>
+  const numOr = (reqVal: unknown, orgVal: number | null | undefined, sys: number, lo: number, hi: number): number => {
+    if (Number.isFinite(Number(reqVal))) return Math.min(hi, Math.max(lo, Number(reqVal)))
+    if (Number.isFinite(Number(orgVal))) return Math.min(hi, Math.max(lo, Number(orgVal)))
+    return sys
+  }
+
+  // HBR：mode（single/both）+ 半径；both 用 sqrt(a²+b²) 组合，缺一侧回落单侧值
+  const hbrMode: string =
+    body.hbrMode === 'both' || body.hbrMode === 'single'
+      ? String(body.hbrMode)
+      : (orgDefaults?.hbr_mode ?? CA_SYSTEM_DEFAULTS.hbr_mode)
+  let hbrM: number
+  let hbrA: number | null = null
+  let hbrB: number | null = null
+  if (hbrMode === 'both') {
+    hbrA = numOr(body.hbrAM, orgDefaults?.hbr_a_m, CA_SYSTEM_DEFAULTS.hbr_m, 0.1, 1000)
+    hbrB = numOr(body.hbrBM, orgDefaults?.hbr_b_m, CA_SYSTEM_DEFAULTS.hbr_m, 0.1, 1000)
+    hbrM = Math.round(Math.sqrt(hbrA * hbrA + hbrB * hbrB) * 100) / 100
+  } else {
+    hbrM = numOr(body.hbrM, orgDefaults?.hbr_m, CA_SYSTEM_DEFAULTS.hbr_m, 1, 1000)
+  }
+
+  const acceptedPc = numOr(body.acceptedPc, orgDefaults?.accepted_pc, CA_SYSTEM_DEFAULTS.accepted_pc, 1e-9, 1)
+  const acceptedMissKm = numOr(body.acceptedMissKm, orgDefaults?.accepted_miss_km, CA_SYSTEM_DEFAULTS.accepted_miss_km, 0.01, 100)
+  const screenDistanceKm = numOr(body.screenDistanceKm, orgDefaults?.screen_distance_km, CA_SYSTEM_DEFAULTS.screen_distance_km, 0.5, 100)
+  const covarianceMode = body.covarianceMode === 'cdm' || body.covarianceMode === 'tle-age'
+    ? String(body.covarianceMode)
+    : (orgDefaults?.covariance_mode ?? CA_SYSTEM_DEFAULTS.covariance_mode)
+  const propagator = body.propagator === 'numeric' || body.propagator === 'sgp4'
+    ? String(body.propagator)
+    : (orgDefaults?.propagator ?? CA_SYSTEM_DEFAULTS.propagator)
+  const windowH = Math.round(numOr(body.windowH, orgDefaults?.window_h, CA_SYSTEM_DEFAULTS.window_h, 1, 168))
+  const stepS = Math.round(numOr(body.stepS, orgDefaults?.step_s, CA_SYSTEM_DEFAULTS.step_s, 1, 3600))
+
+  // 方法集：请求体 > 组织默认 > 系统缺省
+  const allowed = new Set(['foster', 'chan', 'alfano'])
+  let methods = Array.isArray(body.methods)
+    ? (body.methods.map((s) => String(s).toLowerCase()).filter((s) => allowed.has(s)) as Array<'foster' | 'chan' | 'alfano'>)
+    : (orgDefaults?.pc_methods ?? CA_SYSTEM_DEFAULTS.methods.join(','))
+        .split(',')
+        .map((s) => s.trim().toLowerCase())
+        .filter((s) => allowed.has(s)) as Array<'foster' | 'chan' | 'alfano'>
+  methods = [...new Set(methods)]
+  if (!methods.length) {
+    res.status(400).json(fail(400, '至少勾选一个 Pc 方法'))
+    return
+  }
+
+  // 事件官方口径（聚合 Pc/miss/relSpeed 作对照行）
+  const officialPc = Number.isFinite(Number(body.officialPc)) ? Number(body.officialPc) : null
+  const officialMissKm = Number.isFinite(Number(body.officialMissKm)) ? Number(body.officialMissKm) : null
+  const officialRelSpeedKms = Number.isFinite(Number(body.officialRelSpeedKms)) ? Number(body.officialRelSpeedKms) : null
+
+  const result = await computePcCompare({
+    noradA: a,
+    noradB: b,
+    tcaMs,
+    hbrM,
+    officialPc,
+    officialMissKm,
+    officialRelSpeedKms,
+    methods
+  })
+
+  // 如实降级说明：当前计算内核固定 SGP4 + TLE 龄期协方差；所选模式记录在 run 参数里供对比
+  const engineNotes: string[] = []
+  if (covarianceMode === 'cdm') engineNotes.push('协方差模式=cdm：当前内核暂以 TLE 龄期协方差计算，已如实标注')
+  if (propagator === 'numeric') engineNotes.push('传播器=numeric：当前内核暂以 SGP4 计算，已如实标注')
+
+  const resolvedParams = {
+    hbr_mode: hbrMode,
+    hbr_m: hbrM,
+    hbr_a_m: hbrA,
+    hbr_b_m: hbrB,
+    accepted_pc: acceptedPc,
+    accepted_miss_km: acceptedMissKm,
+    screen_distance_km: screenDistanceKm,
+    covariance_mode: covarianceMode,
+    propagator,
+    window_h: windowH,
+    step_s: stepS,
+    methods,
+    engine_notes: engineNotes
+  }
+
+  const runId = await createPcRun({
+    orgId: auth.org.id,
+    eventKey: `${a}:${b}:${tcaMs}`,
+    noradA: a,
+    noradB: b,
+    tca: new Date(tcaMs),
+    paramsJson: JSON.stringify(resolvedParams),
+    rowsJson: JSON.stringify(result.rows),
+    agreement: result.agreement,
+    planeJson: JSON.stringify({ plane: result.plane, cov: result.cov }),
+    triggeredBy: auth.user.email
+  })
+  console.log(
+    `[events] recompute run=${runId} org=${auth.org.id} ${a}:${b} hbr=${hbrM}m methods=${methods.join('+')} ` +
+      `pc=${result.rows.find((r) => r.method !== 'official')?.pc ?? '—'} by=${auth.user.email}`
+  )
+
+  res.json(ok({
+    run: { id: runId, created_at: new Date().toISOString(), params: resolvedParams },
+    rows: result.rows,
+    agreement: result.agreement,
+    plane: result.plane,
+    cov: result.cov,
+    disableNote: result.disableNote || null,
+    notes: engineNotes
+  }))
+})
+
+/** GET /cgi/events/:key/recompute —— 本事件的重算 run 历史（本组织隔离，最新在前） */
+router.get('/events/:key/recompute', requireAuth, async (req: ScopedRequest, res) => {
+  const auth = req.auth
+  if (!auth?.org || !auth.user.orgId) {
+    res.status(403).json(fail(403, '需要组织账号'))
+    return
+  }
+  if (!(await ensureCaSchema())) {
+    res.status(503).json(fail(503, '数据库不可用'))
+    return
+  }
+  const parsed = parseEventKey(String(req.params.key ?? ''))
+  if (!parsed) {
+    res.status(400).json(fail(400, '事件 key 无效'))
+    return
+  }
+  const runs = await listPcRuns(auth.org.id, `${parsed.a}:${parsed.b}:${parsed.tcaMs}`)
+  res.json(ok({
+    runs: runs.map((r) => ({
+      id: r.id,
+      event_key: r.event_key,
+      tca: r.tca,
+      params: safeParse(r.params_json),
+      rows: safeParse<Array<unknown>>(r.rows_json) ?? [],
+      agreement: r.agreement,
+      plane: safeParse(r.plane_json),
+      triggered_by: r.triggered_by,
+      created_at: r.created_at
+    }))
+  }))
+})
+
+function safeParse<T = Record<string, unknown>>(s: string | null): T | null {
+  if (!s) return null
+  try {
+    return JSON.parse(s) as T
+  } catch {
+    return null
+  }
+}
 
 export default router

@@ -14,6 +14,7 @@ import objects from './objects.js'
 import overview from './overview.js'
 import screens from './screens.js'
 import events from './events.js'
+import ca from './ca.js'
 import { getDailyFetchStatus } from '../db/fetchDb.js'
 import { isDailyFetchRunning } from '../jobs/dailyFetch.js'
 
@@ -63,6 +64,9 @@ router.use(screens)
 
 // Epic E2: 交会事件（列表/详情公开只读；CDM 导入 requireAuth + 组织）
 router.use(events)
+
+// Epic F1: 碰撞参数默认值（GET/PUT /ca/defaults，内部 requireAuth）
+router.use(ca)
 
 // New catalog helpers (stats / paginated tles / cdms)
 router.use(catalog)

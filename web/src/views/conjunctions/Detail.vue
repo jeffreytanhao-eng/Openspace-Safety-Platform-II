@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, reactive, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useI18n } from '@/composables/useI18n'
 
@@ -16,6 +16,18 @@ import {
   type PcAgreement,
   type PcMethod
 } from '@/api/events'
+import {
+  getCaDefaults,
+  recomputeEvent,
+  listRecomputeRuns,
+  type CaDefaults,
+  type RecomputeResult,
+  type PcRun,
+  type HbrMode,
+  type CovMode,
+  type Propagator
+} from '@/api/ca'
+import { AuthError } from '@/api/auth'
 
 const route = useRoute()
 const router = useRouter()
@@ -38,6 +50,7 @@ async function load(): Promise<void> {
     primary.value = resp.primary
     secondary.value = resp.secondary
     void runCompare() // 详情就绪后自动比对（onMounted 时 event 尚为 null，不能挂在那里）
+    void loadCaContext() // F1：预填组织默认参数 + 拉 run 历史（未登录回落系统缺省）
   } catch (e) {
     error.value = e instanceof Error ? e.message : String(e)
     event.value = null
@@ -147,6 +160,170 @@ async function showRaw(c: CdmMember): Promise<void> {
   } finally {
     rawLoading.value = false
   }
+}
+
+/* ------------------- 碰撞参数与重算（F1）：仅本次编辑 + run 对比 ------------------- */
+
+interface CaFormState {
+  hbrMode: HbrMode
+  hbrM: number
+  hbrAM: number
+  hbrBM: number
+  acceptedPc: number
+  acceptedMissKm: number
+  screenDistanceKm: number
+  covarianceMode: CovMode
+  propagator: Propagator
+  windowH: number
+  stepS: number
+  methods: { foster: boolean; chan: boolean; alfano: boolean }
+}
+const caForm = reactive<CaFormState>({
+  hbrMode: 'single',
+  hbrM: 15,
+  hbrAM: 15,
+  hbrBM: 5,
+  acceptedPc: 1e-4,
+  acceptedMissKm: 1,
+  screenDistanceKm: 10,
+  covarianceMode: 'tle-age',
+  propagator: 'sgp4',
+  windowH: 72,
+  stepS: 30,
+  methods: { foster: true, chan: true, alfano: false }
+})
+const caDefaults = ref<CaDefaults | null>(null)
+const caOrgReady = ref(false) // 有组织账号（可重算）
+
+function fillCaForm(d: CaDefaults | null): void {
+  if (!d) return
+  caForm.hbrMode = d.hbr_mode
+  caForm.hbrM = d.hbr_m
+  caForm.hbrAM = d.hbr_a_m ?? 15
+  caForm.hbrBM = d.hbr_b_m ?? 5
+  caForm.acceptedPc = d.accepted_pc
+  caForm.acceptedMissKm = d.accepted_miss_km
+  caForm.screenDistanceKm = d.screen_distance_km
+  caForm.covarianceMode = d.covariance_mode
+  caForm.propagator = d.propagator
+  caForm.windowH = d.window_h
+  caForm.stepS = d.step_s
+  const list = d.pc_methods.split(',').map((s) => s.trim())
+  caForm.methods.foster = list.includes('foster')
+  caForm.methods.chan = list.includes('chan')
+  caForm.methods.alfano = list.includes('alfano')
+}
+
+/** 重算结果（最新一次） */
+const rcLoading = ref(false)
+const rcError = ref('')
+const rcResult = ref<RecomputeResult | null>(null)
+const rcRuns = ref<PcRun[]>([])
+const runsOpen = ref(false)
+
+async function loadRuns(): Promise<void> {
+  if (!caOrgReady.value) return
+  try {
+    rcRuns.value = (await listRecomputeRuns(key.value)).runs
+  } catch {
+    rcRuns.value = []
+  }
+}
+
+async function loadCaContext(): Promise<void> {
+  try {
+    const resp = await getCaDefaults()
+    caDefaults.value = resp.defaults
+    fillCaForm(resp.defaults)
+    caOrgReady.value = true
+    void loadRuns()
+  } catch (e) {
+    if (e instanceof AuthError && e.httpStatus === 401) {
+      // 未登录：保留系统缺省表单，提示登录后可重算
+      caOrgReady.value = false
+    } else {
+      // 组织账号但非管理员等：默认值仍可读（403 = 平台账号），回落系统缺省
+      caOrgReady.value = !(e instanceof AuthError && e.httpStatus === 403)
+    }
+  }
+}
+
+function caMethodsList(): Array<'foster' | 'chan' | 'alfano'> {
+  const list: Array<'foster' | 'chan' | 'alfano'> = []
+  if (caForm.methods.foster) list.push('foster')
+  if (caForm.methods.chan) list.push('chan')
+  if (caForm.methods.alfano) list.push('alfano')
+  return list
+}
+
+/** 按此配置重算：生成新 run_id，刷新 run 历史 */
+async function runRecompute(): Promise<void> {
+  if (!event.value || rcLoading.value) return
+  if (!caOrgReady.value) {
+    rcError.value = t('ca.detailNeedLogin')
+    return
+  }
+  if (!caMethodsList().length) {
+    rcError.value = t('ca.err.noMethod')
+    return
+  }
+  rcLoading.value = true
+  rcError.value = ''
+  try {
+    // 参数解析顺序（服务端）：仅本次表单 > 组织默认 > 系统缺省；生效值回显在 run 参数摘要
+    rcResult.value = await recomputeEvent(key.value, {
+      hbrMode: caForm.hbrMode,
+      hbrM: caForm.hbrM,
+      hbrAM: caForm.hbrAM,
+      hbrBM: caForm.hbrBM,
+      acceptedPc: caForm.acceptedPc,
+      acceptedMissKm: caForm.acceptedMissKm,
+      screenDistanceKm: caForm.screenDistanceKm,
+      covarianceMode: caForm.covarianceMode,
+      propagator: caForm.propagator,
+      windowH: caForm.windowH,
+      stepS: caForm.stepS,
+      methods: caMethodsList(),
+      // 官方对照口径随请求固化进 run（后续回看时与当次 CDM 状态一致）
+      officialPc: event.value.pc,
+      officialMissKm: event.value.missKm,
+      officialRelSpeedKms: event.value.relSpeedKmS
+    })
+    void loadRuns()
+  } catch (e) {
+    rcError.value = e instanceof Error ? e.message : String(e)
+    rcResult.value = null
+  } finally {
+    rcLoading.value = false
+  }
+}
+
+/** run 判定：Pc 与 miss 相对接受阈值的安全侧/危险侧 */
+function runVerdict(
+  params: RecomputeResult['run']['params'] | null,
+  rows: PcRun['rows']
+): { pcExceed: boolean | null; missBelow: boolean | null } {
+  if (!params) return { pcExceed: null, missBelow: null }
+  const pcs = rows.filter((r) => r.method !== 'official' && !r.disabled && r.pc !== null).map((r) => r.pc as number)
+  const pcMax = pcs.length ? Math.max(...pcs) : null
+  const miss = rows.find((r) => r.method !== 'official' && !r.disabled && r.missKm !== null)?.missKm ?? null
+  return {
+    pcExceed: pcMax === null ? null : pcMax >= params.accepted_pc,
+    missBelow: miss === null ? null : miss < params.accepted_miss_km
+  }
+}
+function caMethodLabel(m: PcMethod): string {
+  return t(methodKeys[m])
+}
+/** run 内各重算方法的最大 Pc（官方对照行不参与） */
+function maxMethodPc(run: PcRun): number | null {
+  const pcs = run.rows
+    .filter((r) => r.method !== 'official' && !r.disabled && r.pc !== null)
+    .map((r) => r.pc as number)
+  return pcs.length ? Math.max(...pcs) : null
+}
+function fmtWhen(iso: string): string {
+  return iso ? iso.replace('T', ' ').slice(0, 19) : '—'
 }
 </script>
 
@@ -311,6 +488,201 @@ async function showRaw(c: CdmMember): Promise<void> {
           </p>
         </div>
       </section>
+      <!-- F1：碰撞参数与重算（仅本次 + run 对比） -->
+      <section class="panel wide">
+        <div class="ph">
+          <span>{{ t('ca.detailTitle') }}</span>
+          <span class="dim-tag">{{ t('ca.onceOnly') }}</span>
+          <button type="button" class="btn primary sm" :disabled="rcLoading || !caOrgReady" @click="runRecompute">
+            {{ rcLoading ? t('ca.recomputing') : t('ca.recompute') }}
+          </button>
+        </div>
+        <p class="note">{{ t('ca.detailDesc') }}</p>
+
+        <!-- 参数编辑（仅本次） -->
+        <div class="ca-form">
+          <label class="cf field">
+            <span class="lbl">{{ t('ca.f.hbrMode') }}</span>
+            <span class="row">
+              <label class="radio"><input v-model="caForm.hbrMode" type="radio" value="single" /> {{ t('ca.single') }}</label>
+              <label class="radio"><input v-model="caForm.hbrMode" type="radio" value="both" /> {{ t('ca.both') }}</label>
+            </span>
+          </label>
+          <label class="cf field">
+            <span class="lbl">{{ caForm.hbrMode === 'both' ? `${t('ca.f.hbr')} (A / B)` : t('ca.f.hbr') }}</span>
+            <span v-if="caForm.hbrMode === 'both'" class="row">
+              <input v-model.number="caForm.hbrAM" type="number" min="0.1" max="1000" step="0.1" /> /
+              <input v-model.number="caForm.hbrBM" type="number" min="0.1" max="1000" step="0.1" /> m
+            </span>
+            <span v-else class="row">
+              <input v-model.number="caForm.hbrM" type="number" min="1" max="1000" step="1" /> m
+            </span>
+          </label>
+          <label class="cf field">
+            <span class="lbl">{{ t('ca.f.acceptedPc') }}</span>
+            <span class="row"><input v-model.number="caForm.acceptedPc" type="number" min="1e-9" max="1" step="1e-5" /></span>
+          </label>
+          <label class="cf field">
+            <span class="lbl">{{ t('ca.f.acceptedMiss') }}</span>
+            <span class="row"><input v-model.number="caForm.acceptedMissKm" type="number" min="0.01" max="100" step="0.1" /> km</span>
+          </label>
+          <label class="cf field">
+            <span class="lbl">{{ t('ca.f.screenDist') }}</span>
+            <span class="row"><input v-model.number="caForm.screenDistanceKm" type="number" min="0.5" max="100" step="0.5" /> km</span>
+          </label>
+          <label class="cf field">
+            <span class="lbl">{{ t('ca.f.covMode') }}</span>
+            <span class="row">
+              <select v-model="caForm.covarianceMode">
+                <option value="tle-age">{{ t('ca.covTleAge') }}</option>
+                <option value="cdm">CDM</option>
+              </select>
+            </span>
+          </label>
+          <label class="cf field">
+            <span class="lbl">{{ t('ca.f.propagator') }}</span>
+            <span class="row">
+              <select v-model="caForm.propagator">
+                <option value="sgp4">SGP4</option>
+                <option value="numeric">{{ t('ca.propNumeric') }}</option>
+              </select>
+            </span>
+          </label>
+          <label class="cf field">
+            <span class="lbl">{{ t('ca.f.windowStep') }}</span>
+            <span class="row">
+              <input v-model.number="caForm.windowH" type="number" min="1" max="168" step="1" /> h /
+              <input v-model.number="caForm.stepS" type="number" min="1" max="3600" step="1" /> s
+            </span>
+          </label>
+          <div class="cf field">
+            <span class="lbl">{{ t('ca.f.methods') }}</span>
+            <span class="row">
+              <label class="radio"><input v-model="caForm.methods.foster" type="checkbox" /> Foster</label>
+              <label class="radio"><input v-model="caForm.methods.chan" type="checkbox" /> Chan</label>
+              <label class="radio"><input v-model="caForm.methods.alfano" type="checkbox" /> Alfano</label>
+            </span>
+          </div>
+          <div class="cf field">
+            <span class="lbl">{{ t('ca.f.orgDefaults') }}</span>
+            <span class="row org-link">
+              <template v-if="caDefaults">
+                {{ caDefaults.updated_at.replace('T', ' ').slice(0, 16) }} ({{ caDefaults.updated_by }})
+              </template>
+              <template v-else-if="caOrgReady">{{ t('ca.notSet') }}</template>
+              <template v-else>—</template>
+              <RouterLink to="/settings">{{ t('ca.goSettings') }}</RouterLink>
+            </span>
+          </div>
+        </div>
+
+        <p v-if="!caOrgReady" class="note warn">{{ t('ca.detailNeedLogin') }}</p>
+        <p v-if="rcError" class="state error inline">{{ rcError }}</p>
+
+        <!-- 最新 run 结果 -->
+        <template v-if="rcResult">
+          <div class="rc-head">
+            <span class="run-chip">{{ t('ca.runId') }} #{{ rcResult.run.id }}</span>
+            <span v-if="rcResult.run.params" class="mono dim">
+              HBR {{ rcResult.run.params.hbr_m }}m · {{ t('ca.f.acceptedPc') }} {{ rcResult.run.params.accepted_pc.toExponential(0) }} ·
+              {{ t('ca.f.acceptedMiss') }} {{ rcResult.run.params.accepted_miss_km }}km
+            </span>
+            <span class="lamp" :class="rcResult.agreement"><i class="dot"></i>{{ t(agreeKeys[rcResult.agreement]) }}</span>
+          </div>
+          <p v-if="rcResult.notes.length" class="note warn">{{ rcResult.notes.join(' · ') }}</p>
+          <p v-if="rcResult.disableNote" class="note warn">{{ rcResult.disableNote }}</p>
+          <div class="tl">
+            <table>
+              <thead>
+                <tr>
+                  <th>{{ t('pc.cmp.col.method') }}</th>
+                  <th>{{ t('conj.col.pc') }}</th>
+                  <th>{{ t('conj.col.miss') }}</th>
+                  <th>{{ t('conj.hbr') }} (m)</th>
+                  <th>{{ t('pc.cmp.col.cov') }}</th>
+                  <th>{{ t('pc.cmp.col.ms') }} (ms)</th>
+                  <th>{{ t('ca.verdict') }}</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr v-for="r in rcResult.rows" :key="r.method" :class="{ off: r.disabled }">
+                  <td>{{ caMethodLabel(r.method) }}<span v-if="r.disabled" class="dim">— {{ r.note }}</span></td>
+                  <td class="mono strong">{{ fmtPc(r.pc) }}</td>
+                  <td class="mono">{{ num(r.missKm, 3) }}</td>
+                  <td class="mono">{{ num(r.hbrM, 1) }}</td>
+                  <td>{{ r.covSource === 'tle-age' ? t('pc.cmp.cov.tleAge') : r.covSource === 'cdm' ? t('pc.cmp.cov.cdm') : '—' }}</td>
+                  <td class="mono">{{ r.method === 'official' ? '—' : fmtMs(r.ms) }}</td>
+                  <td v-if="r.method === 'official'" class="dim">—</td>
+                  <td v-else class="mono">
+                    <span v-if="r.pc !== null && rcResult.run.params" :class="r.pc >= rcResult.run.params.accepted_pc ? 'vd-bad' : 'vd-ok'">
+                      {{ r.pc >= rcResult.run.params.accepted_pc ? t('ca.pcExceed') : t('ca.pcOk') }}
+                    </span>
+                    <span v-else>—</span>
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+          <p v-if="rcResult.plane && rcResult.run.params" class="note">
+            <span :class="rcResult.plane.inPlaneKm < rcResult.run.params.accepted_miss_km ? 'vd-bad' : 'vd-ok'">
+              {{ rcResult.plane.inPlaneKm < rcResult.run.params.accepted_miss_km ? t('ca.missBelow') : t('ca.missOk') }}
+            </span>
+            ({{ t('pc.cmp.inPlane') }} {{ rcResult.plane.inPlaneKm.toFixed(3) }} km /
+            {{ t('ca.f.acceptedMiss') }} {{ rcResult.run.params.accepted_miss_km }} km)
+          </p>
+        </template>
+
+        <!-- run 历史（旧 run 对比） -->
+        <div class="runs-head">
+          <button type="button" class="btn sm" @click="runsOpen = !runsOpen">
+            {{ runsOpen ? '▾' : '▸' }} {{ t('ca.runHistory') }} ({{ rcRuns.length }})
+          </button>
+        </div>
+        <div v-if="runsOpen" class="tl">
+          <div v-if="!caOrgReady" class="note">{{ t('ca.detailNeedLogin') }}</div>
+          <div v-else-if="!rcRuns.length" class="note">{{ t('ca.noRuns') }}</div>
+          <table v-else>
+            <thead>
+              <tr>
+                <th>run_id</th>
+                <th>{{ t('ca.col.time') }}</th>
+                <th>{{ t('ca.col.by') }}</th>
+                <th>HBR</th>
+                <th>{{ t('conj.col.pc') }} ({{ t('ca.col.official') }} / {{ t('ca.methodsMax') }})</th>
+                <th>{{ t('pc.cmp.agreement') }}</th>
+                <th>{{ t('ca.verdict') }}</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr v-for="run in rcRuns" :key="run.id">
+                <td class="mono strong">#{{ run.id }}</td>
+                <td class="mono">{{ fmtWhen(run.created_at) }}</td>
+                <td>{{ run.triggered_by }}</td>
+                <td class="mono">{{ run.params?.hbr_m ?? '—' }} m</td>
+                <td class="mono">
+                  {{ fmtPc(run.rows.find((r) => r.method === 'official')?.pc ?? null) }} /
+                  {{ fmtPc(maxMethodPc(run)) }}
+                </td>
+                <td>
+                  <span v-if="run.agreement" class="lamp" :class="run.agreement"><i class="dot"></i></span>
+                  <span v-else>—</span>
+                </td>
+                <td class="mono">
+                  <template v-if="runVerdict(run.params, run.rows).pcExceed !== null">
+                    <span :class="runVerdict(run.params, run.rows).pcExceed ? 'vd-bad' : 'vd-ok'">
+                      {{ runVerdict(run.params, run.rows).pcExceed ? t('ca.pcExceed') : t('ca.pcOk') }}
+                    </span>
+                    <span v-if="runVerdict(run.params, run.rows).missBelow !== null" :class="runVerdict(run.params, run.rows).missBelow ? 'vd-bad' : 'vd-ok'">
+                      · {{ runVerdict(run.params, run.rows).missBelow ? t('ca.missBelow') : t('ca.missOk') }}
+                    </span>
+                  </template>
+                  <template v-else>—</template>
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
     </section>
 
     <!-- 原文弹层 -->
@@ -403,6 +775,47 @@ h1 {
 .lamp.red .dot { background: var(--danger); }
 .state.inline { margin: 8px 0 0; padding: 8px 10px; display: block; }
 .note { margin: 10px 0 0; font-size: 10px; color: var(--text-dim); }
+.note.warn { color: var(--warn); }
+
+/* F1 碰撞参数与重算 */
+.dim-tag {
+  font-size: 9px; color: var(--text-dim); border: 1px solid var(--border);
+  border-radius: 3px; padding: 1px 5px; white-space: nowrap;
+}
+.btn.primary.sm { margin-left: auto; }
+.ca-form {
+  margin-top: 10px; display: grid; grid-template-columns: repeat(5, minmax(150px, 1fr));
+  gap: 8px 14px; align-items: end;
+}
+.ca-form .field { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+.ca-form .lbl { font-size: 9px; color: var(--text-dim); text-transform: uppercase; letter-spacing: 0.03em; }
+.ca-form .row { display: flex; align-items: center; gap: 4px; font-size: 11px; color: var(--text-dim); flex-wrap: wrap; }
+.ca-form input[type='number'],
+.ca-form select {
+  appearance: none; border: 1px solid var(--border); background: var(--bg-deep);
+  color: var(--text); border-radius: 4px; padding: 4px 6px; font-size: 11px;
+  font-family: var(--mono); outline: none; width: 76px;
+}
+.ca-form input:focus, .ca-form select:focus { border-color: var(--accent); }
+.radio { display: inline-flex; align-items: center; gap: 3px; font-size: 11px; color: var(--text-muted); }
+.org-link { gap: 8px; }
+.org-link a { color: var(--accent-strong); font-size: 11px; text-decoration: none; }
+.org-link a:hover { text-decoration: underline; }
+.rc-head { display: flex; align-items: center; gap: 10px; margin-top: 12px; flex-wrap: wrap; }
+.run-chip {
+  font-family: var(--mono); font-size: 11px; font-weight: 650; color: var(--accent-strong);
+  border: 1px solid rgba(74, 125, 154, 0.4); border-radius: 3px; padding: 2px 8px;
+}
+.rc-head .dim { font-size: 10px; }
+.runs-head { margin-top: 12px; }
+.vd-ok { color: var(--ok, #63b463); font-size: 10px; }
+.vd-bad { color: var(--danger); font-size: 10px; }
+@media (max-width: 1280px) {
+  .ca-form { grid-template-columns: repeat(3, minmax(150px, 1fr)); }
+}
+@media (max-width: 900px) {
+  .ca-form { grid-template-columns: repeat(2, minmax(140px, 1fr)); }
+}
 
 .state {
   flex: 1; min-height: 120px; display: flex; align-items: center; justify-content: center;

@@ -186,6 +186,14 @@ const usageComputers: Record<string, (orgId: number) => Promise<number>> = {
       [orgId]
     )
     return Number((rows[0] as { n: number }).n)
+  },
+  // F1 重算 run 表接入后生效（口径 = 当日发起的参数重算次数）
+  recompute_day: async (orgId) => {
+    const [rows] = await pool.query<RowDataPacket[]>(
+      'SELECT COUNT(*) AS n FROM conjunction_pc_runs WHERE org_id = ? AND created_at >= CURDATE()',
+      [orgId]
+    )
+    return Number((rows[0] as { n: number }).n)
   }
 }
 
