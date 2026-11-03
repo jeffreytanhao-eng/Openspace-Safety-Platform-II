@@ -5,6 +5,8 @@ import { pingDb } from './db/pool.js'
 import { ensureEphemSchema, countRowsDb } from './ephem/ephemDb.js'
 import { scanAndIngest, importFromIndexJson } from './ephem/ingest.js'
 import { ensureOrgSchema, ensurePlatformAdmin } from './db/orgDb.js'
+import { ensureFetchSchema } from './db/fetchDb.js'
+import { startDailyFetchScheduler } from './jobs/dailyFetch.js'
 
 const app = createApp()
 
@@ -18,6 +20,9 @@ app.listen(config.port, '0.0.0.0', () => {
     if (!(await ensureEphemSchema())) return
     // 组织/用户库表（Epic A）：幂等建表，失败只提示不阻塞启动
     if (!(await ensureOrgSchema())) console.warn('[org] schema not ready (db down?)')
+    // 日更批次/版本化快照表（Epic C1）+ 每日调度器
+    if (await ensureFetchSchema()) startDailyFetchScheduler()
+    else console.warn('[fetch] schema not ready, daily-fetch scheduler not started')
     // 平台超管 bootstrap（Epic B1）：凭据来自 .env，首次启动创建
     try {
       if (config.platformAdmin.password) {

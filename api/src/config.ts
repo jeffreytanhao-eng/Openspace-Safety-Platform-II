@@ -24,7 +24,20 @@ export const config = {
   platformAdmin: {
     email: process.env.PLATFORM_ADMIN_EMAIL || 'admin@openspace.local',
     password: process.env.PLATFORM_ADMIN_PASSWORD || ''
-  }
+  },
+  /** Space-Track 系统日更凭据（C1）；缺失时 GP/CDM 源到点失败并留批次痕迹 */
+  spaceTrack: {
+    user: process.env.SPACETRACK_USER || '',
+    pass: process.env.SPACETRACK_PASS || '',
+    baseUrl: process.env.SPACETRACK_BASE_URL || 'https://www.space-track.org'
+  },
+  /** AOE（spacemapper）日更（C1）；token 缺失时跳过该源 */
+  aoe: {
+    token: process.env.AOE_TOKEN || '',
+    baseUrl: process.env.AOE_BASE_URL || 'https://spacemapper.cn'
+  },
+  /** 每日日更时刻（UTC，'M H * * *' 形式），默认每日 06:00 */
+  dailyFetchCron: process.env.DAILY_FETCH_CRON || '0 6 * * *'
 }
 
 if (!process.env.JWT_SECRET) {

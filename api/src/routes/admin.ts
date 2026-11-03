@@ -24,7 +24,7 @@ const router = Router()
 type ScopedRequest = import('express').Request & { auth?: AuthContext }
 
 /** 超管守卫（B1 只放行 platform_super_admin） */
-function requireSuperAdmin(req: ScopedRequest, res: import('express').Response, next: import('express').NextFunction): void {
+export function requireSuperAdmin(req: ScopedRequest, res: import('express').Response, next: import('express').NextFunction): void {
   if (req.auth?.user.role !== 'platform_super_admin') {
     res.status(403).json(fail(403, '需要平台超级管理员权限'))
     return
