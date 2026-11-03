@@ -1,26 +1,110 @@
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useI18n } from '@/composables/useI18n'
 
 const { t } = useI18n()
-import { conjunctionById, objectById } from '@/composables/useMockCatalog'
+import {
+  getEvent,
+  getCdmRaw,
+  type ConjunctionEvent,
+  type CdmMember,
+  type TleProfile,
+  type EventLevel
+} from '@/api/events'
 
 const route = useRoute()
 const router = useRouter()
-const id = computed(() => String(route.params.id || ''))
-const conj = computed(() => conjunctionById(id.value))
-const primary = computed(() => (conj.value ? objectById(conj.value.primaryId) : undefined))
-const secondary = computed(() => (conj.value ? objectById(conj.value.secondaryId) : undefined))
+const key = computed(() => decodeURIComponent(String(route.params.id || '')))
 
-function stub(action: string) {
-  window.alert(`Stage 2 stub: ${action} (no backend)`)
+const loading = ref(true)
+const error = ref('')
+const event = ref<ConjunctionEvent | null>(null)
+const cdms = ref<CdmMember[]>([])
+const primary = ref<TleProfile | null>(null)
+const secondary = ref<TleProfile | null>(null)
+
+async function load(): Promise<void> {
+  loading.value = true
+  error.value = ''
+  try {
+    const resp = await getEvent(key.value)
+    event.value = resp.event
+    cdms.value = resp.cdms ?? []
+    primary.value = resp.primary
+    secondary.value = resp.secondary
+  } catch (e) {
+    error.value = e instanceof Error ? e.message : String(e)
+    event.value = null
+  } finally {
+    loading.value = false
+  }
+}
+
+onMounted(() => void load())
+
+const levelKeys: Record<EventLevel, Parameters<ReturnType<typeof useI18n>['t']>[0]> = {
+  red: 'conj.high',
+  orange: 'conj.warn',
+  yellow: 'conj.watch',
+  low: 'conj.low'
+}
+function levelLabel(lv: EventLevel): string {
+  return t(levelKeys[lv])
+}
+function srcLabel(s: string): string {
+  return s === 'customer' ? t('conj.src.customer') : t('conj.src.system')
+}
+function fmtPc(pc: number | null): string {
+  if (pc === null) return '—'
+  if (pc === 0) return '0'
+  return pc.toExponential(2)
+}
+function fmtTca(iso: string): string {
+  return iso ? iso.replace('T', ' ').slice(0, 19) : '—'
+}
+function num(v: number | null, digits = 2, suffix = ''): string {
+  return v === null ? '—' : `${v.toFixed(digits)}${suffix}`
+}
+
+/** 深链：把交会对与 TCA 时刻带给态势页（E4 消费定位与高亮） */
+const situationLink = computed(() => {
+  if (!event.value) return '/situation'
+  const e = event.value
+  return `/situation?conj=${e.noradA}-${e.noradB}&tca=${new Date(e.tca).getTime()}`
+})
+
+/** CDM 原文弹层 */
+const rawOpen = ref(false)
+const rawText = ref('')
+const rawTitle = ref('')
+const rawLoading = ref(false)
+async function showRaw(c: CdmMember): Promise<void> {
+  rawTitle.value = c.cdm_id ? `CDM ${c.cdm_id}` : `CDM #${c.id}`
+  rawOpen.value = true
+  rawLoading.value = true
+  rawText.value = ''
+  try {
+    const r = await getCdmRaw(key.value, c.id)
+    // 后端存的是 JSON 包装（format + text/data），展示内部原文更直观
+    try {
+      const parsed = JSON.parse(r.raw) as { format?: string; text?: string; data?: unknown }
+      rawText.value = parsed.text ?? JSON.stringify(parsed.data ?? parsed, null, 2)
+    } catch {
+      rawText.value = r.raw
+    }
+  } catch (e) {
+    rawText.value = e instanceof Error ? e.message : String(e)
+  } finally {
+    rawLoading.value = false
+  }
 }
 </script>
 
 <template>
-  <div v-if="!conj" class="page">
-    <p>{{ t('conj.notFound') }}</p>
+  <div v-if="loading" class="page"><section class="state">{{ t('obj.loading') }}</section></div>
+  <div v-else-if="!event" class="page">
+    <p class="state error">{{ error || t('conj.notFound') }}</p>
     <button type="button" class="btn" @click="router.push('/conjunctions')">{{ t('conj.backList') }}</button>
   </div>
   <div v-else class="page">
@@ -28,66 +112,114 @@ function stub(action: string) {
       <div>
         <button type="button" class="link" @click="router.push('/conjunctions')">{{ t('conj.back') }}</button>
         <h1>
-          <span class="pill" :class="conj.risk">{{ conj.risk }}</span>
-          {{ primary?.name }} × {{ secondary?.name }}
+          <span class="pill" :class="event.level">{{ levelLabel(event.level) }}</span>
+          {{ event.nameA || `NORAD ${event.noradA}` }} × {{ event.nameB || `NORAD ${event.noradB}` }}
         </h1>
-        <p>TCA {{ conj.tcaUtc.replace('T', ' ').replace('Z', '') }} UTC · {{ conj.source }}</p>
+        <p>
+          TCA {{ fmtTca(event.tca) }} UTC · {{ t('conj.col.cdm') }} {{ event.cdmCount }}
+          <template v-if="event.tcaSpanH > 0"> · {{ t('conj.span') }} {{ event.tcaSpanH }}h</template>
+          · {{ event.sources.map(srcLabel).join(' + ') }}
+        </p>
       </div>
       <div class="actions">
-        <button type="button" class="btn" @click="stub('Download CDM / report')">{{ t('conj.download') }}</button>
-        <button type="button" class="btn" @click="stub('Print report')">{{ t('conj.print') }}</button>
+        <a class="btn primary" :href="situationLink" @click.prevent="router.push(situationLink)">
+          {{ t('conj.openSituation') }}
+        </a>
       </div>
     </header>
 
     <section class="kpi">
-      <div class="card"><div class="k">Pc</div><div class="v mono">{{ conj.pc }}</div></div>
-      <div class="card"><div class="k">{{ t('conj.missDist') }}</div><div class="v mono">{{ conj.missKm.toFixed(3) }} km</div></div>
-      <div class="card"><div class="k">{{ t('conj.relVel') }}</div><div class="v mono">{{ conj.relVelKms.toFixed(2) }} km/s</div></div>
-      <div class="card"><div class="k">TCA</div><div class="v mono sm">{{ conj.tcaUtc.replace('T', ' ').replace('Z', '') }}</div></div>
+      <div class="card">
+        <div class="k">{{ t('conj.col.pc') }}</div>
+        <div class="v mono">{{ fmtPc(event.pc) }}</div>
+        <div class="sub">{{ event.pcSource ? srcLabel(event.pcSource) : '—' }}</div>
+      </div>
+      <div class="card"><div class="k">{{ t('conj.missDist') }}</div><div class="v mono">{{ num(event.missKm, 3) }} km</div></div>
+      <div class="card"><div class="k">{{ t('conj.relVel') }}</div><div class="v mono">{{ num(event.relSpeedKmS, 2) }} km/s</div></div>
+      <div class="card"><div class="k">TCA</div><div class="v mono sm">{{ fmtTca(event.tca) }}</div></div>
     </section>
 
     <section class="grid">
       <aside class="panel">
         <div class="ph">{{ t('conj.primaryObj') }}</div>
-        <div class="obj-name">{{ primary?.name }}</div>
-        <dl class="kv">
-          <div><dt>NORAD</dt><dd class="mono">{{ primary?.norad }}</dd></div>
-          <div><dt>{{ t('obj.operator') }}</dt><dd>{{ primary?.operator }}</dd></div>
-          <div><dt>{{ t('obj.col.constellation') }}</dt><dd>{{ primary?.constellation }}</dd></div>
-          <div><dt>{{ t('obj.maneuverable') }}</dt><dd>{{ primary?.maneuverable ? t('obj.yes') : t('obj.no') }}</dd></div>
-          <div><dt>Ephem</dt><dd>{{ primary?.ephemFreshness }}</dd></div>
+        <div class="obj-name">{{ primary?.object_name || `NORAD ${event.noradA}` }}</div>
+        <dl v-if="primary" class="kv">
+          <div><dt>NORAD</dt><dd class="mono">{{ primary.norad_id }}</dd></div>
+          <div><dt>{{ t('obj.type') }}</dt><dd>{{ primary.object_type }}</dd></div>
+          <div><dt>{{ t('obj.regime') }}</dt><dd>{{ primary.regime }}</dd></div>
+          <div><dt>{{ t('obj.epoch') }}</dt><dd class="mono">{{ primary.epoch ? fmtTca(String(primary.epoch)) : '—' }}</dd></div>
+          <div><dt>{{ t('obj.incl') }}</dt><dd class="mono">{{ num(primary.incl, 2, '°') }}</dd></div>
+          <div><dt>{{ t('conj.perigee') }}</dt><dd class="mono">{{ num(primary.perigee, 0) }}</dd></div>
+          <div><dt>{{ t('conj.apogee') }}</dt><dd class="mono">{{ num(primary.apogee, 0) }}</dd></div>
+          <div><dt>{{ t('conj.period') }}</dt><dd class="mono">{{ num(primary.period, 1) }}</dd></div>
         </dl>
-        <RouterLink v-if="primary" class="btn" :to="`/objects`">{{ t('conj.viewObjects') }}</RouterLink>
+        <p v-else class="dim">{{ t('conj.notFound') }}</p>
+        <RouterLink class="btn" to="/objects">{{ t('conj.viewObjects') }}</RouterLink>
       </aside>
 
       <aside class="panel">
         <div class="ph">{{ t('conj.secondaryObj') }}</div>
-        <div class="obj-name">{{ secondary?.name }}</div>
-        <dl class="kv">
-          <div><dt>NORAD</dt><dd class="mono">{{ secondary?.norad }}</dd></div>
-          <div><dt>{{ t('obj.operator') }}</dt><dd>{{ secondary?.operator }}</dd></div>
-          <div><dt>{{ t('obj.col.constellation') }}</dt><dd>{{ secondary?.constellation }}</dd></div>
-          <div><dt>{{ t('obj.maneuverable') }}</dt><dd>{{ secondary?.maneuverable ? t('obj.yes') : t('obj.no') }}</dd></div>
-          <div><dt>Ephem</dt><dd>{{ secondary?.ephemFreshness }}</dd></div>
+        <div class="obj-name">{{ secondary?.object_name || `NORAD ${event.noradB}` }}</div>
+        <dl v-if="secondary" class="kv">
+          <div><dt>NORAD</dt><dd class="mono">{{ secondary.norad_id }}</dd></div>
+          <div><dt>{{ t('obj.type') }}</dt><dd>{{ secondary.object_type }}</dd></div>
+          <div><dt>{{ t('obj.regime') }}</dt><dd>{{ secondary.regime }}</dd></div>
+          <div><dt>{{ t('obj.epoch') }}</dt><dd class="mono">{{ secondary.epoch ? fmtTca(String(secondary.epoch)) : '—' }}</dd></div>
+          <div><dt>{{ t('obj.incl') }}</dt><dd class="mono">{{ num(secondary.incl, 2, '°') }}</dd></div>
+          <div><dt>{{ t('conj.perigee') }}</dt><dd class="mono">{{ num(secondary.perigee, 0) }}</dd></div>
+          <div><dt>{{ t('conj.apogee') }}</dt><dd class="mono">{{ num(secondary.apogee, 0) }}</dd></div>
+          <div><dt>{{ t('conj.period') }}</dt><dd class="mono">{{ num(secondary.period, 1) }}</dd></div>
         </dl>
+        <p v-else class="dim">{{ t('conj.notFound') }}</p>
+        <RouterLink v-if="secondary" class="btn" to="/objects">{{ t('conj.viewObjects') }}</RouterLink>
       </aside>
 
       <section class="panel wide">
-        <div class="ph">{{ t('conj.missVec') }}</div>
-        <div class="vec">
-          <div><span>{{ t('conj.radial') }}</span><strong class="mono">{{ conj.missRadialM }} m</strong></div>
-          <div><span>{{ t('conj.intrack') }}</span><strong class="mono">{{ conj.missIntrackM }} m</strong></div>
-          <div><span>{{ t('conj.crosstrack') }}</span><strong class="mono">{{ conj.missCrosstrackM }} m</strong></div>
-        </div>
-        <div class="viz" aria-hidden="true">
-          <div class="orbit a" />
-          <div class="orbit b" />
-          <div class="dot" />
-          <div class="cap">{{ t('conj.tcaPoint') }}</div>
+        <div class="ph">{{ t('conj.timeline') }}</div>
+        <div class="tl">
+          <table>
+            <thead>
+              <tr>
+                <th>{{ t('conj.col.tca') }}</th>
+                <th>{{ t('conj.col.pc') }}</th>
+                <th>{{ t('conj.col.miss') }}</th>
+                <th>{{ t('conj.relVel') }}</th>
+                <th>{{ t('conj.hbr') }}</th>
+                <th>{{ t('conj.originator') }}</th>
+                <th>{{ t('conj.created') }}</th>
+                <th>{{ t('conj.col.source') }}</th>
+                <th></th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr v-for="c in cdms" :key="c.id">
+                <td class="mono">{{ fmtTca(c.tca) }}</td>
+                <td class="mono">{{ fmtPc(c.collision_probability) }}</td>
+                <td class="mono">{{ num(c.miss_distance_km, 2) }}</td>
+                <td class="mono">{{ num(c.rel_speed_km_per_s, 2) }}</td>
+                <td class="mono">{{ num(c.hard_body_radius_m, 2) }}</td>
+                <td>{{ c.originator || '—' }}</td>
+                <td class="mono">{{ c.creation_date ? fmtTca(c.creation_date) : '—' }}</td>
+                <td><span class="pill" :class="c.source === 'customer' ? 'yellow' : 'low'">{{ srcLabel(c.source) }}</span></td>
+                <td><button type="button" class="btn sm" @click="showRaw(c)">{{ t('conj.raw') }}</button></td>
+              </tr>
+            </tbody>
+          </table>
         </div>
         <p class="note">{{ t('conj.note') }}</p>
       </section>
     </section>
+
+    <!-- 原文弹层 -->
+    <div v-if="rawOpen" class="modal-mask" @click.self="rawOpen = false">
+      <div class="modal">
+        <div class="mh">{{ rawTitle }}</div>
+        <pre class="raw">{{ rawLoading ? t('obj.loading') : rawText }}</pre>
+        <div class="mfoot">
+          <button type="button" class="btn" @click="rawOpen = false">{{ t('conj.backList') }}</button>
+        </div>
+      </div>
+    </div>
   </div>
 </template>
 
@@ -109,15 +241,18 @@ h1 {
 .btn {
   appearance: none; border: 1px solid var(--border-strong); background: var(--bg-panel);
   color: var(--text-muted); border-radius: 4px; padding: 6px 12px; font-size: 12px; cursor: pointer;
+  display: inline-block; text-decoration: none;
 }
 .btn:hover { color: var(--text); }
+.btn.primary { color: var(--accent-strong); border-color: var(--accent-strong); }
+.btn.sm { padding: 3px 8px; font-size: 11px; }
 .pill {
   font-size: 10px; text-transform: uppercase; padding: 2px 6px; border-radius: 3px;
   border: 1px solid var(--border); color: var(--text-muted); font-weight: 650;
 }
-.pill.high { color: var(--danger); border-color: rgba(196, 91, 91, 0.45); }
-.pill.warn { color: var(--warn); border-color: rgba(196, 146, 74, 0.45); }
-.pill.watch { color: var(--watch); border-color: rgba(168, 154, 92, 0.4); }
+.pill.red { color: var(--danger); border-color: rgba(196, 91, 91, 0.45); }
+.pill.orange { color: var(--warn); border-color: rgba(196, 146, 74, 0.45); }
+.pill.yellow { color: var(--watch); border-color: rgba(168, 154, 92, 0.4); }
 .pill.low { color: var(--text-dim); }
 
 .kpi { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; }
@@ -127,11 +262,10 @@ h1 {
 .k { font-size: 10px; color: var(--text-dim); text-transform: uppercase; letter-spacing: 0.04em; }
 .v { margin-top: 4px; font-size: 18px; font-weight: 650; color: var(--text); }
 .v.sm { font-size: 13px; }
+.sub { margin-top: 2px; font-size: 10px; color: var(--text-dim); }
 .mono { font-family: var(--mono); font-variant-numeric: tabular-nums; }
 
-.grid {
-  display: grid; grid-template-columns: 1fr 1fr; gap: 10px;
-}
+.grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
 .panel {
   background: var(--bg-panel); border: 1px solid var(--border); border-radius: 8px; padding: 12px 14px;
 }
@@ -144,35 +278,37 @@ h1 {
 }
 .kv dt { margin: 0; font-size: 10px; color: var(--text-dim); }
 .kv dd { margin: 4px 0 0; font-size: 12px; font-weight: 600; }
-.vec {
-  display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin-bottom: 12px;
+.dim { color: var(--text-dim); font-size: 12px; }
+
+.tl { overflow-x: auto; }
+.tl table { width: 100%; border-collapse: collapse; font-size: 11px; }
+.tl th {
+  text-align: left; padding: 8px 10px; color: var(--text-dim); font-size: 10px;
+  text-transform: uppercase; letter-spacing: 0.04em; border-bottom: 1px solid var(--border); white-space: nowrap;
 }
-.vec div {
-  background: var(--bg-panel-2); border: 1px solid var(--border); border-radius: 6px;
-  padding: 10px; display: flex; flex-direction: column; gap: 4px;
+.tl td { padding: 8px 10px; border-bottom: 1px solid var(--border); white-space: nowrap; }
+.note { margin: 10px 0 0; font-size: 10px; color: var(--text-dim); }
+
+.state {
+  flex: 1; min-height: 120px; display: flex; align-items: center; justify-content: center;
+  background: var(--bg-panel); border: 1px solid var(--border); border-radius: 8px;
+  color: var(--text-dim); font-size: 12px;
 }
-.vec span { font-size: 10px; color: var(--text-dim); }
-.viz {
-  position: relative; height: 140px; border-radius: 8px; border: 1px solid var(--border);
-  background: radial-gradient(circle at 40% 55%, #1a2430 0%, var(--bg-deep) 70%);
-  overflow: hidden;
+.state.error { color: var(--danger); }
+
+.modal-mask {
+  position: fixed; inset: 0; z-index: 60; background: rgba(0, 0, 0, 0.55);
+  display: flex; align-items: center; justify-content: center; padding: 24px;
 }
-.orbit {
-  position: absolute; border: 1px solid rgba(74, 125, 154, 0.45); border-radius: 50%;
-  top: 50%; left: 40%; transform: translate(-50%, -50%);
+.modal {
+  width: 720px; max-width: 100%; max-height: 84vh; overflow: auto;
+  background: var(--bg-panel); border: 1px solid var(--border-strong); border-radius: 10px; padding: 16px;
 }
-.orbit.a { width: 180px; height: 70px; }
-.orbit.b {
-  width: 160px; height: 100px; border-style: dashed; border-color: rgba(196, 146, 74, 0.45);
-  transform: translate(-50%, -50%) rotate(28deg);
+.mh { font-size: 14px; font-weight: 650; margin-bottom: 8px; }
+.raw {
+  margin: 0; max-height: 60vh; overflow: auto; white-space: pre-wrap; word-break: break-all;
+  background: var(--bg-deep); border: 1px solid var(--border); border-radius: 6px; padding: 10px;
+  font-size: 11px; font-family: var(--mono); color: var(--text);
 }
-.dot {
-  position: absolute; width: 8px; height: 8px; border-radius: 50%;
-  background: var(--danger); top: 48%; left: 52%;
-  box-shadow: 0 0 10px rgba(196, 91, 91, 0.6);
-}
-.cap {
-  position: absolute; right: 12px; bottom: 10px; font-size: 10px; color: var(--text-dim);
-}
-.note { margin: 10px 0 0; font-size: 11px; color: var(--text-dim); }
+.mfoot { display: flex; justify-content: flex-end; gap: 8px; margin-top: 12px; }
 </style>

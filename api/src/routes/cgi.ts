@@ -13,6 +13,7 @@ import jobs from './jobs.js'
 import objects from './objects.js'
 import overview from './overview.js'
 import screens from './screens.js'
+import events from './events.js'
 import { getDailyFetchStatus } from '../db/fetchDb.js'
 import { isDailyFetchRunning } from '../jobs/dailyFetch.js'
 
@@ -59,6 +60,9 @@ router.use(jobs)
 router.use(objects)
 router.use(overview)
 router.use(screens)
+
+// Epic E2: 交会事件（列表/详情公开只读；CDM 导入 requireAuth + 组织）
+router.use(events)
 
 // New catalog helpers (stats / paginated tles / cdms)
 router.use(catalog)

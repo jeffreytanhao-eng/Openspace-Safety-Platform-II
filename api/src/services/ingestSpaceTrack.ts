@@ -2,7 +2,8 @@
  * Space-Track 采集（Epic C1）：
  *  - GP（两行根数/OMM）：版本化写 orbital_snapshots（追加不覆盖），同时刷新 sat_tle 当前态
  *    （旧历元归档 sat_tle_history），保证 3D 态势 / 编目链路继续工作；
- *  - CDM（公开交会报文）：整表覆盖 sat_cdm（与旧平台行为一致），hs_cdm_history 留档 90 天。
+ *  - CDM（公开交会报文）：系统快照覆盖 sat_cdm（仅 source='system'，E2 起客户上传的
+ *    source='customer' 不被冲掉），hs_cdm_history 留档 90 天。
  */
 import crypto from 'node:crypto'
 import type { RowDataPacket } from 'mysql2/promise'
@@ -222,7 +223,7 @@ export async function runGpIngest(batchId: number): Promise<IngestCounts> {
 
 const CDM_INSERT_SQL =
   'INSERT INTO sat_cdm (cdm_id, creation_date, originator, tca, type, focus_a, norad_a, name_a, norad_b, name_b, ' +
-  'miss_distance_km, radial_distance_km, rel_speed_km_per_s, collision_probability, hard_body_radius_m, raw_json) VALUES ?'
+  'miss_distance_km, radial_distance_km, rel_speed_km_per_s, collision_probability, hard_body_radius_m, raw_json, source) VALUES ?'
 
 export async function runCdmIngest(batchId: number): Promise<IngestCounts> {
   const client = new SpaceTrackClient()
@@ -257,7 +258,7 @@ export async function runCdmIngest(batchId: number): Promise<IngestCounts> {
       str(item.CDM_ID), created, '', tca, 'SCREENING', 0,
       Math.trunc(noradA), str(item.SAT_1_NAME),
       Math.trunc(noradB), str(item.SAT_2_NAME),
-      missKm, null, null, num(item.PC), null, rawJson
+      missKm, null, null, num(item.PC), null, rawJson, 'system'
     ])
     historyRows.push([
       fetchedAt, str(item.CDM_ID), created, tca,
@@ -268,8 +269,8 @@ export async function runCdmIngest(batchId: number): Promise<IngestCounts> {
   const conn = await pool.getConnection()
   try {
     await conn.beginTransaction()
-    // 整表覆盖（与旧平台行为一致；当前快照 + raw_json 全保留，历史在 hs_cdm_history）
-    await conn.query('DELETE FROM sat_cdm')
+    // 系统快照覆盖：只清 source='system'（E2 起客户上传的 source='customer' 不被日更冲掉）
+    await conn.query("DELETE FROM sat_cdm WHERE source = 'system'")
     if (cdmRows.length) await conn.query(CDM_INSERT_SQL, [cdmRows])
     await conn.commit()
   } catch (e) {

@@ -108,12 +108,14 @@ function fmtDur(ms: number | null): string {
 
 /* ------------------------------ 数据源健康 ------------------------------ */
 
-const SRC_LABEL: Record<string, string> = {
+type I18nKey = Parameters<ReturnType<typeof useI18n>['t']>[0]
+
+const SRC_LABEL: Record<string, I18nKey> = {
   spacetrack_gp: 'ov.src.gp',
   spacetrack_cdm: 'ov.src.cdm',
   aoe: 'ov.src.aoe'
 }
-const STATE_LABEL: Record<string, string> = {
+const STATE_LABEL: Record<string, I18nKey> = {
   running: 'ov.src.running',
   success: 'ov.src.ok',
   failed: 'ov.src.failed',
@@ -187,8 +189,8 @@ const STATE_LABEL: Record<string, string> = {
             <div class="src-list">
               <div v-for="s in summary?.sources ?? []" :key="s.source" class="src">
                 <div class="src-top">
-                  <span class="src-name">{{ t(SRC_LABEL[s.source] ?? s.source) }}</span>
-                  <span class="state" :class="s.state">{{ t(STATE_LABEL[s.state] ?? s.state) }}</span>
+                  <span class="src-name">{{ t((SRC_LABEL[s.source] ?? s.source) as I18nKey) }}</span>
+                  <span class="state" :class="s.state">{{ t((STATE_LABEL[s.state] ?? s.state) as I18nKey) }}</span>
                 </div>
                 <div class="src-meta">
                   <span>{{ t('ov.src.last') }} {{ fmtWhen(s.last_success) }}</span>

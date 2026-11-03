@@ -32,8 +32,8 @@ function requireOrg(req: ScopedRequest, res: Response, next: NextFunction): void
   next()
 }
 
-/** 全部路由先过 requireAuth，进入业务前确保 schema */
-router.use(requireAuth, async (req, res, next) => {
+/** 全部路由先过 requireAuth，进入业务前确保 schema（限定 /objects 前缀，避免拦截挂在后续的公开路由） */
+router.use('/objects', requireAuth, async (req, res, next) => {
   if (!(await ensureObjectsSchema())) {
     res.status(503).json(fail(503, '数据库不可用'))
     return

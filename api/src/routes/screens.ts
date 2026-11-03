@@ -29,7 +29,7 @@ function requireOrg(req: ScopedRequest, res: Response, next: NextFunction): void
   next()
 }
 
-router.use(requireAuth, async (req, res, next) => {
+router.use('/screens', requireAuth, async (req, res, next) => {
   if (!(await ensureScreenSchema())) {
     res.status(503).json(fail(503, '数据库不可用'))
     return
