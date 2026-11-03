@@ -179,10 +179,10 @@ const usageComputers: Record<string, (orgId: number) => Promise<number>> = {
     )
     return Number((rows[0] as { n: number }).n)
   },
-  // E1 筛查任务表接入后生效（当日 0 点起计数）
+  // E1 筛查任务表接入后生效（当日 0 点起计数；口径 = 发起的任务数，非事件数）
   screen_day: async (orgId) => {
     const [rows] = await pool.query<RowDataPacket[]>(
-      'SELECT COUNT(*) AS n FROM conjunction_events WHERE org_id = ? AND created_at >= CURDATE()',
+      'SELECT COUNT(*) AS n FROM screening_jobs WHERE org_id = ? AND queued_at >= CURDATE()',
       [orgId]
     )
     return Number((rows[0] as { n: number }).n)

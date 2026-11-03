@@ -27,6 +27,7 @@ const navDefs: NavDef[] = [
   { key: 'objects', labelKey: 'nav.objects', hintKey: 'nav.objectsHint', to: '/objects' },
   { key: 'trajectories', labelKey: 'nav.trajectories', hintKey: 'nav.trajectoriesHint', to: '/trajectories' },
   { key: 'conjunctions', labelKey: 'nav.conjunctions', hintKey: 'nav.conjunctionsHint', to: '/conjunctions' },
+  { key: 'screens', labelKey: 'nav.screens', hintKey: 'nav.screensHint', to: '/screens' },
   { key: 'ephemerides', labelKey: 'nav.ephemerides', hintKey: 'nav.ephemeridesHint', to: '/ephemerides' },
   { key: 'simulation', labelKey: 'nav.situation', hintKey: 'nav.situationHint', to: '/situation' },
   { key: 'ai', labelKey: 'nav.ai', hintKey: 'nav.aiHint', to: '/ai' },

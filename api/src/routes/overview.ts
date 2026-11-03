@@ -11,6 +11,7 @@ import { ok, fail } from '../utils/response.js'
 import { pool } from '../db/pool.js'
 import { requireAuth, type AuthContext } from './auth.js'
 import { getDailyFetchStatus } from '../db/fetchDb.js'
+import { countScreensToday } from '../db/screenDb.js'
 
 const router = Router()
 
@@ -112,13 +113,23 @@ router.get('/overview/summary', requireAuth, async (req: ScopedRequest, res) => 
       }
     })
 
+    // 今日筛查次数（E1：screening_jobs；筛查表未建时兜底 0）
+    let screensToday = 0
+    if (orgId) {
+      try {
+        screensToday = await countScreensToday(orgId)
+      } catch {
+        screensToday = 0
+      }
+    }
+
     res.json(
       ok({
         org: req.auth?.org ? { id: req.auth.org.id, name: req.auth.org.name, plan: req.auth.org.plan } : null,
         owned,
         ephem,
         cdm,
-        screensToday: 0, // Epic E1 接入 conjunction_events 后替换
+        screensToday,
         running: st.running,
         sources
       })

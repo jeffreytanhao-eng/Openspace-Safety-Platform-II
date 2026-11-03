@@ -12,6 +12,7 @@ import admin from './admin.js'
 import jobs from './jobs.js'
 import objects from './objects.js'
 import overview from './overview.js'
+import screens from './screens.js'
 import { getDailyFetchStatus } from '../db/fetchDb.js'
 import { isDailyFetchRunning } from '../jobs/dailyFetch.js'
 
@@ -57,6 +58,7 @@ router.use(jobs)
 // Epic D1: 托管目标（内部 requireAuth + requireOrg + checkQuota）
 router.use(objects)
 router.use(overview)
+router.use(screens)
 
 // New catalog helpers (stats / paginated tles / cdms)
 router.use(catalog)

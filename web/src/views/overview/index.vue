@@ -46,7 +46,7 @@ const kpis = computed(() => {
       tone: s && s.cdm.next24h > 0 ? 'danger' : ''
     },
     { key: 'cdm7d', label: t('ov.stat.warn'), value: s ? String(s.cdm.next7d) : '—', unit: 'CDM', tone: '' },
-    { key: 'screen', label: t('ov.stat.screen'), value: '—', unit: t('ov.unit.soon'), tone: 'soon' },
+    { key: 'screen', label: t('ov.stat.screen'), value: s ? String(s.screensToday) : '—', unit: t('ov.unit.runs'), tone: '' },
     {
       key: 'ephem',
       label: t('ov.stat.ephem'),
@@ -228,7 +228,12 @@ const STATE_LABEL: Record<string, string> = {
                 <div class="miss">{{ fmtMiss(e.miss_distance_km) }}</div>
               </div>
             </div>
-            <div class="note">{{ t('ov.screenSoon') }}</div>
+            <div class="note">
+              {{ t('ov.screenSoon') }}
+              <button type="button" class="ghost note-btn" @click="router.push('/screens')">
+                {{ t('nav.screens') }} →
+              </button>
+            </div>
           </div>
         </section>
       </section>
@@ -331,6 +336,7 @@ const STATE_LABEL: Record<string, string> = {
   border-top: 1px dashed var(--border);
   margin-top: auto;
 }
+.note-btn { margin-left: 8px; }
 
 .seg {
   display: inline-flex;

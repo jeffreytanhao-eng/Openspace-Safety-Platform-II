@@ -12,6 +12,7 @@ const router = createRouter({
         { path: 'objects', name: 'objects', component: () => import('@/views/objects/index.vue'), meta: { title: 'Objects', requiresAuth: true } },
         { path: 'trajectories', name: 'trajectories', component: () => import('@/views/trajectories/index.vue'), meta: { title: 'Trajectories' } },
         { path: 'conjunctions', name: 'conjunctions', component: () => import('@/views/conjunctions/index.vue'), meta: { title: 'Conjunctions' } },
+        { path: 'screens', name: 'screens', component: () => import('@/views/screens/index.vue'), meta: { title: 'Screens', requiresAuth: true } },
         { path: 'conjunctions/:id', name: 'conjunction-detail', component: () => import('@/views/conjunctions/Detail.vue'), meta: { title: 'Conjunction Detail' } },
         { path: 'ephemerides', name: 'ephemerides', component: () => import('@/views/ephemerides/index.vue'), meta: { title: 'Ephemerides' } },
         { path: 'simulation', redirect: '/situation' },
