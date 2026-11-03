@@ -1,27 +1,144 @@
 <script setup lang="ts">
-import { useRouter } from 'vue-router'
+import { computed, ref } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
 import { useI18n } from '@/composables/useI18n'
+import { AuthError } from '@/api/auth'
+import { useAuthStore } from '@/stores/auth'
 
 const { t } = useI18n()
 const router = useRouter()
+const route = useRoute()
+const auth = useAuthStore()
+
+type Mode = 'login' | 'register'
+const mode = ref<Mode>('login')
+const busy = ref(false)
+const error = ref('')
+
+const email = ref('')
+const password = ref('')
+const orgName = ref('')
+const displayName = ref('')
+
+const redirectTarget = computed(() => {
+  const r = route.query.redirect
+  return typeof r === 'string' && r.startsWith('/') ? r : '/'
+})
+
+function switchMode(m: Mode) {
+  mode.value = m
+  error.value = ''
+}
+
+async function submit() {
+  if (busy.value) return
+  error.value = ''
+  busy.value = true
+  try {
+    if (mode.value === 'login') {
+      await auth.login(email.value.trim(), password.value)
+    } else {
+      await auth.register({
+        orgName: orgName.value.trim(),
+        email: email.value.trim(),
+        password: password.value,
+        displayName: displayName.value.trim() || undefined
+      })
+    }
+    router.push(redirectTarget.value)
+  } catch (e) {
+    error.value = e instanceof AuthError ? e.message : String((e as Error).message || e)
+  } finally {
+    busy.value = false
+  }
+}
 </script>
 
 <template>
   <div class="login">
     <div class="card">
-      <div class="badge">{{ t('login.badge') }}</div>
-      <h1>{{ t('login.title') }}</h1>
-      <p class="lead">
-        登录与操作方身份绑定（卫星 / 星座 / 星历归属）将在后续阶段接入。
-        Stage 1 不做真实或演示鉴权，也不设置 session 墙。
-      </p>
-      <ul>
-        <li>{{ t('login.li1') }}</li>
-        <li>{{ t('login.li2') }}</li>
-        <li>{{ t('login.li3') }}</li>
-      </ul>
-      <button type="button" class="btn" @click="router.push('/')">{{ t('login.enter') }}</button>
-      <div class="foot">{{ t('login.foot') }}</div>
+      <div class="badge">{{ t('auth.badge') }}</div>
+      <h1>{{ mode === 'login' ? t('auth.titleLogin') : t('auth.titleRegister') }}</h1>
+
+      <div class="tabs" role="tablist">
+        <button
+          type="button"
+          class="tab"
+          :class="{ on: mode === 'login' }"
+          role="tab"
+          :aria-selected="mode === 'login'"
+          @click="switchMode('login')"
+        >{{ t('auth.tabLogin') }}</button>
+        <button
+          type="button"
+          class="tab"
+          :class="{ on: mode === 'register' }"
+          role="tab"
+          :aria-selected="mode === 'register'"
+          @click="switchMode('register')"
+        >{{ t('auth.tabRegister') }}</button>
+      </div>
+
+      <form @submit.prevent="submit">
+        <label v-if="mode === 'register'" class="field">
+          <span>{{ t('auth.orgName') }}</span>
+          <input
+            v-model="orgName"
+            type="text"
+            name="organization"
+            autocomplete="organization"
+            required
+            maxlength="128"
+            :placeholder="t('auth.orgNamePh')"
+          />
+        </label>
+        <label class="field">
+          <span>{{ t('auth.email') }}</span>
+          <input
+            v-model="email"
+            type="email"
+            name="email"
+            autocomplete="email"
+            required
+            :placeholder="t('auth.emailPh')"
+          />
+        </label>
+        <label class="field">
+          <span>{{ t('auth.password') }}</span>
+          <input
+            v-model="password"
+            type="password"
+            name="password"
+            required
+            :minlength="mode === 'register' ? 8 : undefined"
+            :autocomplete="mode === 'login' ? 'current-password' : 'new-password'"
+            :placeholder="mode === 'register' ? t('auth.passwordHint') : ''"
+          />
+        </label>
+        <label v-if="mode === 'register'" class="field">
+          <span>{{ t('auth.displayName') }}</span>
+          <input
+            v-model="displayName"
+            type="text"
+            name="name"
+            autocomplete="name"
+            maxlength="64"
+            :placeholder="t('auth.displayNamePh')"
+          />
+        </label>
+
+        <div v-if="error" class="error">{{ error }}</div>
+
+        <button type="submit" class="btn" :disabled="busy">
+          {{ busy ? t('auth.submitting') : mode === 'login' ? t('auth.submitLogin') : t('auth.submitRegister') }}
+        </button>
+      </form>
+
+      <button type="button" class="switch" @click="switchMode(mode === 'login' ? 'register' : 'login')">
+        {{ mode === 'login' ? t('auth.toRegister') : t('auth.toLogin') }}
+      </button>
+
+      <div class="foot">{{ t('auth.foot') }}</div>
     </div>
   </div>
 </template>
@@ -52,9 +169,58 @@ const router = useRouter()
   padding: 3px 8px;
   margin-bottom: 12px;
 }
-h1 { margin: 0 0 10px; font-size: 22px; font-weight: 650; color: var(--text); }
-.lead { margin: 0 0 12px; color: var(--text-muted); line-height: 1.55; font-size: 13px; }
-ul { margin: 0 0 18px; padding-left: 18px; color: var(--text-muted); font-size: 12px; line-height: 1.7; }
+h1 { margin: 0 0 14px; font-size: 22px; font-weight: 650; color: var(--text); }
+
+.tabs {
+  display: inline-flex;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  overflow: hidden;
+  margin-bottom: 16px;
+}
+.tab {
+  appearance: none;
+  border: 0;
+  background: transparent;
+  color: var(--text-dim);
+  font-size: 12px;
+  font-weight: 600;
+  padding: 6px 14px;
+  cursor: pointer;
+}
+.tab + .tab { border-left: 1px solid var(--border); }
+.tab.on { color: var(--text); background: var(--accent-soft); }
+
+form { display: flex; flex-direction: column; gap: 12px; }
+.field { display: flex; flex-direction: column; gap: 5px; }
+.field span {
+  font-size: 11px;
+  color: var(--text-muted);
+  letter-spacing: 0.03em;
+}
+.field input {
+  appearance: none;
+  border: 1px solid var(--border);
+  background: var(--bg-deep);
+  color: var(--text);
+  border-radius: 6px;
+  padding: 9px 11px;
+  font-size: 13px;
+  outline: none;
+}
+.field input::placeholder { color: var(--text-dim); }
+.field input:focus { border-color: var(--accent); }
+
+.error {
+  font-size: 12px;
+  line-height: 1.5;
+  color: #f0846a;
+  background: rgba(240, 132, 106, 0.08);
+  border: 1px solid rgba(240, 132, 106, 0.35);
+  border-radius: 5px;
+  padding: 8px 10px;
+}
+
 .btn {
   width: 100%;
   appearance: none;
@@ -66,6 +232,21 @@ ul { margin: 0 0 18px; padding-left: 18px; color: var(--text-muted); font-size: 
   font-weight: 600;
   font-size: 13px;
   cursor: pointer;
+  margin-top: 4px;
 }
+.btn:disabled { opacity: 0.6; cursor: default; }
+
+.switch {
+  width: 100%;
+  appearance: none;
+  border: 0;
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 12px;
+  cursor: pointer;
+  margin-top: 12px;
+}
+.switch:hover { color: var(--text); }
+
 .foot { margin-top: 14px; text-align: center; font-size: 11px; color: var(--text-dim); }
 </style>

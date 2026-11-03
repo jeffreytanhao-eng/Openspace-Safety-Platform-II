@@ -1,13 +1,15 @@
-﻿<script setup lang="ts">
+<script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import logoUrl from '@/assets/logo/openspace-logo.png'
 import { useI18n } from '@/composables/useI18n'
 import type { MessageKey } from '@/i18n/messages'
+import { useAuthStore } from '@/stores/auth'
 
 const route = useRoute()
 const router = useRouter()
 const { t, locale, isZh, setLocale } = useI18n()
+const auth = useAuthStore()
 
 const bare = computed(() => route.meta.shell === 'bare')
 const showChrome = computed(() => !bare.value)
@@ -28,8 +30,7 @@ const navDefs: NavDef[] = [
   { key: 'ephemerides', labelKey: 'nav.ephemerides', hintKey: 'nav.ephemeridesHint', to: '/ephemerides' },
   { key: 'simulation', labelKey: 'nav.situation', hintKey: 'nav.situationHint', to: '/situation' },
   { key: 'ai', labelKey: 'nav.ai', hintKey: 'nav.aiHint', to: '/ai' },
-  { key: 'docs', labelKey: 'nav.docs', hintKey: 'nav.docsHint', to: '/docs' },
-  { key: 'login', labelKey: 'nav.login', hintKey: 'nav.loginHint', to: '/login', reserved: true }
+  { key: 'docs', labelKey: 'nav.docs', hintKey: 'nav.docsHint', to: '/docs' }
 ]
 
 const query = ref('')
@@ -53,9 +54,15 @@ const activeKey = computed(() => {
   const name = String(route.name || '')
   if (name === 'overview' || route.path === '/') return 'overview'
   if (name === 'situation') return 'simulation'
-  if (name === 'login') return 'login'
   return name || 'overview'
 })
+
+const planLabel = computed(() => (auth.org ? auth.org.plan.toUpperCase() : ''))
+
+function signOut() {
+  auth.logout()
+  router.push('/login')
+}
 
 const clockUtc = ref('')
 const clockBeijing = ref('')
@@ -79,6 +86,8 @@ function tick() {
 onMounted(() => {
   tick()
   clockTimer = window.setInterval(tick, 1000)
+  // 恢复登录会话（有 token 时拉取 /auth/me；失败自动清空）
+  void auth.init()
 })
 
 onUnmounted(() => {
@@ -97,6 +106,17 @@ onUnmounted(() => {
         </div>
       </div>
       <div class="top-right">
+        <template v-if="auth.user && auth.org">
+          <div class="account" :title="auth.user.email">
+            <span class="org-name">{{ auth.org.name }}</span>
+            <span class="plan-chip" :class="auth.org.plan">{{ planLabel }}</span>
+            <span class="user-name">{{ auth.user.displayName || auth.user.email }}</span>
+          </div>
+          <button type="button" class="auth-btn" @click="signOut">{{ t('auth.signOut') }}</button>
+        </template>
+        <button v-else type="button" class="auth-btn" @click="router.push('/login')">
+          {{ t('auth.signIn') }}
+        </button>
         <div class="lang" role="group" :aria-label="t('langToggle')">
           <button
             type="button"
@@ -215,6 +235,60 @@ onUnmounted(() => {
   border: 1px solid var(--border);
   border-radius: 4px;
   padding: 3px 8px;
+}
+
+.account {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  color: var(--text-muted);
+  min-width: 0;
+}
+.account .org-name {
+  color: var(--text);
+  font-weight: 600;
+  max-width: 180px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.account .user-name {
+  color: var(--text-dim);
+  max-width: 140px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.plan-chip {
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  border-radius: 3px;
+  padding: 2px 6px;
+  border: 1px solid var(--border);
+  color: var(--text-dim);
+  background: transparent;
+}
+.plan-chip.free { color: #9aa7b2; border-color: rgba(154, 167, 178, 0.4); }
+.plan-chip.normal { color: #6fb3d8; border-color: rgba(111, 179, 216, 0.45); }
+.plan-chip.vip { color: #e0b45c; border-color: rgba(224, 180, 92, 0.5); }
+
+.auth-btn {
+  appearance: none;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 11px;
+  font-weight: 600;
+  padding: 4px 10px;
+  cursor: pointer;
+  line-height: 1.4;
+}
+.auth-btn:hover {
+  color: var(--text);
+  background: var(--bg-hover);
 }
 
 .lang {
