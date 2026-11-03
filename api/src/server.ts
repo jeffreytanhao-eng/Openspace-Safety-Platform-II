@@ -3,6 +3,7 @@ import { config } from './config.js'
 import { pingDb } from './db/pool.js'
 import { ensureEphemSchema, countRowsDb } from './ephem/ephemDb.js'
 import { scanAndIngest, importFromIndexJson } from './ephem/ingest.js'
+import { ensureOrgSchema } from './db/orgDb.js'
 
 const app = createApp()
 
@@ -14,6 +15,8 @@ app.listen(config.port, '0.0.0.0', () => {
     if (!up) return
     // 星历元数据库：幂等建表 + 首次从 index.json 迁移 + 增量扫描（后台执行，不阻塞启动）
     if (!(await ensureEphemSchema())) return
+    // 组织/用户库表（Epic A）：幂等建表，失败只提示不阻塞启动
+    if (!(await ensureOrgSchema())) console.warn('[org] schema not ready (db down?)')
     void (async () => {
       try {
         if ((await countRowsDb()) === 0) {

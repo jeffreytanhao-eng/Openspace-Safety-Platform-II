@@ -1,4 +1,5 @@
 import 'dotenv/config'
+import crypto from 'node:crypto'
 
 function num(value: string | undefined, fallback: number): number {
   const n = Number(value)
@@ -16,5 +17,11 @@ export const config = {
     database: process.env.DB_NAME || 'openspace_safety'
   },
   /** /cgi/config 下发给前端的静态资源基址（COS / 对象存储；空串 = 本地） */
-  staticBase: process.env.STATIC_BASE || ''
+  staticBase: process.env.STATIC_BASE || '',
+  /** JWT 签名密钥（认证用）；未设置时用进程内随机密钥兜底（重启后登录态失效） */
+  jwtSecret: process.env.JWT_SECRET || crypto.randomBytes(32).toString('hex')
+}
+
+if (!process.env.JWT_SECRET) {
+  console.warn('[config] JWT_SECRET 未设置，已使用随机临时密钥（重启后所有登录态失效）')
 }

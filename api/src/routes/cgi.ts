@@ -1,4 +1,4 @@
-﻿import { Router } from 'express'
+import { Router } from 'express'
 import { config } from '../config.js'
 import { pingDb } from '../db/pool.js'
 import { ok } from '../utils/response.js'
@@ -6,6 +6,7 @@ import catalog from './catalog.js'
 import satTle from './satTle.js'
 import satConstellation from './satConstellation.js'
 import ephemerides from './ephemerides.js'
+import auth from './auth.js'
 
 const router = Router()
 
@@ -23,6 +24,9 @@ router.get('/health', async (_req, res) => {
 router.get('/config', (_req, res) => {
   res.json(ok({ staticBase: config.staticBase }))
 })
+
+// Epic A: 组织认证（register/login/me，公开挂载，受保护路由在内部用 requireAuth）
+router.use(auth)
 
 // New catalog helpers (stats / paginated tles / cdms)
 router.use(catalog)
