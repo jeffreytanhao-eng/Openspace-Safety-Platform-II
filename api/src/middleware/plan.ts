@@ -20,35 +20,49 @@ interface ScopedRequest extends Request {
   auth?: { user: SafeUser; org: SafeOrg | null }
 }
 
-/** 用量配额校验（挂载顺序：requireAuth → checkQuota） */
-export function checkQuota(feature: string) {
-  return async (req: ScopedRequest, res: Response, next: NextFunction): Promise<void> => {
-    const org = req.auth?.org
-    if (!org) {
-      res.status(403).json({ code: PLAN_FORBIDDEN, msg: '平台账号不占用组织配额', data: null })
-      return
-    }
-    if (!(await ensurePlanSchema())) {
-      res.status(503).json({ code: 503, msg: '数据库不可用', data: null })
-      return
-    }
-    const limits = await getEffectiveLimits(org.id, org.plan)
-    const limit = limits.find((l) => l.feature === feature)?.limit
-    if (limit === undefined) {
-      // 未登记的功能键：不拦（缺省放行），但日志留痕便于发现漏配
-      console.warn(`[plan] no limit configured for feature=${feature} org=${org.id}`)
-      next()
-      return
-    }
-    const usage = await getUsage(org.id, feature)
-    if (usage >= limit) {
-      const label = LABELS.get(feature) ?? feature
-      console.warn(`[plan] quota exceeded: org=${org.id} plan=${org.plan} feature=${feature} usage=${usage}/${limit}`)
-      res.status(403).json({
+/**
+ * 编程式配额校验（供业务路由在参数/冲突校验之后再查配额，避免 403 掩盖 409 冲突语义）。
+ * 返回 null = 放行；否则携带应答状态与响应体。
+ */
+export async function quotaExceeded(
+  feature: string,
+  org: { id: number; plan: 'free' | 'normal' | 'vip' } | null
+): Promise<{ status: number; body: { code: number; msg: string; data: unknown } } | null> {
+  if (!org) {
+    return { status: 403, body: { code: PLAN_FORBIDDEN, msg: '平台账号不占用组织配额', data: null } }
+  }
+  if (!(await ensurePlanSchema())) {
+    return { status: 503, body: { code: 503, msg: '数据库不可用', data: null } }
+  }
+  const limits = await getEffectiveLimits(org.id, org.plan)
+  const limit = limits.find((l) => l.feature === feature)?.limit
+  if (limit === undefined) {
+    // 未登记的功能键：不拦（缺省放行），但日志留痕便于发现漏配
+    console.warn(`[plan] no limit configured for feature=${feature} org=${org.id}`)
+    return null
+  }
+  const usage = await getUsage(org.id, feature)
+  if (usage >= limit) {
+    const label = LABELS.get(feature) ?? feature
+    console.warn(`[plan] quota exceeded: org=${org.id} plan=${org.plan} feature=${feature} usage=${usage}/${limit}`)
+    return {
+      status: 403,
+      body: {
         code: QUOTA_EXCEEDED,
         msg: `已达${label}上限（${usage}/${limit}），请升级档位`,
         data: { feature, usage, limit, plan: org.plan }
-      })
+      }
+    }
+  }
+  return null
+}
+
+/** 用量配额校验（挂载顺序：requireAuth → checkQuota） */
+export function checkQuota(feature: string) {
+  return async (req: ScopedRequest, res: Response, next: NextFunction): Promise<void> => {
+    const exceeded = await quotaExceeded(feature, req.auth?.org ?? null)
+    if (exceeded) {
+      res.status(exceeded.status).json(exceeded.body)
       return
     }
     next()

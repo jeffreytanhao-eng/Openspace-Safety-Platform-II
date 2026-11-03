@@ -87,7 +87,8 @@ export function ensureEphemSchema(): Promise<boolean> {
         // 已存在的表补列（CREATE TABLE IF NOT EXISTS 不会更新旧表结构）
         const upgradeCols: Array<[string, string, string | null]> = [
           ['published_at', 'bigint NOT NULL DEFAULT 0 AFTER `stop_ms`', 'ADD KEY `idx_eph_published` (`published_at`)'],
-          ['raw_size', 'bigint NOT NULL DEFAULT 0 AFTER `file_size`', null]
+          ['raw_size', 'bigint NOT NULL DEFAULT 0 AFTER `file_size`', null],
+          ['bound_object_id', 'bigint NULL AFTER `object_id`', 'ADD KEY `idx_eph_bound` (`bound_object_id`)']
         ]
         for (const [col, def, extraIdx] of upgradeCols) {
           const [cols] = await pool.query<RowDataPacket[]>(

@@ -57,7 +57,13 @@ interface ApiWrap<T> {
 }
 
 async function getJson<T>(url: string): Promise<T> {
-  const res = await fetch(url)
+  // 带 token 调用（/cgi/ephemerides 要求登录态；公开访问场景带 token 亦无副作用）
+  let headers: Record<string, string> = {}
+  try {
+    const t = localStorage.getItem('osp-token')
+    if (t) headers = { Authorization: `Bearer ${t}` }
+  } catch { /* ignore */ }
+  const res = await fetch(url, { headers })
   if (!res.ok) throw new Error(`HTTP ${res.status}`)
   const body = (await res.json()) as ApiWrap<T>
   if (body.code !== 0 || body.data == null) throw new Error(body.msg || 'api error')

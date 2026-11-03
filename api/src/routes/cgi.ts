@@ -10,6 +10,7 @@ import auth from './auth.js'
 import org from './org.js'
 import admin from './admin.js'
 import jobs from './jobs.js'
+import objects from './objects.js'
 import { getDailyFetchStatus } from '../db/fetchDb.js'
 import { isDailyFetchRunning } from '../jobs/dailyFetch.js'
 
@@ -51,6 +52,9 @@ router.use(admin)
 
 // Epic C1: 日更任务（POST 触发 / GET 状态，均 requireAuth + requireSuperAdmin）
 router.use(jobs)
+
+// Epic D1: 托管目标（内部 requireAuth + requireOrg + checkQuota）
+router.use(objects)
 
 // New catalog helpers (stats / paginated tles / cdms)
 router.use(catalog)
