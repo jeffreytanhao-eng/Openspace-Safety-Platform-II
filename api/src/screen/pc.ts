@@ -6,7 +6,7 @@
 import type { Vec3 } from './frames.js'
 import { cross, dot, norm3 } from './frames.js'
 
-interface Mat2 {
+export interface Mat2 {
   c11: number
   c12: number
   c22: number
@@ -32,7 +32,8 @@ const DANGER_PC = 1e-4
 
 let glCache: { x: number[]; w: number[] } | null = null
 
-function gaussLegendre64(): { x: number[]; w: number[] } {
+/** Gauss-Legendre 64 节点（[-1,1]），pcMethods 的 Alfano 一维积分复用 */
+export function gaussLegendre64(): { x: number[]; w: number[] } {
   if (glCache) return glCache
   const n = 64
   const x = new Array<number>(n)
@@ -103,17 +104,29 @@ const SCALE_MIN = 1e-3
 const SCALE_MAX = 1e2
 const SCALE_N = 48
 
-export function collisionProbability(input: PcInput): PcResult {
-  const zero: PcResult = { pc: 0, pcMax: 0, diluted: false }
-  const { missVec, relVelVec, covA, covB, hbrKm } = input
-  if (!(hbrKm > 0)) return zero
-  if (![...missVec, ...relVelVec].every((x) => Number.isFinite(x))) return zero
-  const vn = norm3(relVelVec)
-  if (!(vn > 1e-9)) return zero
+export interface EncounterPlane {
+  /** miss 向量在交会平面内的分量（km） */
+  mx: number
+  my: number
+  /** 联合协方差在交会平面内的 2x2 投影（km²） */
+  c2: Mat2
+  /** 相对速度模（km/s） */
+  relSpeed: number
+}
 
+/**
+ * 把 TCA 相对几何投影到交会平面（相对速度法向）：Foster/Chan/Alfano 共用的同源输入。
+ * 与 collisionProbability 内部投影逻辑一致（E3 多算法比对复用）。
+ */
+export function encounterPlane(input: PcInput): EncounterPlane | null {
+  const { missVec, relVelVec, covA, covB, hbrKm } = input
+  if (!(hbrKm > 0)) return null
+  if (![...missVec, ...relVelVec].every((x) => Number.isFinite(x))) return null
+  const vn = norm3(relVelVec)
+  if (!(vn > 1e-9)) return null
   const pa = positionBlock(covA)
   const pb = positionBlock(covB)
-  if (!pa || !pb) return zero
+  if (!pa || !pb) return null
 
   const n: Vec3 = [relVelVec[0] / vn, relVelVec[1] / vn, relVelVec[2] / vn]
   const md = dot(missVec, n)
@@ -124,7 +137,7 @@ export function collisionProbability(input: PcInput): PcResult {
     const d0 = dot(ref, n)
     xh = [ref[0] - d0 * n[0], ref[1] - d0 * n[1], ref[2] - d0 * n[2]]
     xn = norm3(xh)
-    if (!(xn > 1e-12)) return zero
+    if (!(xn > 1e-12)) return null
   }
   xh = [xh[0] / xn, xh[1] / xn, xh[2] / xn]
   const yh = cross(n, xh)
@@ -140,8 +153,25 @@ export function collisionProbability(input: PcInput): PcResult {
     u[2] * (c[6] * v[0] + c[7] * v[1] + c[8] * v[2])
   const c2: Mat2 = { c11: proj(xh, xh), c12: proj(xh, yh), c22: proj(yh, yh) }
 
-  const mx = dot(missVec, xh)
-  const my = dot(missVec, yh)
+  return { mx: dot(missVec, xh), my: dot(missVec, yh), c2, relSpeed: vn }
+}
+
+/** Foster 2D 盘积分（同源输入已投影到交会平面时直接调用） */
+export function foster2D(mx: number, my: number, c2: Mat2, hbrKm: number): number {
+  return diskGaussIntegral(mx, my, c2, hbrKm)
+}
+
+export function collisionProbability(input: PcInput): PcResult {
+  const zero: PcResult = { pc: 0, pcMax: 0, diluted: false }
+  const { missVec, relVelVec, covA, covB, hbrKm } = input
+  if (!(hbrKm > 0)) return zero
+  if (![...missVec, ...relVelVec].every((x) => Number.isFinite(x))) return zero
+  const vn = norm3(relVelVec)
+  if (!(vn > 1e-9)) return zero
+
+  const plane = encounterPlane(input)
+  if (!plane) return zero
+  const { mx, my, c2 } = plane
 
   const pc = pcWithScale(1, mx, my, c2, hbrKm)
   let pcMax = pc

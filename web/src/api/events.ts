@@ -93,3 +93,42 @@ export function importCdm(text: string): Promise<{ parsed: number; inserted: num
     headers: authHeaders()
   })
 }
+
+/* --------------------- Pc 多算法比对（E3） --------------------------- */
+
+export type PcMethod = 'official' | 'foster' | 'chan' | 'alfano'
+export type PcAgreement = 'green' | 'yellow' | 'red'
+
+export interface PcCompareRow {
+  method: PcMethod
+  pc: number | null
+  missKm: number | null
+  tca: string
+  hbrM: number
+  covSource: string
+  ms: number
+  disabled: boolean
+  note: string
+}
+
+export interface PcCompareResult {
+  rows: PcCompareRow[]
+  agreement: PcAgreement
+  plane: { missKm: number; inPlaneKm: number; relSpeedKms: number } | null
+  cov: { sigmaT: [number, number]; ageHours: [number, number] } | null
+}
+
+export interface PcCompareParams {
+  noradA: number
+  noradB: number
+  tcaMs: number
+  hbrM?: number
+  officialPc?: number
+  officialMissKm?: number
+  officialRelSpeedKms?: number
+}
+
+/** 多算法 Pc 比对：同源输入由服务端统一 TLE 传播，官方 Pc 仅作对照行 */
+export function pcCompare(p: PcCompareParams): Promise<PcCompareResult> {
+  return cgiCall({ method: 'POST', url: '/events/pc-compare', data: p })
+}

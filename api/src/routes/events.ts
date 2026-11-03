@@ -3,7 +3,9 @@
  *  - POST /cgi/events/import          客户上传 CDM（KVN/XML/JSON）解析入站，source='customer'；
  *  - GET  /cgi/events                 sat_cdm 按主/副星对 + 近 TCA 聚合成事件时间线（公开只读）；
  *  - GET  /cgi/events/:key            事件详情：成员 CDM 列表 + 双方 sat_tle 档案；
- *  - GET  /cgi/events/:key/cdm/:id/raw 单条 CDM 原文（raw_json）。
+ *  - GET  /cgi/events/:key/cdm/:id/raw 单条 CDM 原文（raw_json）；
+ *  - POST /cgi/events/pc-compare    多算法 Pc 比对（E3）：同源输入 = 双方 TLE 传播 +
+ *                                   龄期协方差，Foster/Chan/Alfano + 官方 CDM Pc 对照行。
  *
  * 聚合口径：默认窗口 tca ∈ [now-1d, now+3d]（window 参数可调），按无序对分组后
  * 相邻 TCA gap ≤ 3h 归并为同一事件（防 90min 轨道周期把多次交会误并）；
@@ -15,6 +17,12 @@ import { pool } from '../db/pool.js'
 import { ok, fail } from '../utils/response.js'
 import { requireAuth, type AuthContext } from './auth.js'
 import { parseCdmText } from '../services/cdmParse.js'
+import { buildSatrec, propagateJ2000 } from '../screen/coarse.js'
+import { tleCovariance } from '../screen/covariance.js'
+import { encounterPlane, foster2D } from '../screen/pc.js'
+import { alfano1D, chan2D } from '../screen/pcMethods.js'
+import { norm3 } from '../screen/frames.js'
+import type { CatalogObject, Vec3 } from '../screen/types.js'
 
 const router = Router()
 
@@ -433,6 +441,148 @@ router.get('/events/:key/cdm/:cdmId/raw', async (req, res) => {
     cdm_id: rows[0].cdm_id,
     raw: typeof raw === 'string' ? raw : JSON.stringify(raw, null, 2)
   }))
+})
+
+/* --------------------- Pc 多算法比对（E3） --------------------------- */
+
+interface PcCompareRow {
+  method: 'official' | 'foster' | 'chan' | 'alfano'
+  pc: number | null
+  missKm: number | null
+  tca: string
+  hbrM: number
+  covSource: string
+  ms: number
+  disabled: boolean
+  note: string
+}
+
+/** 多算法 Pc 比对：统一走服务端 TLE 传播（同源输入）——
+ * 双方 sat_tle → SGP4 到 TCA → miss/relVel → 根数龄期协方差 → 交会平面投影，
+ * Foster（数值基准）/ Chan（级数）/ Alfano（Bessel 一维积分）各计时一次；
+ * 官方 CDM Pc / miss / relSpeed 仅作对照行（不参与计算）。
+ * 方法行禁用语义：缺 TLE 档案 / SGP4 失败 / 几何退化 → disabled + 原因，绝不静默给数。 */
+router.post('/events/pc-compare', async (req, res) => {
+  const body = (req.body ?? {}) as {
+    noradA?: unknown
+    noradB?: unknown
+    tcaMs?: unknown
+    hbrM?: unknown
+    officialPc?: unknown
+    officialMissKm?: unknown
+    officialRelSpeedKms?: unknown
+  }
+  const noradA = Number(body.noradA)
+  const noradB = Number(body.noradB)
+  const tcaMs = Number(body.tcaMs)
+  if (!Number.isInteger(noradA) || !Number.isInteger(noradB) || !Number.isFinite(tcaMs) || noradA === noradB) {
+    res.status(400).json(fail(400, '参数无效（noradA / noradB / tcaMs）'))
+    return
+  }
+  const hbrM = Number.isFinite(Number(body.hbrM)) && Number(body.hbrM) > 0 ? Number(body.hbrM) : 15
+  const hbrKm = hbrM / 1000
+  const tcaIso = new Date(tcaMs).toISOString()
+  const num = (v: unknown): number | null => (Number.isFinite(Number(v)) ? Number(v) : null)
+
+  const rows: PcCompareRow[] = [
+    {
+      method: 'official',
+      pc: num(body.officialPc),
+      missKm: num(body.officialMissKm),
+      tca: tcaIso,
+      hbrM,
+      covSource: 'cdm',
+      ms: 0,
+      disabled: num(body.officialPc) === null,
+      note: num(body.officialPc) === null ? 'CDM 未提供官方 Pc' : ''
+    }
+  ]
+
+  interface TlePick extends RowDataPacket {
+    norad_id: number
+    object_name: string
+    tle_line1: string
+    tle_line2: string
+    epoch: Date | string | null
+  }
+  const [tleRows] = await pool.query<TlePick[]>(
+    `SELECT norad_id, object_name, tle_line1, tle_line2, epoch FROM sat_tle WHERE norad_id IN (?, ?)`,
+    [noradA, noradB]
+  )
+  const ta = tleRows.find((t) => Number(t.norad_id) === noradA) ?? null
+  const tb = tleRows.find((t) => Number(t.norad_id) === noradB) ?? null
+
+  const recOf = (t: TlePick | null) =>
+    t ? buildSatrec({ line1: t.tle_line1, line2: t.tle_line2 } as unknown as CatalogObject) : null
+  const recA = recOf(ta)
+  const recB = recOf(tb)
+  const pA = recA ? propagateJ2000(recA, tcaMs) : null
+  const pB = recB ? propagateJ2000(recB, tcaMs) : null
+
+  let plane: ReturnType<typeof encounterPlane> = null
+  let cov: { sigmaT: [number, number]; ageHours: [number, number] } | null = null
+  let planeResp: { missKm: number; inPlaneKm: number; relSpeedKms: number } | null = null
+  let disableNote = ''
+  if (!ta || !tb) {
+    disableNote = '缺一方 TLE 档案，无法同源传播'
+  } else if (!pA || !pB) {
+    disableNote = 'SGP4 传播失败（TLE 可能过期或根数异常）'
+  } else {
+    const covA = tleCovariance(pA.r, pA.v, new Date(ta.epoch ?? 0).getTime(), tcaMs)
+    const covB = tleCovariance(pB.r, pB.v, new Date(tb.epoch ?? 0).getTime(), tcaMs)
+    const missVec: Vec3 = [pB.r[0] - pA.r[0], pB.r[1] - pA.r[1], pB.r[2] - pA.r[2]]
+    const relVelVec: Vec3 = [pB.v[0] - pA.v[0], pB.v[1] - pA.v[1], pB.v[2] - pA.v[2]]
+    plane = encounterPlane({ missVec, relVelVec, covA: covA.cov, covB: covB.cov, hbrKm })
+    if (!plane) {
+      disableNote = '交会几何退化（协方差非正定或相对速度过小）'
+    } else {
+      cov = { sigmaT: [covA.sigmaT, covB.sigmaT], ageHours: [covA.ageHours, covB.ageHours] }
+      planeResp = { missKm: norm3(missVec), inPlaneKm: Math.hypot(plane.mx, plane.my), relSpeedKms: plane.relSpeed }
+
+      const timed = (fn: () => number): { pc: number; ms: number } => {
+        const t0 = process.hrtime.bigint()
+        const pc = fn()
+        return { pc, ms: Number(process.hrtime.bigint() - t0) / 1e6 }
+      }
+      const missInPlane = Math.hypot(plane.mx, plane.my)
+      const results = [
+        ['foster', timed(() => foster2D(plane!.mx, plane!.my, plane!.c2, hbrKm))],
+        ['chan', timed(() => chan2D(plane!.mx, plane!.my, plane!.c2, hbrKm))],
+        ['alfano', timed(() => alfano1D(plane!.mx, plane!.my, plane!.c2, hbrKm))]
+      ] as const
+      for (const [method, r] of results) {
+        rows.push({
+          method,
+          pc: r.pc,
+          missKm: missInPlane,
+          tca: tcaIso,
+          hbrM,
+          covSource: 'tle-age',
+          ms: Math.round(r.ms * 100) / 100,
+          disabled: false,
+          note: ''
+        })
+      }
+    }
+  }
+  if (disableNote) {
+    for (const method of ['foster', 'chan', 'alfano'] as const) {
+      rows.push({ method, pc: null, missKm: null, tca: tcaIso, hbrM, covSource: '—', ms: 0, disabled: true, note: disableNote })
+    }
+  }
+
+  // 一致性灯：取可比 Pc（三方法 + 官方若有）的 max/min 比 —— ≤10 绿 / ≤100 黄 / 其余红；
+  // 任一方法行禁用或可比值不足 2 个 → 红（无法评估一致性，如实降级）
+  const methodRows = rows.filter((r) => r.method !== 'official')
+  const pcs = methodRows.filter((r) => !r.disabled && r.pc !== null).map((r) => r.pc as number)
+  if (rows[0].pc !== null) pcs.push(rows[0].pc)
+  let agreement: 'green' | 'yellow' | 'red' = 'red'
+  if (!methodRows.some((r) => r.disabled) && pcs.length >= 2) {
+    const ratio = Math.min(...pcs) > 0 ? Math.max(...pcs) / Math.min(...pcs) : Infinity
+    agreement = ratio <= 10 ? 'green' : ratio <= 100 ? 'yellow' : 'red'
+  }
+
+  res.json(ok({ rows, agreement, plane: planeResp, cov }))
 })
 
 export default router
