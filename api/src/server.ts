@@ -1,9 +1,10 @@
 import { createApp } from './app.js'
+import bcrypt from 'bcryptjs'
 import { config } from './config.js'
 import { pingDb } from './db/pool.js'
 import { ensureEphemSchema, countRowsDb } from './ephem/ephemDb.js'
 import { scanAndIngest, importFromIndexJson } from './ephem/ingest.js'
-import { ensureOrgSchema } from './db/orgDb.js'
+import { ensureOrgSchema, ensurePlatformAdmin } from './db/orgDb.js'
 
 const app = createApp()
 
@@ -17,6 +18,20 @@ app.listen(config.port, '0.0.0.0', () => {
     if (!(await ensureEphemSchema())) return
     // 组织/用户库表（Epic A）：幂等建表，失败只提示不阻塞启动
     if (!(await ensureOrgSchema())) console.warn('[org] schema not ready (db down?)')
+    // 平台超管 bootstrap（Epic B1）：凭据来自 .env，首次启动创建
+    try {
+      if (config.platformAdmin.password) {
+        const created = await ensurePlatformAdmin(
+          config.platformAdmin.email,
+          await bcrypt.hash(config.platformAdmin.password, 10)
+        )
+        if (created) console.log(`[admin] platform admin created: ${config.platformAdmin.email}`)
+      } else {
+        console.warn('[admin] PLATFORM_ADMIN_PASSWORD 未设置，跳过平台超管 bootstrap')
+      }
+    } catch (e) {
+      console.error('[admin] platform admin bootstrap failed:', (e as Error).message)
+    }
     void (async () => {
       try {
         if ((await countRowsDb()) === 0) {

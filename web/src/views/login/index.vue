@@ -45,7 +45,14 @@ async function submit() {
         displayName: displayName.value.trim() || undefined
       })
     }
-    router.push(redirectTarget.value)
+    // redirect 优先；平台侧账号进 /admin；其余回总览
+    if (redirectTarget.value !== '/') {
+      router.push(redirectTarget.value)
+    } else if (auth.user && auth.user.role.startsWith('platform_')) {
+      router.push('/admin')
+    } else {
+      router.push('/')
+    }
   } catch (e) {
     error.value = e instanceof AuthError ? e.message : String((e as Error).message || e)
   } finally {

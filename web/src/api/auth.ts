@@ -42,7 +42,8 @@ export class AuthError extends Error {
   }
 }
 
-async function cgiCall<T>(cfg: Parameters<typeof httpCgi<T>>[0]): Promise<T> {
+/** 统一调用：HTTP 4xx/5xx 转带业务码的 AuthError（管理接口复用） */
+export async function cgiCall<T>(cfg: Parameters<typeof httpCgi<T>>[0]): Promise<T> {
   try {
     return await httpCgi<T>(cfg)
   } catch (e) {

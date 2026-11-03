@@ -106,12 +106,21 @@ onUnmounted(() => {
         </div>
       </div>
       <div class="top-right">
-        <template v-if="auth.user && auth.org">
-          <div class="account" :title="auth.user.email">
+        <template v-if="auth.user">
+          <div v-if="auth.org" class="account" :title="auth.user.email">
             <span class="org-name">{{ auth.org.name }}</span>
             <span class="plan-chip" :class="auth.org.plan">{{ planLabel }}</span>
             <span class="user-name">{{ auth.user.displayName || auth.user.email }}</span>
           </div>
+          <span v-else class="account" :title="auth.user.email">
+            <span class="user-name">{{ auth.user.displayName || auth.user.email }}</span>
+          </span>
+          <button
+            v-if="auth.user.role.startsWith('platform_')"
+            type="button"
+            class="auth-btn"
+            @click="router.push('/admin')"
+          >{{ t('auth.adminConsole') }}</button>
           <button type="button" class="auth-btn" @click="signOut">{{ t('auth.signOut') }}</button>
         </template>
         <button v-else type="button" class="auth-btn" @click="router.push('/login')">

@@ -8,6 +8,7 @@ import satConstellation from './satConstellation.js'
 import ephemerides from './ephemerides.js'
 import auth from './auth.js'
 import org from './org.js'
+import admin from './admin.js'
 
 const router = Router()
 
@@ -31,6 +32,9 @@ router.use(auth)
 
 // Epic A: 组织资料与配额（内部全部 requireAuth）
 router.use(org)
+
+// Epic B: 超管（内部 requireAuth + requireSuperAdmin）
+router.use(admin)
 
 // New catalog helpers (stats / paginated tles / cdms)
 router.use(catalog)

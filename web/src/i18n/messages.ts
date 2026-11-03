@@ -50,6 +50,7 @@ export const messages = {
     "auth.toLogin": '已有账号？直接登录',
     "auth.signIn": '登录',
     "auth.signOut": '退出',
+    "auth.adminConsole": '平台管理',
     "auth.foot": '开源太空安全平台 · Openspace Safety',
 
     "ov.ownedTitle": '托管资产',
@@ -289,6 +290,7 @@ export const messages = {
     "auth.toLogin": 'Already registered? Sign in',
     "auth.signIn": 'Sign in',
     "auth.signOut": 'Sign out',
+    "auth.adminConsole": 'Admin',
     "auth.foot": 'Openspace Safety',
 
     "ov.ownedTitle": 'Owned Assets',

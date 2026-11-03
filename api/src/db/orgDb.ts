@@ -112,19 +112,30 @@ export async function findOrgById(id: number): Promise<OrgRow | null> {
   return (rows[0] as OrgRow) || null
 }
 
-/** 注册：建组织 + 首个组织管理员（事务，保证两者同生） */
+/** 平台超管 bootstrap：不存在该邮箱的账号时创建 platform_super_admin；已存在返回 false */
+export async function ensurePlatformAdmin(email: string, passwordHash: string): Promise<boolean> {
+  if (await findUserByEmail(email)) return false
+  await pool.query(
+    'INSERT INTO users (org_id, email, display_name, role, password_hash) VALUES (NULL, ?, ?, ?, ?)',
+    [email, '平台超管', 'platform_super_admin', passwordHash]
+  )
+  return true
+}
+
+/** 注册/开通：建组织 + 首个组织管理员（事务，保证两者同生） */
 export async function createOrgWithAdmin(params: {
   orgName: string
   email: string
   passwordHash: string
   displayName: string
+  plan?: 'free' | 'normal' | 'vip'
 }): Promise<{ org: OrgRow; user: UserRow }> {
   const conn = await pool.getConnection()
   try {
     await conn.beginTransaction()
     const [orgRes] = await conn.query<import('mysql2').ResultSetHeader>(
       'INSERT INTO organizations (name, plan) VALUES (?, ?)',
-      [params.orgName, 'free']
+      [params.orgName, params.plan ?? 'free']
     )
     const orgId = orgRes.insertId
     const [userRes] = await conn.query<import('mysql2').ResultSetHeader>(

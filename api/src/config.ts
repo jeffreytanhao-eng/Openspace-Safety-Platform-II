@@ -19,7 +19,12 @@ export const config = {
   /** /cgi/config 下发给前端的静态资源基址（COS / 对象存储；空串 = 本地） */
   staticBase: process.env.STATIC_BASE || '',
   /** JWT 签名密钥（认证用）；未设置时用进程内随机密钥兜底（重启后登录态失效） */
-  jwtSecret: process.env.JWT_SECRET || crypto.randomBytes(32).toString('hex')
+  jwtSecret: process.env.JWT_SECRET || crypto.randomBytes(32).toString('hex'),
+  /** 平台超管 bootstrap（B1）：首次启动且密码非空时创建 platform_super_admin */
+  platformAdmin: {
+    email: process.env.PLATFORM_ADMIN_EMAIL || 'admin@openspace.local',
+    password: process.env.PLATFORM_ADMIN_PASSWORD || ''
+  }
 }
 
 if (!process.env.JWT_SECRET) {

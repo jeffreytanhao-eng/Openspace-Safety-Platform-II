@@ -1,0 +1,189 @@
+/* 管理端共享样式（Orgs / OrgDetail / Audit 共用，scoped 引入） */
+.page {
+  max-width: 1080px;
+}
+.head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 14px;
+}
+h1 {
+  margin: 0 0 4px;
+  font-size: 18px;
+  font-weight: 650;
+  color: var(--text);
+}
+.sub {
+  margin: 0;
+  font-size: 12px;
+  color: var(--text-muted);
+}
+h2 {
+  margin: 0 0 12px;
+  font-size: 14px;
+  font-weight: 650;
+  color: var(--text);
+}
+.card {
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 16px;
+  margin-bottom: 14px;
+}
+.wizard {
+  border-color: rgba(74, 125, 154, 0.4);
+}
+.grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 12px;
+  margin-bottom: 12px;
+}
+label {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+label span {
+  font-size: 11px;
+  color: var(--text-muted);
+}
+input,
+select,
+textarea {
+  appearance: none;
+  border: 1px solid var(--border);
+  background: var(--bg-deep);
+  color: var(--text);
+  border-radius: 6px;
+  padding: 8px 10px;
+  font-size: 13px;
+  outline: none;
+  width: 100%;
+  box-sizing: border-box;
+}
+input::placeholder,
+textarea::placeholder {
+  color: var(--text-dim);
+}
+input:focus,
+select:focus,
+textarea:focus {
+  border-color: var(--accent);
+}
+.actions {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+.btn {
+  appearance: none;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 12px;
+  font-weight: 600;
+  padding: 7px 12px;
+  cursor: pointer;
+}
+.btn:hover {
+  color: var(--text);
+  background: var(--bg-hover);
+}
+.btn.primary {
+  border-color: rgba(74, 125, 154, 0.5);
+  background: var(--accent-soft);
+  color: var(--text);
+}
+.btn.primary:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+.btn.danger {
+  border-color: rgba(240, 132, 106, 0.45);
+  color: #f0846a;
+}
+.btn.small {
+  padding: 4px 8px;
+  font-size: 11px;
+}
+.error {
+  font-size: 12px;
+  line-height: 1.5;
+  color: #f0846a;
+  background: rgba(240, 132, 106, 0.08);
+  border: 1px solid rgba(240, 132, 106, 0.35);
+  border-radius: 5px;
+  padding: 8px 10px;
+  margin-bottom: 12px;
+}
+.ok-msg {
+  font-size: 12px;
+  color: #7ac78b;
+  margin-bottom: 12px;
+}
+.tbl {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+}
+.tbl th {
+  text-align: left;
+  color: var(--text-dim);
+  font-weight: 600;
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--border);
+  white-space: nowrap;
+}
+.tbl td {
+  padding: 9px 10px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.04);
+  color: var(--text-muted);
+  vertical-align: top;
+}
+.tbl tr:hover td {
+  background: rgba(255, 255, 255, 0.02);
+}
+.tbl .empty {
+  text-align: center;
+  color: var(--text-dim);
+  padding: 24px 0;
+}
+.mono {
+  font-family: var(--mono);
+  font-variant-numeric: tabular-nums;
+}
+.chip {
+  display: inline-block;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  padding: 2px 6px;
+  color: var(--text-dim);
+  white-space: nowrap;
+}
+.chip.plan.free { color: #9aa7b2; border-color: rgba(154, 167, 178, 0.4); }
+.chip.plan.normal { color: #6fb3d8; border-color: rgba(111, 179, 216, 0.45); }
+.chip.plan.vip { color: #e0b45c; border-color: rgba(224, 180, 92, 0.5); }
+.chip.ok { color: #7ac78b; border-color: rgba(122, 199, 139, 0.4); }
+.chip.warn { color: #e0b45c; border-color: rgba(224, 180, 92, 0.5); }
+.chip.bad { color: #f0846a; border-color: rgba(240, 132, 106, 0.45); }
+.kv {
+  display: grid;
+  grid-template-columns: 120px 1fr;
+  gap: 8px 14px;
+  font-size: 12px;
+  margin-bottom: 4px;
+}
+.kv .k {
+  color: var(--text-dim);
+}
+.kv .v {
+  color: var(--text-muted);
+}
