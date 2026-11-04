@@ -115,7 +115,16 @@ CREATE TABLE IF NOT EXISTS \`org_quota_overrides\` (
   \`limit_value\` bigint NOT NULL,
   PRIMARY KEY (\`org_id\`, \`feature_key\`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
-  COMMENT='组织级限额覆盖（effective = override ?? plan default）'`
+  COMMENT='组织级限额覆盖（effective = override ?? plan default）';
+
+CREATE TABLE IF NOT EXISTS \`org_feature_flags\` (
+  \`org_id\`   bigint unsigned NOT NULL,
+  \`flag_key\` varchar(64) NOT NULL,
+  \`enabled\`  tinyint NOT NULL DEFAULT 1,
+  \`updated_at\` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (\`org_id\`, \`flag_key\`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+  COMMENT='组织级功能开关覆盖（enabled = override ?? catalog default）'`
 
 let schemaReady: Promise<boolean> | null = null
 
@@ -234,6 +243,16 @@ const usageComputers: Record<string, (orgId: number) => Promise<number>> = {
       [orgId]
     )
     return Number((rows[0] as { n: number }).n)
+  },
+  // Epic I 计量全量：当日星历上传次数（版本账本 source=upload，created_at 为 ISO 字符串，按日期前缀比较）
+  ephem_upload_day: async (orgId) => {
+    const [rows] = await pool.query<RowDataPacket[]>(
+      `SELECT COUNT(*) AS n FROM ephemeris_versions v
+        JOIN users u ON u.email = v.uploaded_by
+       WHERE u.org_id = ? AND v.source = 'upload' AND v.created_at >= DATE_FORMAT(NOW(), '%Y-%m-%d')`,
+      [orgId]
+    )
+    return Number((rows[0] as { n: number }).n)
   }
 }
 
@@ -246,4 +265,162 @@ export async function getUsage(orgId: number, feature: string): Promise<number> 
   } catch {
     return 0
   }
+}
+
+/* ==================== Epic I：功能开关与超管 override 管理 ==================== */
+
+/** 功能开关目录（enabled 默认值即未覆盖时的生效值；均须有真实执行点，不做无行为开关） */
+export interface FeatureFlagMeta {
+  key: string
+  label: string
+  description: string
+  defaultValue: boolean
+}
+
+export const FLAG_CATALOG: FeatureFlagMeta[] = [
+  {
+    key: 'daily_report_enabled',
+    label: '日报生成',
+    description: '关闭后该组织不再生成每日分级快照日报（cron 与手动出报均被冻结）',
+    defaultValue: true
+  },
+  {
+    key: 'webhook_enabled',
+    label: 'Webhook 投递',
+    description: '关闭后该组织的 Webhook 渠道不再投递（日报/分级变化/测试均跳过并留审计）',
+    defaultValue: true
+  },
+  {
+    key: 'accuracy_compare_enabled',
+    label: '精度对比（G2）',
+    description: '关闭后该组织无法使用 OCM/TLE/AOE 三源 RTN 精度对比',
+    defaultValue: true
+  }
+]
+
+export interface QuotaRow {
+  feature: string
+  label: string
+  unit: FeatureMeta['unit']
+  /** 档位默认 */
+  default: number
+  /** 组织覆盖值（null = 未覆盖） */
+  override: number | null
+  /** 生效值 = override ?? default */
+  effective: number
+  overridden: boolean
+  /** 当前用量（无计算器 = 0） */
+  usage: number
+}
+
+/** 组织配额全量行（超管 UI 数据源：默认 / 覆盖 / 生效 / 用量） */
+export async function getOrgQuotaRows(orgId: number, plan: string): Promise<QuotaRow[]> {
+  await ensurePlanSchema()
+  const [defaults] = await pool.query<RowDataPacket[]>(
+    'SELECT feature_key, limit_value FROM plan_defaults WHERE plan = ?',
+    [plan]
+  )
+  const [overrideRows] = await pool.query<RowDataPacket[]>(
+    'SELECT feature_key, limit_value FROM org_quota_overrides WHERE org_id = ?',
+    [orgId]
+  )
+  const dMap = new Map(defaults.map((r) => [r.feature_key, Number(r.limit_value)]))
+  const oMap = new Map(overrideRows.map((r) => [r.feature_key, Number(r.limit_value)]))
+  const out: QuotaRow[] = []
+  for (const meta of FEATURE_KEYS) {
+    const def = dMap.get(meta.key)
+    const override = oMap.has(meta.key) ? oMap.get(meta.key)! : null
+    if (def === undefined && override === null) continue // 档位无默认行且无覆盖 → 跳过
+    const usage = await getUsage(orgId, meta.key)
+    out.push({
+      feature: meta.key,
+      label: meta.label,
+      unit: meta.unit,
+      default: def ?? 0,
+      override,
+      effective: override ?? def ?? 0,
+      overridden: override !== null,
+      usage
+    })
+  }
+  return out
+}
+
+export interface FlagRow {
+  key: string
+  label: string
+  description: string
+  /** 目录默认值 */
+  default: boolean
+  /** 组织覆盖值（null = 未覆盖） */
+  override: boolean | null
+  /** 生效值 = override ?? default */
+  enabled: boolean
+  overridden: boolean
+}
+
+/** 组织功能开关全量行（超管 UI 数据源） */
+export async function getOrgFlagRows(orgId: number): Promise<FlagRow[]> {
+  const [rows] = await pool.query<RowDataPacket[]>(
+    'SELECT flag_key, enabled FROM org_feature_flags WHERE org_id = ?',
+    [orgId]
+  )
+  const oMap = new Map(rows.map((r) => [r.flag_key, Number(r.enabled) !== 0]))
+  return FLAG_CATALOG.map((m) => {
+    const override = oMap.has(m.key) ? oMap.get(m.key)! : null
+    return {
+      key: m.key,
+      label: m.label,
+      description: m.description,
+      default: m.defaultValue,
+      override,
+      enabled: override ?? m.defaultValue,
+      overridden: override !== null
+    }
+  })
+}
+
+/** 业务路由用：组织某开关生效值（无组织/未知键 → true 放行） */
+export async function isOrgFlagEnabled(orgId: number | null, key: string): Promise<boolean> {
+  if (!orgId) return true
+  const meta = FLAG_CATALOG.find((f) => f.key === key)
+  if (!meta) return true
+  try {
+    const [rows] = await pool.query<RowDataPacket[]>(
+      'SELECT enabled FROM org_feature_flags WHERE org_id = ? AND flag_key = ? LIMIT 1',
+      [orgId, key]
+    )
+    if (rows.length) return Number(rows[0].enabled) !== 0
+  } catch (e) {
+    console.error('[plan] flag lookup failed:', (e as Error).message)
+  }
+  return meta.defaultValue
+}
+
+/** 设置数字 override（超管；upsert 幂等） */
+export async function setOrgQuotaOverride(orgId: number, feature: string, limit: number): Promise<void> {
+  await pool.query(
+    `INSERT INTO org_quota_overrides (org_id, feature_key, limit_value) VALUES (?, ?, ?)
+     ON DUPLICATE KEY UPDATE limit_value = VALUES(limit_value)`,
+    [orgId, feature, limit]
+  )
+}
+
+/** 清除数字 override（恢复档位默认） */
+export async function clearOrgQuotaOverride(orgId: number, feature: string): Promise<void> {
+  await pool.query('DELETE FROM org_quota_overrides WHERE org_id = ? AND feature_key = ?', [orgId, feature])
+}
+
+/** 设置开关 override（超管；upsert 幂等） */
+export async function setOrgFlagOverride(orgId: number, flagKey: string, enabled: boolean): Promise<void> {
+  await pool.query(
+    `INSERT INTO org_feature_flags (org_id, flag_key, enabled) VALUES (?, ?, ?)
+     ON DUPLICATE KEY UPDATE enabled = VALUES(enabled)`,
+    [orgId, flagKey, enabled ? 1 : 0]
+  )
+}
+
+/** 清除开关 override（恢复目录默认） */
+export async function clearOrgFlagOverride(orgId: number, flagKey: string): Promise<void> {
+  await pool.query('DELETE FROM org_feature_flags WHERE org_id = ? AND flag_key = ?', [orgId, flagKey])
 }

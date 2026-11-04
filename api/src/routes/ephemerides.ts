@@ -19,6 +19,9 @@ import {
 import { EPH_ROOT, scanAndIngest, ingestUploadFile } from '../ephem/ingest.js'
 import { compareSources, listAccuracySources } from '../services/accuracyCompare.js'
 import { requireAuth } from './auth.js'
+import { isOrgFlagEnabled } from '../db/planDb.js'
+import { quotaExceeded } from '../middleware/plan.js'
+import { findOrgById } from '../db/orgDb.js'
 
 const router = Router()
 
@@ -32,6 +35,20 @@ function tryAuthName(req: Request): string {
     return payload.email || 'anonymous'
   } catch {
     return 'anonymous'
+  }
+}
+
+/** 可选身份：有效 token 时返回 orgId（配额计量用），否则 null */
+function tryAuthOrgId(req: Request): number | null {
+  const header = req.headers.authorization || ''
+  const token = header.startsWith('Bearer ') ? header.slice(7) : ''
+  if (!token) return null
+  try {
+    const payload = jwt.verify(token, config.jwtSecret) as { orgId?: number | null }
+    const orgId = Number(payload.orgId)
+    return Number.isFinite(orgId) && orgId > 0 ? orgId : null
+  } catch {
+    return null
   }
 }
 
@@ -235,6 +252,18 @@ router.post(
       res.status(400).json(fail(400, '缺少文件名或文件内容'))
       return
     }
+    // Epic I 计量全量：登录组织受 ephem_upload_day 生效限额约束（匿名上传不计量，保持历史行为）
+    const authOrgId = tryAuthOrgId(req)
+    if (authOrgId !== null) {
+      const org = await findOrgById(authOrgId)
+      if (org) {
+        const exceeded = await quotaExceeded('ephem_upload_day', org)
+        if (exceeded) {
+          res.status(exceeded.status).json(exceeded.body)
+          return
+        }
+      }
+    }
     try {
       const r = await ingestUploadFile(name, buf, tryAuthName(req))
       res.json(ok(r))
@@ -363,6 +392,12 @@ router.get('/ephemerides/accuracy/sources', requireAuth, async (req: Request, re
  * 重叠时段 RTN 残差：radial/along/cross RMS + 总 RMS + 最大/平均偏差 + 抽稀残差点列。
  */
 router.post('/ephemerides/accuracy/compare', requireAuth, async (req: Request, res: Response) => {
+  // Epic I 功能开关：accuracy_compare_enabled 关闭的组织拒绝使用精度对比
+  const authOrg = (req as import('express').Request & { auth?: { org?: { id: number } | null } }).auth?.org
+  if (!(await isOrgFlagEnabled(authOrg?.id ?? null, 'accuracy_compare_enabled'))) {
+    res.status(403).json(fail(403, '该功能未对您的组织开放（精度对比）'))
+    return
+  }
   if (!(await ephemDbUp())) {
     res.status(503).json(fail(503, '数据库不可用：精度对比需要 MySQL'))
     return

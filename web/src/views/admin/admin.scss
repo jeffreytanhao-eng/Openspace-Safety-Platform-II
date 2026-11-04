@@ -187,3 +187,38 @@ textarea:focus {
 .kv .v {
   color: var(--text-muted);
 }
+
+/* Epic I：配额与功能开关面板 */
+.hint {
+  font-size: 11px;
+  color: var(--text-dim);
+}
+.dim {
+  color: var(--text-dim);
+}
+.quota-edit {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  min-width: 260px;
+}
+.quota-edit input {
+  width: 150px;
+  padding: 6px 8px;
+  font-size: 12px;
+}
+.tbl .over-row td {
+  background: rgba(224, 180, 92, 0.05);
+}
+.tbl td .over {
+  color: #f0846a;
+  font-weight: 700;
+}
+.on-btn {
+  color: #7ac78b;
+  border-color: rgba(122, 199, 139, 0.4);
+}
+.off-btn {
+  color: #f0846a;
+  border-color: rgba(240, 132, 106, 0.45);
+}

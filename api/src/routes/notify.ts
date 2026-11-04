@@ -36,6 +36,7 @@ import {
 import { deliverWebhook, deliverEmail, maskWebhookUrl, channelSecret, smtpConfigured } from '../services/notify.js'
 import { encryptSecret } from '../utils/secretBox.js'
 import { runDailyReportForOrg } from '../jobs/dailyReport.js'
+import { isOrgFlagEnabled } from '../db/planDb.js'
 
 const router = Router()
 
@@ -230,6 +231,21 @@ router.post('/notify/channels/:id/test', requireAuth, async (req: ScopedRequest,
       disclaimer: '作业辅助非认证 CARA，不作为唯一决策依据。'
     }
   }
+  // Epic I 功能开关：webhook_enabled 关闭的组织，Webhook 测试投递同样跳过（留审计）
+  if (ch.kind === 'webhook' && !(await isOrgFlagEnabled(ch.org_id, 'webhook_enabled'))) {
+    await recordDelivery({
+      org_id: ch.org_id,
+      channel_id: ch.id,
+      kind: 'test',
+      status: 'skipped',
+      attempts: 0,
+      status_code: null,
+      error: '组织已禁用 Webhook 投递（webhook_enabled=false）',
+      payload_json: JSON.stringify(payload).slice(0, 10000)
+    })
+    res.json(ok({ status: 'skipped', attempts: 0, status_code: null, error: '组织已禁用 Webhook 投递（webhook_enabled=false）' }))
+    return
+  }
   const result =
     ch.kind === 'webhook'
       ? await deliverWebhook(ch, 'test', payload)
@@ -322,7 +338,10 @@ router.post('/notify/report/run', requireAuth, async (req: ScopedRequest, res) =
     res.json(ok(r))
   } catch (e) {
     console.error('[notify/report/run]', e)
-    res.status(500).json(fail(500, (e as Error).message || '日报生成失败'))
+    const msg = (e as Error).message || '日报生成失败'
+    // 功能开关关闭属可预期业务拒绝，返回 403 而非 500
+    const status = msg.includes('未对您的组织开放') ? 403 : 500
+    res.status(status).json(fail(status, msg))
   }
 })
 

@@ -62,8 +62,61 @@ export function adminGetOrg(id: number): Promise<{
   org: AdminOrg
   members: AdminMember[]
   limits: Array<{ feature: string; limit: number; overridden: boolean }>
+  quotas: AdminQuotaRow[]
+  flags: AdminFlagRow[]
 }> {
   return cgiCall({ method: 'GET', url: `/admin/orgs/${id}`, headers: headers() })
+}
+
+/** Epic I：组织配额行（默认 / 覆盖 / 生效 / 用量） */
+export interface AdminQuotaRow {
+  feature: string
+  label: string
+  unit: 'count' | 'days' | 'bitmap' | 'scope'
+  default: number
+  override: number | null
+  effective: number
+  overridden: boolean
+  usage: number
+}
+
+/** Epic I：组织功能开关行 */
+export interface AdminFlagRow {
+  key: string
+  label: string
+  description: string
+  default: boolean
+  override: boolean | null
+  enabled: boolean
+  overridden: boolean
+}
+
+/** 设置数字 override（超管，立即生效） */
+export function adminSetQuotaOverride(
+  id: number,
+  feature: string,
+  limit: number
+): Promise<AdminQuotaRow> {
+  return cgiCall({ method: 'PUT', url: `/admin/orgs/${id}/quotas/${feature}`, data: { limit }, headers: headers() })
+}
+
+/** 清除数字 override（恢复档位默认） */
+export function adminClearQuotaOverride(id: number, feature: string): Promise<AdminQuotaRow> {
+  return cgiCall({ method: 'DELETE', url: `/admin/orgs/${id}/quotas/${feature}`, headers: headers() })
+}
+
+/** 设置功能开关 override */
+export function adminSetFlagOverride(
+  id: number,
+  key: string,
+  enabled: boolean
+): Promise<AdminFlagRow> {
+  return cgiCall({ method: 'PUT', url: `/admin/orgs/${id}/flags/${key}`, data: { enabled }, headers: headers() })
+}
+
+/** 清除功能开关 override（恢复目录默认） */
+export function adminClearFlagOverride(id: number, key: string): Promise<AdminFlagRow> {
+  return cgiCall({ method: 'DELETE', url: `/admin/orgs/${id}/flags/${key}`, headers: headers() })
 }
 
 export function adminUpdateOrg(

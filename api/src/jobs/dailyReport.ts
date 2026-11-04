@@ -25,6 +25,7 @@ import { getDailyFetchStatus } from '../db/fetchDb.js'
 import { listObjectsByOrg } from '../db/objectsDb.js'
 import { aggregateEvents, type ConjunctionEvent, type EventLevel } from '../routes/events.js'
 import { deliverWebhook, deliverEmail, smtpConfigured } from '../services/notify.js'
+import { isOrgFlagEnabled } from '../db/planDb.js'
 
 export type { EventLevel }
 
@@ -268,6 +269,20 @@ async function deliverOne(
   kind: DeliveryKind,
   payload: DailyReportPayload
 ): Promise<'success' | 'skipped' | 'failed'> {
+  // Epic I 功能开关：webhook_enabled 关闭的组织，Webhook 渠道跳过投递（留审计不算失败）
+  if (ch.kind === 'webhook' && !(await isOrgFlagEnabled(ch.org_id, 'webhook_enabled'))) {
+    await recordDelivery({
+      org_id: ch.org_id,
+      channel_id: ch.id,
+      kind,
+      status: 'skipped',
+      attempts: 0,
+      status_code: null,
+      error: '组织已禁用 Webhook 投递（webhook_enabled=false）',
+      payload_json: ''
+    })
+    return 'skipped'
+  }
   const payloadJson = JSON.stringify({ event: kind, org: orgName, report: payload })
   let result
   if (ch.kind === 'webhook') {
@@ -305,6 +320,11 @@ export async function runDailyReportForOrg(orgId: number, orgName: string, trigg
   failed: number
   skipped: number
 }> {
+  // Epic I 功能开关：daily_report_enabled 关闭的组织冻结日报作业（不删历史，恢复开关后续出）
+  if (!(await isOrgFlagEnabled(orgId, 'daily_report_enabled'))) {
+    console.log(`[daily-report] org=${orgId}(${orgName}) skipped: daily_report_enabled=false by=${triggeredBy}`)
+    throw new Error('日报功能未对您的组织开放（daily_report_enabled 已关闭）')
+  }
   if (!(await ensureNotifySchema())) throw new Error('数据库不可用（通知表未就绪）')
   const date = new Date().toISOString().slice(0, 10)
   const objs = await listObjectsByOrg(orgId)

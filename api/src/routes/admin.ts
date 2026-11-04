@@ -15,7 +15,7 @@ import { ok, fail } from '../utils/response.js'
 import { pool } from '../db/pool.js'
 import { ensureOrgSchema, findUserByEmail, findOrgById, createOrgWithAdmin, type OrgRow } from '../db/orgDb.js'
 import { ensureAdminSchema, writeAudit, listAudit } from '../db/adminDb.js'
-import { ensurePlanSchema, getEffectiveLimits } from '../db/planDb.js'
+import { ensurePlanSchema, getEffectiveLimits, getOrgQuotaRows, getOrgFlagRows, setOrgQuotaOverride, clearOrgQuotaOverride, setOrgFlagOverride, clearOrgFlagOverride, FEATURE_KEYS, FLAG_CATALOG, TLE_SCOPE, PC_BIT } from '../db/planDb.js'
 import { requireAuth, type AuthContext } from './auth.js'
 import { QUOTA_EXCEEDED } from '../middleware/plan.js'
 
@@ -122,7 +122,7 @@ router.post('/admin/orgs', requireAuth, requireSuperAdmin, async (req: ScopedReq
   }
 })
 
-/** 组织详情（含成员列表） */
+/** 组织详情（含成员 / 生效限额 / 配额行 / 功能开关行） */
 router.get('/admin/orgs/:id', requireAuth, requireSuperAdmin, async (req, res) => {
   const orgId = Number(req.params.id)
   const org = Number.isFinite(orgId) ? await findOrgById(orgId) : null
@@ -136,7 +136,142 @@ router.get('/admin/orgs/:id', requireAuth, requireSuperAdmin, async (req, res) =
   )
   await ensurePlanSchema()
   const limits = await getEffectiveLimits(org.id, org.plan)
-  res.json(ok({ org, members, limits }))
+  const quotas = await getOrgQuotaRows(org.id, org.plan)
+  const flags = await getOrgFlagRows(org.id)
+  res.json(ok({ org, members, limits, quotas, flags }))
+})
+
+/** 功能键取值合法性（scope/bitmap 有语义枚举；count/days 须为非负整数） */
+function validQuotaValue(feature: string, value: number): boolean {
+  if (!Number.isInteger(value) || value < 0 || value > 4_294_967_295) return false
+  if (feature === 'system_tle_scope') return [TLE_SCOPE.NONE, TLE_SCOPE.SAMPLE, TLE_SCOPE.MANAGED, TLE_SCOPE.FULL].includes(value as 0 | 1 | 2 | 3)
+  if (feature === 'pc_methods') {
+    const all = PC_BIT.Foster | PC_BIT.Chan | PC_BIT.Alfano | PC_BIT.OfficialCDM
+    return value > 0 && (value & ~all) === 0
+  }
+  return true
+}
+
+/** 设置数字 override（立即生效：effective 每次实时解析） */
+router.put('/admin/orgs/:id/quotas/:feature', requireAuth, requireSuperAdmin, async (req: ScopedRequest, res) => {
+  const orgId = Number(req.params.id)
+  const org = Number.isFinite(orgId) ? await findOrgById(orgId) : null
+  if (!org) {
+    res.status(404).json(fail(404, '组织不存在'))
+    return
+  }
+  const feature = String(req.params.feature || '')
+  if (!FEATURE_KEYS.some((f) => f.key === feature)) {
+    res.status(404).json(fail(404, '未知功能键'))
+    return
+  }
+  const limit = Number((req.body || {}).limit)
+  if (!validQuotaValue(feature, limit)) {
+    res.status(400).json(fail(400, '限额必须为非负整数（scope/位图键另有取值约束）'))
+    return
+  }
+  await ensurePlanSchema()
+  const before = (await getOrgQuotaRows(org.id, org.plan)).find((q) => q.feature === feature) ?? null
+  await setOrgQuotaOverride(org.id, feature, limit)
+  await writeAudit({
+    actorUserId: req.auth!.user.id,
+    actorEmail: req.auth!.user.email,
+    orgId: org.id,
+    action: 'quota.override.set',
+    before: before ? { feature, override: before.override, effective: before.effective } : { feature },
+    after: { feature, override: limit }
+  })
+  const after = (await getOrgQuotaRows(org.id, org.plan)).find((q) => q.feature === feature)
+  res.json(ok(after))
+})
+
+/** 清除数字 override（恢复档位默认） */
+router.delete('/admin/orgs/:id/quotas/:feature', requireAuth, requireSuperAdmin, async (req: ScopedRequest, res) => {
+  const orgId = Number(req.params.id)
+  const org = Number.isFinite(orgId) ? await findOrgById(orgId) : null
+  if (!org) {
+    res.status(404).json(fail(404, '组织不存在'))
+    return
+  }
+  const feature = String(req.params.feature || '')
+  await ensurePlanSchema()
+  const before = (await getOrgQuotaRows(org.id, org.plan)).find((q) => q.feature === feature) ?? null
+  if (!before?.overridden) {
+    res.status(409).json(fail(409, '该功能键没有组织覆盖，无需恢复'))
+    return
+  }
+  await clearOrgQuotaOverride(org.id, feature)
+  await writeAudit({
+    actorUserId: req.auth!.user.id,
+    actorEmail: req.auth!.user.email,
+    orgId: org.id,
+    action: 'quota.override.clear',
+    before: { feature, override: before.override, effective: before.effective },
+    after: { feature, override: null, effective: before.default }
+  })
+  const after = (await getOrgQuotaRows(org.id, org.plan)).find((q) => q.feature === feature)
+  res.json(ok(after))
+})
+
+/** 设置功能开关 override */
+router.put('/admin/orgs/:id/flags/:key', requireAuth, requireSuperAdmin, async (req: ScopedRequest, res) => {
+  const orgId = Number(req.params.id)
+  const org = Number.isFinite(orgId) ? await findOrgById(orgId) : null
+  if (!org) {
+    res.status(404).json(fail(404, '组织不存在'))
+    return
+  }
+  const key = String(req.params.key || '')
+  if (!FLAG_CATALOG.some((f) => f.key === key)) {
+    res.status(404).json(fail(404, '未知功能开关'))
+    return
+  }
+  const enabled = (req.body || {}).enabled
+  if (typeof enabled !== 'boolean') {
+    res.status(400).json(fail(400, 'enabled 必须为布尔值'))
+    return
+  }
+  await ensurePlanSchema()
+  const before = (await getOrgFlagRows(org.id)).find((f) => f.key === key) ?? null
+  await setOrgFlagOverride(org.id, key, enabled)
+  await writeAudit({
+    actorUserId: req.auth!.user.id,
+    actorEmail: req.auth!.user.email,
+    orgId: org.id,
+    action: 'flag.override.set',
+    before: before ? { key, override: before.override, enabled: before.enabled } : { key },
+    after: { key, override: enabled }
+  })
+  const after = (await getOrgFlagRows(org.id)).find((f) => f.key === key)
+  res.json(ok(after))
+})
+
+/** 清除功能开关 override（恢复目录默认） */
+router.delete('/admin/orgs/:id/flags/:key', requireAuth, requireSuperAdmin, async (req: ScopedRequest, res) => {
+  const orgId = Number(req.params.id)
+  const org = Number.isFinite(orgId) ? await findOrgById(orgId) : null
+  if (!org) {
+    res.status(404).json(fail(404, '组织不存在'))
+    return
+  }
+  const key = String(req.params.key || '')
+  await ensurePlanSchema()
+  const before = (await getOrgFlagRows(org.id)).find((f) => f.key === key) ?? null
+  if (!before?.overridden) {
+    res.status(409).json(fail(409, '该开关没有组织覆盖，无需恢复'))
+    return
+  }
+  await clearOrgFlagOverride(org.id, key)
+  await writeAudit({
+    actorUserId: req.auth!.user.id,
+    actorEmail: req.auth!.user.email,
+    orgId: org.id,
+    action: 'flag.override.clear',
+    before: { key, override: before.override, enabled: before.enabled },
+    after: { key, override: null, enabled: before.default }
+  })
+  const after = (await getOrgFlagRows(org.id)).find((f) => f.key === key)
+  res.json(ok(after))
 })
 
 /** 变更组织：plan / status / notes（before → after 全量审计） */
