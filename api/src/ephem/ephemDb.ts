@@ -76,6 +76,27 @@ CREATE TABLE IF NOT EXISTS \`ephemeris\` (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
   COMMENT='星历元数据索引（原始 .txt.gz 在文件系统 data/ephemerides/）'`
 
+/** G1 星历版本归档：每次上传/扫描 append 一行；内容按 sha256 去重存储，删除仅软删 */
+const VERSION_SCHEMA = `
+CREATE TABLE IF NOT EXISTS \`ephemeris_versions\` (
+  \`id\`           bigint       NOT NULL AUTO_INCREMENT,
+  \`norad\`        varchar(16)  NOT NULL DEFAULT '0',
+  \`format\`       varchar(8)   NOT NULL DEFAULT 'ITC',
+  \`source\`       varchar(16)  NOT NULL DEFAULT 'upload',
+  \`file\`         varchar(255) NOT NULL DEFAULT '',
+  \`sha256\`       char(64)     NOT NULL DEFAULT '',
+  \`bytes\`        bigint       NOT NULL DEFAULT 0,
+  \`raw_bytes\`    bigint       NOT NULL DEFAULT 0,
+  \`published_at\` bigint       NOT NULL DEFAULT 0,
+  \`uploaded_by\`  varchar(190) NOT NULL DEFAULT '',
+  \`deleted_at\`   bigint       NULL DEFAULT NULL,
+  \`created_at\`   varchar(32)  NOT NULL DEFAULT '',
+  PRIMARY KEY (\`id\`),
+  KEY \`idx_ephver_norad\` (\`norad\`, \`format\`, \`id\`),
+  KEY \`idx_ephver_sha\` (\`sha256\`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+  COMMENT='星历版本归档账本（versions/<sha>.txt.gz 在文件系统，append-only + 软删）'`
+
 let schemaReady: Promise<boolean> | null = null
 
 /** 建表（幂等）+ 旧表补列（已存在的 ephemeris 表加 published_at）；失败返回 false */
@@ -84,6 +105,7 @@ export function ensureEphemSchema(): Promise<boolean> {
     schemaReady = (async () => {
       try {
         await pool.query(SCHEMA)
+        await pool.query(VERSION_SCHEMA)
         // 已存在的表补列（CREATE TABLE IF NOT EXISTS 不会更新旧表结构）
         const upgradeCols: Array<[string, string, string | null]> = [
           ['published_at', 'bigint NOT NULL DEFAULT 0 AFTER `stop_ms`', 'ADD KEY `idx_eph_published` (`published_at`)'],
@@ -311,4 +333,134 @@ export async function deleteRowsByFilesDb(files: string[]): Promise<number> {
 export async function countRowsDb(): Promise<number> {
   const [rows] = await pool.query<RowDataPacket[]>('SELECT COUNT(*) AS c FROM `ephemeris`')
   return Number((rows[0] as { c: number }).c) || 0
+}
+
+/* --------------------- G1 星历版本归档（ephemeris_versions） --------------------- */
+
+/** 版本行（与前端 EphVersion 对齐） */
+export interface EphemVersionRow {
+  id: number
+  norad: string
+  format: 'ITC' | 'OCM'
+  /** 来源：upload=管理页上传 / scan=rebuild 扫描 */
+  source: string
+  /** 版本文件相对 EPH_ROOT 路径（versions/…/<sha前16>.txt.gz） */
+  file: string
+  sha256: string
+  bytes: number
+  rawBytes: number
+  publishedMs: number
+  uploadedBy: string
+  /** 软删时间戳 ms；null=未删 */
+  deletedAt: number | null
+  createdAt: string
+}
+
+interface VerDbRow extends RowDataPacket {
+  id: number
+  norad: string
+  format: string
+  source: string
+  file: string
+  sha256: string
+  bytes: number
+  raw_bytes: number
+  published_at: number
+  uploaded_by: string
+  deleted_at: number | null
+  created_at: string
+}
+
+function rowToVersion(r: VerDbRow): EphemVersionRow {
+  return {
+    id: Number(r.id),
+    norad: r.norad,
+    format: r.format === 'OCM' ? 'OCM' : 'ITC',
+    source: r.source,
+    file: r.file,
+    sha256: r.sha256,
+    bytes: Number(r.bytes),
+    rawBytes: Number(r.raw_bytes),
+    publishedMs: Number(r.published_at),
+    uploadedBy: r.uploaded_by,
+    deletedAt: r.deleted_at == null ? null : Number(r.deleted_at),
+    createdAt: r.created_at
+  }
+}
+
+/** 插入版本行（append-only，不做 upsert；重复内容由 ingest 层去重） */
+export async function insertEphemerisVersionDb(v: EphemVersionRow): Promise<number> {
+  const [ret] = await pool.query(
+    `INSERT INTO \`ephemeris_versions\`
+       (norad, format, source, file, sha256, bytes, raw_bytes, published_at, uploaded_by, deleted_at, created_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?)`,
+    [v.norad, v.format, v.source, v.file, v.sha256, v.bytes, v.rawBytes, v.publishedMs, v.uploadedBy, v.createdAt]
+  )
+  return (ret as { insertId: number }).insertId
+}
+
+/** 同内容 + 同来源 + 同操作者的版本行（append 账本防重复；如重复 scan） */
+export async function findVersionByShaSourceDb(
+  sha256: string,
+  source: string,
+  uploadedBy: string
+): Promise<EphemVersionRow | null> {
+  const [rows] = await pool.query<VerDbRow[]>(
+    'SELECT * FROM `ephemeris_versions` WHERE sha256 = ? AND source = ? AND uploaded_by = ? ORDER BY id DESC LIMIT 1',
+    [sha256, source, uploadedBy]
+  )
+  return rows.length ? rowToVersion(rows[0]) : null
+}
+
+export interface VersionQuery {
+  norad?: string
+  format?: string
+  page?: number
+  size?: number
+  /** 1 = 含软删行（默认只列未删） */
+  includeDeleted?: boolean
+}
+
+/** 版本历史分页（同 NORAD 倒序） */
+export async function listVersionsDb(q: VersionQuery): Promise<{ total: number; rows: EphemVersionRow[] }> {
+  const where: string[] = []
+  const params: unknown[] = []
+  const norad = (q.norad || '').trim()
+  if (norad) {
+    where.push('norad = ?')
+    params.push(norad)
+  }
+  if (q.format === 'ITC' || q.format === 'OCM') {
+    where.push('format = ?')
+    params.push(q.format)
+  }
+  if (!q.includeDeleted) where.push('deleted_at IS NULL')
+  const whereSql = where.length ? `WHERE ${where.join(' AND ')}` : ''
+  const [cntRows] = await pool.query<RowDataPacket[]>(
+    `SELECT COUNT(*) AS c FROM \`ephemeris_versions\` ${whereSql}`,
+    params
+  )
+  const total = Number((cntRows[0] as { c: number }).c) || 0
+  const size = Math.min(Math.max(q.size || 20, 1), 200)
+  const pages = Math.max(1, Math.ceil(total / size))
+  const page = Math.min(Math.max(q.page || 1, 1), pages)
+  const [rows] = await pool.query<VerDbRow[]>(
+    `SELECT * FROM \`ephemeris_versions\` ${whereSql} ORDER BY id DESC LIMIT ? OFFSET ?`,
+    [...params, size, (page - 1) * size]
+  )
+  return { total, rows: rows.map(rowToVersion) }
+}
+
+export async function getEphemerisVersionDb(id: number): Promise<EphemVersionRow | null> {
+  const [rows] = await pool.query<VerDbRow[]>('SELECT * FROM `ephemeris_versions` WHERE id = ? LIMIT 1', [id])
+  return rows.length ? rowToVersion(rows[0]) : null
+}
+
+/** 软删：仅标记 deleted_at，文件与行均保留 */
+export async function softDeleteVersionDb(id: number): Promise<boolean> {
+  const [ret] = await pool.query(
+    'UPDATE `ephemeris_versions` SET deleted_at = ? WHERE id = ? AND deleted_at IS NULL',
+    [Date.now(), id]
+  )
+  return ((ret as { affectedRows: number }).affectedRows || 0) > 0
 }

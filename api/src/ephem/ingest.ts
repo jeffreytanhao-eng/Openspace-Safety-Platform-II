@@ -11,6 +11,7 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import zlib from 'node:zlib'
+import { createHash } from 'node:crypto'
 import { fileURLToPath } from 'node:url'
 import {
   ephemDbUp,
@@ -23,7 +24,10 @@ import {
   listAllRowsDb,
   countRowsDb,
   toListItem,
-  type EphemRow
+  insertEphemerisVersionDb,
+  findVersionByShaSourceDb,
+  type EphemRow,
+  type EphemVersionRow
 } from './ephemDb.js'
 import { gunzipText, parseMetaAuto, parseItcMeta, parseOcmMeta, rangeLabel, formatSize } from './parseMeta.js'
 import type { EphemManeuverEpoch } from './parseMeta.js'
@@ -120,8 +124,8 @@ function listGzFiles(dir: string, base = ''): string[] {
   return out
 }
 
-/** 解析单个 .txt.gz → 行（目录名优先约定格式；ocm 目录非 OCM 内容跳过） */
-function parseGzFile(rel: string): { row: EphemRow } | { skip: string } {
+/** 解析单个 .txt.gz → 行 + 解压全文（全文供 G1 版本归档做 sha256） */
+function parseGzFile(rel: string): { row: EphemRow; text: string } | { skip: string } {
   const full = path.join(EPH_ROOT, rel)
   const raw = fs.readFileSync(full)
   const text = gunzipText(raw)
@@ -129,10 +133,10 @@ function parseGzFile(rel: string): { row: EphemRow } | { skip: string } {
   if (dirTop === 'ocm' || /^CCSDS_OCM_VERS/m.test(text)) {
     if (!/^CCSDS_OCM_VERS/m.test(text)) return { skip: `not CCSDS OCM: ${rel}` }
     const meta = parseOcmMeta(text, rel)
-    return { row: buildRow({ format: 'OCM', meta, file: rel, mtimeMs: fs.statSync(full).mtimeMs, sizeBytes: raw.length, rawSizeBytes: Buffer.byteLength(text, 'utf8'), sourceName: path.basename(rel) }) }
+    return { text, row: buildRow({ format: 'OCM', meta, file: rel, mtimeMs: fs.statSync(full).mtimeMs, sizeBytes: raw.length, rawSizeBytes: Buffer.byteLength(text, 'utf8'), sourceName: path.basename(rel) }) }
   }
   const meta = parseItcMeta(text, rel)
-  return { row: buildRow({ format: 'ITC', meta, file: rel, mtimeMs: fs.statSync(full).mtimeMs, sizeBytes: raw.length, rawSizeBytes: Buffer.byteLength(text, 'utf8'), sourceName: path.basename(rel) }) }
+  return { text, row: buildRow({ format: 'ITC', meta, file: rel, mtimeMs: fs.statSync(full).mtimeMs, sizeBytes: raw.length, rawSizeBytes: Buffer.byteLength(text, 'utf8'), sourceName: path.basename(rel) }) }
 }
 
 /** 导出 index.json 快照（无 DB / 静态部署的兜底数据源） */
@@ -182,6 +186,15 @@ export async function scanAndIngest(opts: { exportJson?: boolean; force?: boolea
         continue
       }
       await upsertRowDb(parsed.row)
+      // G1 版本归档：文件新入库或内容变化时 append 一条（账本按 sha+source+操作者去重）
+      await appendEphemVersion({
+        format: parsed.row.format,
+        norad: parsed.row.norad,
+        text: parsed.text,
+        publishedMs: parsed.row.publishedMs,
+        source: 'scan',
+        uploadedBy: 'system'
+      })
       if (existing) updated++
       else added++
       console.log(`[ephem] ${existing ? 'updated' : 'added'} ${parsed.row.id} pts=${parsed.row.points} cov=${parsed.row.covariance} man=${parsed.row.maneuvers}`)
@@ -280,9 +293,14 @@ function sanitizeName(name: string): string {
  * 上传单文件入库：
  * - 内容识别格式（CCSDS OCM → ocm/，否则 ITC 口径）；
  * - 落盘按 NORAD 千位分片（如 norad 37711 → itc/037/xxx.txt.gz），避免单目录万文件；
- * - 同名文件已入库 → skipped；同 NORAD+格式 已有旧版 → updated（新版替换元数据，旧文件保留在磁盘）。
+ * - 同名文件已入库 → skipped；同 NORAD+格式 已有旧版 → updated（新版替换元数据，旧文件保留在磁盘）；
+ * - G1：无论 added/updated/skipped 均按内容 sha256 append 版本归档（同名跳过也留痕）。
  */
-export async function ingestUploadFile(originalName: string, buf: Buffer): Promise<UploadResult> {
+export async function ingestUploadFile(
+  originalName: string,
+  buf: Buffer,
+  uploadedBy = 'anonymous'
+): Promise<UploadResult> {
   if (!(await ephemDbUp())) throw new Error('数据库不可用：星历上传入库需要 MySQL')
   const name = sanitizeName(originalName)
   if (!/\.(txt|gz|itc|ocm|oem|e)$/i.test(name)) throw new Error('仅支持 .txt / .txt.gz / .itc / .ocm 星历文件')
@@ -300,6 +318,15 @@ export async function ingestUploadFile(originalName: string, buf: Buffer): Promi
   // 同名文件去重
   const sameSource = await getRowBySourceNameDb(name)
   if (sameSource) {
+    // G1：同名跳过也留版本痕（内容不同会新增版本，同内容由账本去重）
+    await appendEphemVersion({
+      format,
+      norad: meta.norad,
+      text,
+      publishedMs: meta.created || Date.now(),
+      source: 'upload',
+      uploadedBy
+    })
     return {
       action: 'skipped', id: sameSource.id, file: sameSource.file, name: sameSource.name,
       norad: sameSource.norad, format: sameSource.format,
@@ -320,9 +347,78 @@ export async function ingestUploadFile(originalName: string, buf: Buffer): Promi
   const row = buildRow({ format, meta, file: rel, mtimeMs: st.mtimeMs, sizeBytes: st.size, rawSizeBytes: isGz ? Buffer.byteLength(text, 'utf8') : buf.length, sourceName: name })
   const existed = await getRowDb(row.id)
   await upsertRowDb(row)
+  // G1 版本归档：同内容重复上传由账本去重，不重复记账
+  await appendEphemVersion({
+    format,
+    norad: row.norad,
+    text,
+    publishedMs: row.publishedMs,
+    source: 'upload',
+    uploadedBy
+  })
   return {
     action: existed ? 'updated' : 'added',
     id: row.id, file: rel, name: row.name, norad: row.norad, format,
     range: rangeLabel(row.startMs, row.stopMs), size: formatSize(row.fileSize)
+  }
+}
+
+/* --------------------- G1 版本归档（append-only + 内容 sha256 去重存储） --------------------- */
+
+/** 版本文件目录（独立于活跃文件 {itc,ocm}/；rebuild 清表不触及本目录） */
+const VERSIONS_DIR = 'versions'
+
+export interface EphemVersionAppend {
+  format: 'ITC' | 'OCM'
+  norad: string
+  /** 解压后全文（sha256 与版本存储均以它为准） */
+  text: string
+  publishedMs: number
+  /** upload=管理页上传 / scan=rebuild 扫描 */
+  source: 'upload' | 'scan'
+  /** 操作者标识（上传者邮箱 / system / anonymous） */
+  uploadedBy: string
+}
+
+/**
+ * append 一条星历版本：
+ * - 内容寻址落盘 data/ephemerides/versions/<fmt>/<分片>/<sha前16>.txt.gz（同内容只存一份，存在即不重写）；
+ * - 账本按 (sha256, source, uploaded_by) 去重 —— 重复上传 / 重复 scan 不重复记账；
+ * - 归档失败仅告警不中断主入库流程（版本是旁路增强，主数据优先）。
+ * 返回新增版本行；null = 账本已有同内容同来源记录或归档失败。
+ */
+export async function appendEphemVersion(v: EphemVersionAppend): Promise<EphemVersionRow | null> {
+  const sha256 = createHash('sha256').update(v.text, 'utf8').digest('hex')
+  try {
+    const dup = await findVersionByShaSourceDb(sha256, v.source, v.uploadedBy)
+    if (dup) return null
+    // 内容寻址落盘（同内容只写一次）
+    const shard = String(Math.floor(Number(v.norad) / 1000)).padStart(3, '0')
+    const dir = path.join(EPH_ROOT, VERSIONS_DIR, v.format.toLowerCase(), shard)
+    fs.mkdirSync(dir, { recursive: true })
+    const fileName = `${sha256.slice(0, 16)}.txt.gz`
+    const full = path.join(dir, fileName)
+    const gzip = zlib.gzipSync(v.text, { level: 9 })
+    if (!fs.existsSync(full)) fs.writeFileSync(full, gzip)
+    const rel = `${VERSIONS_DIR}/${v.format.toLowerCase()}/${shard}/${fileName}`.replace(/\\/g, '/')
+    const row: EphemVersionRow = {
+      id: 0,
+      norad: v.norad,
+      format: v.format,
+      source: v.source,
+      file: rel,
+      sha256,
+      bytes: gzip.length,
+      rawBytes: Buffer.byteLength(v.text, 'utf8'),
+      publishedMs: Math.round(v.publishedMs) || Date.now(),
+      uploadedBy: v.uploadedBy,
+      deletedAt: null,
+      createdAt: new Date().toISOString()
+    }
+    const id = await insertEphemerisVersionDb(row)
+    return { ...row, id }
+  } catch (e) {
+    console.warn(`[ephem] version append failed (${v.format} ${v.norad}): ${(e as Error).message}`)
+    return null
   }
 }

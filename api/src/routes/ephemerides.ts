@@ -2,18 +2,37 @@ import express, { Router, type Request, type Response, type NextFunction } from 
 import fs from 'node:fs'
 import path from 'node:path'
 import zlib from 'node:zlib'
+import jwt from 'jsonwebtoken'
 import { ok, fail } from '../utils/response.js'
+import { config } from '../config.js'
 import {
   ephemDbUp,
   listRowsDb,
   listAllRowsDb,
   getRowDb,
   listAllKeysDb,
-  toListItem
+  toListItem,
+  listVersionsDb,
+  getEphemerisVersionDb,
+  softDeleteVersionDb
 } from '../ephem/ephemDb.js'
 import { EPH_ROOT, scanAndIngest, ingestUploadFile } from '../ephem/ingest.js'
+import { requireAuth } from './auth.js'
 
 const router = Router()
+
+/** 可选身份：请求带有效 Bearer token 时返回其邮箱（归档 uploaded_by 用），否则 anonymous */
+function tryAuthName(req: Request): string {
+  const header = req.headers.authorization || ''
+  const token = header.startsWith('Bearer ') ? header.slice(7) : ''
+  if (!token) return 'anonymous'
+  try {
+    const payload = jwt.verify(token, config.jwtSecret) as { email?: string }
+    return payload.email || 'anonymous'
+  } catch {
+    return 'anonymous'
+  }
+}
 
 function safeResolve(rel: string): string | null {
   const cleaned = rel.replace(/\\/g, '/').replace(/^\/+/, '')
@@ -216,7 +235,7 @@ router.post(
       return
     }
     try {
-      const r = await ingestUploadFile(name, buf)
+      const r = await ingestUploadFile(name, buf, tryAuthName(req))
       res.json(ok(r))
     } catch (e) {
       res.status(400).json(fail(400, (e as Error).message || '上传入库失败'))
@@ -232,6 +251,89 @@ router.post('/ephemerides/rebuild', async (req: Request, res: Response) => {
     res.json(ok(r))
   } catch (e) {
     res.status(503).json(fail(503, (e as Error).message || '扫描入库失败'))
+  }
+})
+
+/* --------------------- G1 星历版本归档 --------------------- */
+
+/**
+ * GET /cgi/ephemerides/versions?norad=&format=&page=&size=&includeDeleted=1
+ * 版本历史分页（append 账本；默认只列未软删，includeDeleted=1 连同软删行一并返回）
+ */
+router.get('/ephemerides/versions', async (req: Request, res: Response) => {
+  if (!(await ephemDbUp())) {
+    res.status(503).json(fail(503, '数据库不可用：版本归档需要 MySQL'))
+    return
+  }
+  try {
+    const size = Math.min(Math.max(Number(req.query.size) || 20, 1), 200)
+    const page = Math.max(Number(req.query.page) || 1, 1)
+    const { total, rows } = await listVersionsDb({
+      norad: req.query.norad ? String(req.query.norad) : undefined,
+      format: req.query.format ? String(req.query.format) : undefined,
+      page,
+      size,
+      includeDeleted: req.query.includeDeleted === '1' || req.query.includeDeleted === 'true'
+    })
+    res.json(
+      ok({
+        items: rows,
+        total,
+        page,
+        size,
+        totalPages: Math.max(1, Math.ceil(total / size))
+      })
+    )
+  } catch (e) {
+    res.status(500).json(fail(500, (e as Error).message || '查询版本历史失败'))
+  }
+})
+
+/** GET /cgi/ephemerides/versions/:id/content — 按版本回放星历全文（gunzip 文本，审计/比对用） */
+router.get('/ephemerides/versions/:id/content', async (req: Request, res: Response) => {
+  if (!(await ephemDbUp())) {
+    res.status(503).json(fail(503, '数据库不可用：版本归档需要 MySQL'))
+    return
+  }
+  try {
+    const ver = await getEphemerisVersionDb(Number(req.params.id) || 0)
+    if (!ver) {
+      res.status(404).json(fail(404, '版本不存在'))
+      return
+    }
+    const full = safeResolve(ver.file)
+    if (!full || !fs.existsSync(full)) {
+      res.status(404).json(fail(404, '版本文件缺失'))
+      return
+    }
+    const buf = fs.readFileSync(full)
+    const text = full.toLowerCase().endsWith('.gz')
+      ? zlib.gunzipSync(buf).toString('utf8')
+      : buf.toString('utf8')
+    res.setHeader('Content-Type', 'text/plain; charset=utf-8')
+    res.setHeader('X-Ephem-Version-Sha', ver.sha256)
+    res.send(text)
+  } catch (e) {
+    res.status(500).json(fail(500, (e as Error).message || '读取版本文件失败'))
+  }
+})
+
+/** DELETE /cgi/ephemerides/versions/:id — 软删版本（行与文件均保留，仅标记 deleted_at；需登录） */
+router.delete('/ephemerides/versions/:id', requireAuth, async (req: Request, res: Response) => {
+  if (!(await ephemDbUp())) {
+    res.status(503).json(fail(503, '数据库不可用：版本归档需要 MySQL'))
+    return
+  }
+  try {
+    const id = Number(req.params.id) || 0
+    const done = await softDeleteVersionDb(id)
+    if (!done) {
+      res.status(404).json(fail(404, '版本不存在或已删除'))
+      return
+    }
+    res.json(ok({ id, deletedAt: Date.now() }))
+  } catch (e) {
+    res.status(500).json(fail(500, (e as Error).message || '软删版本失败'))
   }
 })
 

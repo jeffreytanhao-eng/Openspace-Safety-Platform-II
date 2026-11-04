@@ -7,7 +7,10 @@ import {
   fetchEphemerisText,
   uploadEphemerisFile,
   rebuildEphemerides,
-  type EphListItem
+  listEphemerisVersions,
+  softDeleteEphemerisVersion,
+  type EphListItem,
+  type EphVersion
 } from '@/api/ephemerides'
 import { parseEphemeris } from '@/views/situation/ephem/parse'
 import {
@@ -603,6 +606,100 @@ watch(
   { immediate: true }
 )
 
+/* ---------------- G1 版本归档（选中行的版本历史：append 账本 + 软删） ---------------- */
+
+const VER_PAGE_SIZE = 10
+const verItems = ref<EphVersion[]>([])
+const verTotal = ref(0)
+const verPage = ref(1)
+const verTotalPages = ref(1)
+const verLoading = ref(false)
+const verErr = ref('')
+const verMsg = ref('')
+const verBusyId = ref(0)
+let verSeq = 0
+
+/** 服务端行才有版本归档（本机导入行 file 为空 → 无） */
+const verAvailable = computed(() => !!selected.value?.file)
+
+function fmtVerTime(iso: string): string {
+  const ms = Date.parse(iso)
+  return Number.isFinite(ms) ? fmtUtc(ms, true) : iso
+}
+
+function fmtBytes(n: number): string {
+  if (!n || n <= 0) return '—'
+  if (n < 1024) return `${n} B`
+  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`
+  return `${(n / 1024 / 1024).toFixed(2)} MB`
+}
+
+/** 拉取选中行的版本历史（按 NORAD+格式 精确匹配，倒序分页） */
+async function fetchVersions() {
+  const row = selected.value
+  if (!row?.file || !/^\d+$/.test(row.norad)) {
+    verItems.value = []
+    verTotal.value = 0
+    verTotalPages.value = 1
+    verErr.value = ''
+    return
+  }
+  const seq = ++verSeq
+  verLoading.value = true
+  verErr.value = ''
+  try {
+    const data = await listEphemerisVersions({
+      norad: row.norad,
+      format: row.format === 'ITC' || row.format === 'OCM' ? row.format : undefined,
+      page: verPage.value,
+      size: VER_PAGE_SIZE
+    })
+    if (seq !== verSeq) return
+    verItems.value = data.items || []
+    verTotal.value = data.total
+    verTotalPages.value = data.totalPages
+    verPage.value = data.page
+  } catch (e) {
+    if (seq !== verSeq) return
+    verErr.value = (e as Error)?.message || '载入版本历史失败'
+    verItems.value = []
+  } finally {
+    if (seq === verSeq) verLoading.value = false
+  }
+}
+
+watch(selected, () => {
+  verPage.value = 1
+  verMsg.value = ''
+  void fetchVersions()
+})
+
+watch(verPage, () => {
+  void fetchVersions()
+})
+
+/** 新标签回放该版本全文（服务端 gunzip，与「查看原文件」同模式） */
+function viewVer(v: EphVersion) {
+  window.open(`/cgi/ephemerides/versions/${v.id}/content`, '_blank', 'noopener')
+}
+
+/** 软删版本（行与文件均保留；需登录，未登录时报 401 提示） */
+async function delVer(v: EphVersion) {
+  if (verBusyId.value) return
+  if (!window.confirm(`确认删除版本 #${v.id}（${fmtVerTime(v.createdAt)} UTC）？\n删除仅隐藏记录，文件与审计均保留（软删）。`)) return
+  verBusyId.value = v.id
+  verMsg.value = ''
+  try {
+    await softDeleteEphemerisVersion(v.id)
+    verMsg.value = `版本 #${v.id} 已删除（软删，文件保留）`
+    await fetchVersions()
+  } catch (e) {
+    verMsg.value = (e as Error)?.message || '删除失败'
+  } finally {
+    verBusyId.value = 0
+  }
+}
+
 onMounted(() => {
   void reloadList()
   void refreshEphemList()
@@ -751,6 +848,46 @@ onMounted(() => {
               </tbody>
             </table>
             <p v-else class="man-none">{{ manLoading ? '计算中…' : '无' }}</p>
+          </div>
+
+          <div class="ver-block">
+            <div class="ver-head">
+              <span class="ver-title">版本历史</span>
+              <span class="ver-count">{{ verLoading && !verItems.length ? '载入中…' : `${verTotal} 个版本` }}</span>
+            </div>
+            <template v-if="verAvailable">
+              <p v-if="verErr" class="ver-err">{{ verErr }}</p>
+              <table v-else-if="verItems.length" class="ver-table">
+                <thead>
+                  <tr><th>#</th><th>归档时间 (UTC)</th><th>发布</th><th>来源</th><th>SHA-256</th><th>大小</th><th>操作</th></tr>
+                </thead>
+                <tbody>
+                  <tr v-for="v in verItems" :key="v.id">
+                    <td class="mono">{{ v.id }}</td>
+                    <td class="mono">{{ fmtVerTime(v.createdAt) }}</td>
+                    <td class="mono">{{ v.publishedMs ? fmtUtc(v.publishedMs) : '—' }}</td>
+                    <td>
+                      <span class="ver-src" :class="v.source">{{ v.source === 'upload' ? '上传' : '扫描' }}</span>
+                      <span v-if="v.uploadedBy && v.uploadedBy !== 'system' && v.uploadedBy !== 'anonymous'" class="ver-by" :title="v.uploadedBy">{{ v.uploadedBy }}</span>
+                    </td>
+                    <td class="mono" :title="v.sha256">{{ v.sha256.slice(0, 10) }}…</td>
+                    <td>{{ fmtBytes(v.rawBytes) }}</td>
+                    <td class="ver-ops">
+                      <button type="button" class="ver-btn" @click="viewVer(v)">查看</button>
+                      <button type="button" class="ver-btn del" :disabled="verBusyId === v.id" @click="delVer(v)">删除</button>
+                    </td>
+                  </tr>
+                </tbody>
+              </table>
+              <p v-else class="ver-none">{{ verLoading ? '载入中…' : '暂无版本记录（上传或扫描入库时自动归档）' }}</p>
+              <div v-if="verTotalPages > 1" class="ver-pager">
+                <button type="button" :disabled="verPage <= 1" @click="verPage--">‹</button>
+                <span>第 {{ verPage }}/{{ verTotalPages }} 页</span>
+                <button type="button" :disabled="verPage >= verTotalPages" @click="verPage++">›</button>
+              </div>
+            </template>
+            <p v-else class="ver-none">本机导入星历无服务端版本归档</p>
+            <p v-if="verMsg" class="ver-msg">{{ verMsg }}</p>
           </div>
 
           <div class="actions-row">
@@ -917,6 +1054,46 @@ h1 { margin: 0; font-size: 16px; font-weight: 650; }
 .man-table tr:last-child td { border-bottom: none; }
 .man-table td.mono { font-family: var(--mono); font-size: 10px; }
 .man-none { margin: 8px 0 0; font-size: 12px; color: var(--text-dim); }
+/* 版本历史（G1 归档账本：蓝青色调与机动块区分） */
+.ver-block {
+  margin: 0 0 14px; border: 1px solid rgba(110, 160, 230, 0.45);
+  background: rgba(110, 160, 230, 0.06); padding: 10px 12px; border-radius: 6px;
+}
+.ver-head { display: flex; align-items: baseline; gap: 8px; }
+.ver-title { font-size: 11px; color: rgba(140, 180, 235, 0.9); }
+.ver-count { font-size: 12px; font-weight: 650; color: #bcd6f2; }
+.ver-table { width: 100%; margin-top: 8px; border-collapse: collapse; font-size: 11px; }
+.ver-table th {
+  text-align: left; font-weight: 500; color: var(--text-dim);
+  border-bottom: 1px solid var(--border); padding: 4px 8px 4px 0; white-space: nowrap;
+}
+.ver-table td { padding: 4px 8px 4px 0; border-bottom: 1px dashed var(--border); color: var(--text); }
+.ver-table tr:last-child td { border-bottom: none; }
+.ver-table td.mono { font-family: var(--mono); font-size: 10px; }
+.ver-src { font-size: 9px; line-height: 1; padding: 2px 5px; border-radius: 3px; border: 1px solid; }
+.ver-src.upload { color: #9dbbdd; background: rgba(110, 160, 230, 0.16); border-color: rgba(110, 160, 230, 0.22); }
+.ver-src.scan { color: #6fe0c0; background: rgba(80, 220, 180, 0.12); border-color: rgba(80, 220, 180, 0.28); }
+.ver-by {
+  margin-left: 4px; font-size: 9px; color: var(--text-dim); max-width: 110px;
+  display: inline-block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; vertical-align: bottom;
+}
+.ver-ops { white-space: nowrap; }
+.ver-btn {
+  appearance: none; border: 1px solid var(--border); background: var(--bg-deep);
+  color: var(--text-muted); font-size: 10px; line-height: 1; padding: 3px 7px; border-radius: 3px; cursor: pointer;
+}
+.ver-btn:hover:not(:disabled) { border-color: rgba(74, 125, 154, 0.5); color: var(--text); }
+.ver-btn.del:hover:not(:disabled) { border-color: rgba(196, 91, 91, 0.5); color: var(--danger); }
+.ver-btn:disabled { opacity: 0.5; cursor: default; }
+.ver-none { margin: 8px 0 0; font-size: 12px; color: var(--text-dim); }
+.ver-err { margin: 8px 0 0; font-size: 12px; color: var(--danger); }
+.ver-msg { margin: 8px 0 0; font-size: 11px; color: var(--accent-strong); }
+.ver-pager { margin-top: 6px; display: flex; align-items: center; gap: 8px; font-size: 10px; color: var(--text-dim); }
+.ver-pager button {
+  appearance: none; border: 1px solid var(--border); background: var(--bg-deep);
+  color: var(--text-muted); font-size: 10px; line-height: 1; padding: 3px 7px; border-radius: 3px; cursor: pointer;
+}
+.ver-pager button:disabled { opacity: 0.4; cursor: default; }
 .actions-row { margin-bottom: 10px; }
 .hint { margin: 8px 0 0; font-size: 11px; color: var(--text-dim); line-height: 1.45; }
 .msg { margin: 12px 0 0; font-size: 12px; color: var(--accent-strong); }

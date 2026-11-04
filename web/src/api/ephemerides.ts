@@ -167,3 +167,75 @@ export async function rebuildEphemerides(): Promise<{
   if (body.code !== 0 || !body.data) throw new Error(body.msg || '扫描入库失败')
   return body.data
 }
+
+/* --------------------- G1 星历版本归档 --------------------- */
+
+export interface EphVersion {
+  id: number
+  norad: string
+  format: 'ITC' | 'OCM'
+  /** upload=管理页上传 / scan=rebuild 扫描 */
+  source: string
+  /** 版本文件相对路径（versions/…/<sha前16>.txt.gz） */
+  file: string
+  sha256: string
+  bytes: number
+  rawBytes: number
+  publishedMs: number
+  uploadedBy: string
+  /** 软删时间戳 ms；null=未删 */
+  deletedAt: number | null
+  createdAt: string
+}
+
+export interface EphVersionListData {
+  items: EphVersion[]
+  total: number
+  page: number
+  size: number
+  totalPages: number
+}
+
+/** 版本历史分页（append 账本；默认只列未软删，includeDeleted 连同软删行返回） */
+export function listEphemerisVersions(params?: {
+  norad?: string
+  format?: 'ITC' | 'OCM'
+  page?: number
+  size?: number
+  includeDeleted?: boolean
+}) {
+  const qs = new URLSearchParams()
+  if (params?.norad) qs.set('norad', params.norad)
+  if (params?.format) qs.set('format', params.format)
+  if (params?.page != null) qs.set('page', String(params.page))
+  if (params?.size != null) qs.set('size', String(params.size))
+  if (params?.includeDeleted) qs.set('includeDeleted', '1')
+  const qsStr = qs.toString()
+  return getJson<EphVersionListData>(`/cgi/ephemerides/versions${qsStr ? '?' + qsStr : ''}`)
+}
+
+/** 按版本回放星历全文（gunzip 文本，审计/比对用） */
+export async function fetchEphemerisVersionContent(id: number): Promise<string> {
+  const res = await fetch(`/cgi/ephemerides/versions/${id}/content`)
+  if (!res.ok) throw new Error(`HTTP ${res.status}`)
+  const ct = res.headers.get('content-type') || ''
+  if (ct.includes('application/json')) {
+    const body = (await res.json()) as ApiWrap<never>
+    throw new Error(body.msg || '读取版本失败')
+  }
+  return await res.text()
+}
+
+/** 软删版本（需登录；行与文件均保留，仅标记 deleted_at） */
+export async function softDeleteEphemerisVersion(id: number): Promise<void> {
+  const headers: Record<string, string> = {}
+  try {
+    const t = localStorage.getItem('osp-token')
+    if (t) headers.Authorization = `Bearer ${t}`
+  } catch { /* ignore */ }
+  const res = await fetch(`/cgi/ephemerides/versions/${id}`, { method: 'DELETE', headers })
+  if (!res.ok) {
+    const body = (await res.json().catch(() => null)) as ApiWrap<never> | null
+    throw new Error(body?.msg || `HTTP ${res.status}`)
+  }
+}
