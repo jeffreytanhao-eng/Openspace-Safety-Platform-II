@@ -239,3 +239,80 @@ export async function softDeleteEphemerisVersion(id: number): Promise<void> {
     throw new Error(body?.msg || `HTTP ${res.status}`)
   }
 }
+
+/* --------------------- G2 精度对比 --------------------- */
+
+export type AccuracyKind = 'ocm' | 'tle' | 'aoe'
+
+export interface AccuracySourceItem {
+  kind: AccuracyKind
+  id: string
+  name: string
+  label: string
+  epochMs: number
+  startMs: number
+  stopMs: number
+  points: number
+  stepSec: number
+}
+
+export interface AccuracyPoint {
+  tMs: number
+  radialKm: number
+  alongKm: number
+  crossKm: number
+  distKm: number
+}
+
+export interface AccuracyCompareResult {
+  norad: string
+  a: { kind: AccuracyKind; id: string; label: string; epochMs: number }
+  b: { kind: AccuracyKind; id: string; label: string; epochMs: number }
+  overlap: { startMs: number; stopMs: number }
+  samples: number
+  rms: {
+    radialKm: number
+    alongKm: number
+    crossKm: number
+    totalKm: number
+    maxKm: number
+    meanKm: number
+  }
+  points: AccuracyPoint[]
+  warnings: string[]
+}
+
+/** 某 NORAD 可参与精度对比的源（OCM 星历 + 系统 TLE + AOE），需登录 */
+export async function fetchAccuracySources(norad: string): Promise<AccuracySourceItem[]> {
+  const headers: Record<string, string> = {}
+  try {
+    const t = localStorage.getItem('osp-token')
+    if (t) headers.Authorization = `Bearer ${t}`
+  } catch { /* ignore */ }
+  const res = await fetch(`/cgi/ephemerides/accuracy/sources?norad=${encodeURIComponent(norad)}`, { headers })
+  const body = (await res.json().catch(() => null)) as ApiWrap<{ sources: AccuracySourceItem[] }> | null
+  if (!res.ok || !body || body.code !== 0 || !body.data) throw new Error(body?.msg || `HTTP ${res.status}`)
+  return body.data.sources
+}
+
+/** 两源 RTN 残差对比（需登录），无重叠时段 / 数据不足时抛业务错误 */
+export async function postAccuracyCompare(payload: {
+  norad: string
+  a: { kind: AccuracyKind; id?: string }
+  b: { kind: AccuracyKind; id?: string }
+  maxPoints?: number
+}): Promise<AccuracyCompareResult> {
+  const headers: Record<string, string> = { 'Content-Type': 'application/json' }
+  try {
+    const t = localStorage.getItem('osp-token')
+    if (t) headers.Authorization = `Bearer ${t}`
+  } catch { /* ignore */ }
+  const res = await fetch('/cgi/ephemerides/accuracy/compare', {
+    method: 'POST',
+    headers,
+    body: JSON.stringify(payload)
+  })
+  const body = (await res.json().catch(() => null)) as ApiWrap<AccuracyCompareResult> | null
+  if (!res.ok || !body || body.code !== 0 || !body.data) throw new Error(body?.msg || `HTTP ${res.status}`)
+  return body.data
+}

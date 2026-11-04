@@ -17,6 +17,7 @@ import {
   softDeleteVersionDb
 } from '../ephem/ephemDb.js'
 import { EPH_ROOT, scanAndIngest, ingestUploadFile } from '../ephem/ingest.js'
+import { compareSources, listAccuracySources } from '../services/accuracyCompare.js'
 import { requireAuth } from './auth.js'
 
 const router = Router()
@@ -334,6 +335,65 @@ router.delete('/ephemerides/versions/:id', requireAuth, async (req: Request, res
     res.json(ok({ id, deletedAt: Date.now() }))
   } catch (e) {
     res.status(500).json(fail(500, (e as Error).message || '软删版本失败'))
+  }
+})
+
+/* --------------------- G2 精度对比 --------------------- */
+
+/**
+ * GET /cgi/ephemerides/accuracy/sources?norad=38117
+ * 列出该 NORAD 可参与精度对比的源：OCM 星历（ephemeris）+ 系统 TLE + AOE 历算。
+ */
+router.get('/ephemerides/accuracy/sources', requireAuth, async (req: Request, res: Response) => {
+  if (!(await ephemDbUp())) {
+    res.status(503).json(fail(503, '数据库不可用：精度对比需要 MySQL'))
+    return
+  }
+  try {
+    const sources = await listAccuracySources(String(req.query.norad || ''))
+    res.json(ok({ norad: String(req.query.norad || ''), sources }))
+  } catch (e) {
+    res.status(500).json(fail(500, (e as Error).message || '查询对比源失败'))
+  }
+})
+
+/**
+ * POST /cgi/ephemerides/accuracy/compare
+ * body: { norad, a: {kind:'ocm'|'tle'|'aoe', id?}, b: {...}, maxPoints? }
+ * 重叠时段 RTN 残差：radial/along/cross RMS + 总 RMS + 最大/平均偏差 + 抽稀残差点列。
+ */
+router.post('/ephemerides/accuracy/compare', requireAuth, async (req: Request, res: Response) => {
+  if (!(await ephemDbUp())) {
+    res.status(503).json(fail(503, '数据库不可用：精度对比需要 MySQL'))
+    return
+  }
+  const body = req.body as {
+    norad?: string | number
+    a?: { kind?: string; id?: string }
+    b?: { kind?: string; id?: string }
+    maxPoints?: number
+  }
+  const norad = String(body.norad || '')
+  if (!/^\d{1,6}$/.test(norad)) {
+    res.status(400).json(fail(400, '缺少有效的 NORAD 编号'))
+    return
+  }
+  const kinds = ['ocm', 'tle', 'aoe']
+  const descOf = (d?: { kind?: string; id?: string }) => {
+    const kind = kinds.includes(String(d?.kind)) ? (d!.kind as 'ocm' | 'tle' | 'aoe') : null
+    return kind ? { kind, id: d?.id } : null
+  }
+  const a = descOf(body.a)
+  const b = descOf(body.b)
+  if (!a || !b) {
+    res.status(400).json(fail(400, '请选择两个对比源（kind = ocm | tle | aoe）'))
+    return
+  }
+  try {
+    const r = await compareSources(norad, a, b, Number(body.maxPoints) || 240)
+    res.json(ok(r))
+  } catch (e) {
+    res.status(422).json(fail(422, (e as Error).message || '精度对比计算失败'))
   }
 })
 

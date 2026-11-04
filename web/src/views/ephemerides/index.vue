@@ -9,8 +9,13 @@ import {
   rebuildEphemerides,
   listEphemerisVersions,
   softDeleteEphemerisVersion,
+  fetchAccuracySources,
+  postAccuracyCompare,
   type EphListItem,
-  type EphVersion
+  type EphVersion,
+  type AccuracySourceItem,
+  type AccuracyCompareResult,
+  type AccuracyKind
 } from '@/api/ephemerides'
 import { parseEphemeris } from '@/views/situation/ephem/parse'
 import {
@@ -672,6 +677,7 @@ watch(selected, () => {
   verPage.value = 1
   verMsg.value = ''
   void fetchVersions()
+  void fetchAccSources()
 })
 
 watch(verPage, () => {
@@ -698,6 +704,136 @@ async function delVer(v: EphVersion) {
   } finally {
     verBusyId.value = 0
   }
+}
+
+/* ---------------- G2 精度对比（选中 OCM vs TLE/AOE 的重叠时段 RTN 残差） ---------------- */
+
+const accLoading = ref(false)
+const accErr = ref('')
+const accSources = ref<AccuracySourceItem[]>([])
+/** 源 B 下拉 key：`${kind}:${id}` */
+const accBSel = ref('')
+const accResult = ref<AccuracyCompareResult | null>(null)
+const accBusy = ref(false)
+let accSeq = 0
+
+/** 只有服务端 OCM 星历可作基准源 A（本机导入 / ITC 暂不支持） */
+const accAvailable = computed(
+  () => !!selected.value && selected.value.format === 'OCM' && /^\d+$/.test(selected.value.norad)
+)
+
+function accKey(s: AccuracySourceItem): string {
+  return `${s.kind}:${s.id}`
+}
+
+function parseAccKey(key: string): { kind: AccuracyKind; id?: string } | null {
+  const i = key.indexOf(':')
+  if (i <= 0) return null
+  const kind = key.slice(0, i) as AccuracyKind
+  const id = key.slice(i + 1)
+  if (!['ocm', 'tle', 'aoe'].includes(kind)) return null
+  return { kind, id: kind === 'ocm' ? id : undefined }
+}
+
+/** 拉取该 NORAD 的可用对比源；默认源 B 优先系统 TLE，其次 AOE，再其他 OCM */
+async function fetchAccSources() {
+  accResult.value = null
+  accErr.value = ''
+  const row = selected.value
+  if (!accAvailable.value || !row) {
+    accSources.value = []
+    accBSel.value = ''
+    return
+  }
+  const seq = ++accSeq
+  accLoading.value = true
+  try {
+    const list = await fetchAccuracySources(row.norad)
+    if (seq !== accSeq) return
+    accSources.value = list
+    const pick =
+      list.find((s) => s.kind === 'tle') ||
+      list.find((s) => s.kind === 'aoe') ||
+      list.find((s) => s.kind === 'ocm' && s.id !== row.id) ||
+      list[0]
+    accBSel.value = pick ? accKey(pick) : ''
+    if (!list.length) accErr.value = t('acc.noSources')
+  } catch (e) {
+    if (seq !== accSeq) return
+    accSources.value = []
+    accBSel.value = ''
+    accErr.value = (e as Error)?.message || '载入对比源失败'
+  } finally {
+    if (seq === accSeq) accLoading.value = false
+  }
+}
+
+async function runCompare() {
+  const row = selected.value
+  if (!row || accBusy.value) return
+  const b = parseAccKey(accBSel.value)
+  if (!b) {
+    accErr.value = t('acc.noSources')
+    return
+  }
+  accBusy.value = true
+  accErr.value = ''
+  try {
+    accResult.value = await postAccuracyCompare({ norad: row.norad, a: { kind: 'ocm', id: row.id }, b })
+  } catch (e) {
+    accErr.value = (e as Error)?.message || '对比计算失败'
+    accResult.value = null
+  } finally {
+    accBusy.value = false
+  }
+}
+
+/** RMS 展示：<1 km 用 m，否则 km */
+function fmtKm(km: number): string {
+  if (!Number.isFinite(km)) return '—'
+  if (Math.abs(km) < 1) return `${(km * 1000).toFixed(1)} m`
+  return `${km.toFixed(3)} km`
+}
+
+/** CSV 完整时间戳（含年份，UTC） */
+function accIso(ms: number): string {
+  return new Date(ms).toISOString().replace('T', ' ').replace(/\.\d+Z$/, 'Z')
+}
+
+/** 导出对比 CSV（BOM + 注释头摘要 + 逐点残差，复用 H1 事件包同套路） */
+function downloadAccCsv() {
+  const r = accResult.value
+  if (!r) return
+  const lines: string[] = []
+  lines.push('# Openspace Safety · G2 精度对比（RTN 残差摘要）')
+  lines.push('# 免责声明：RTN 残差由开源 SGP4/OCM 解析核计算，仅供作业参考，非认证精度评定产品。')
+  lines.push(`# NORAD: ${r.norad}`)
+  lines.push(`# A(基准): ${r.a.kind.toUpperCase()} ${r.a.label} epoch=${r.a.epochMs ? accIso(r.a.epochMs) : 'NA'}`)
+  lines.push(`# B: ${r.b.kind.toUpperCase()} ${r.b.label} epoch=${r.b.epochMs ? accIso(r.b.epochMs) : 'NA'}`)
+  lines.push(`# Overlap(UTC): ${accIso(r.overlap.startMs)} -> ${accIso(r.overlap.stopMs)}`)
+  lines.push(`# Samples: ${r.samples}`)
+  lines.push(
+    `# RMS(km): radial=${r.rms.radialKm.toExponential(4)}, along=${r.rms.alongKm.toExponential(4)}, cross=${r.rms.crossKm.toExponential(4)}, total=${r.rms.totalKm.toExponential(4)}, max=${r.rms.maxKm.toExponential(4)}, mean=${r.rms.meanKm.toExponential(4)}`
+  )
+  if (r.warnings.length) {
+    for (const w of r.warnings) lines.push(`# Warning: ${w}`)
+  }
+  lines.push('# t(UTC),radial_km,along_km,cross_km,dist_km')
+  for (const p of r.points) {
+    lines.push(
+      `${accIso(p.tMs)},${p.radialKm.toExponential(6)},${p.alongKm.toExponential(6)},${p.crossKm.toExponential(6)},${p.distKm.toExponential(6)}`
+    )
+  }
+  const csv = '\uFEFF' + lines.join('\r\n') + '\r\n'
+  const name = `OSP-Accuracy-${r.norad}-${r.a.kind}x${r.b.kind}-${new Date(r.overlap.startMs).toISOString().slice(0, 10)}.csv`
+  const blob = new Blob([csv], { type: 'text/csv;charset=utf-8' })
+  const a = document.createElement('a')
+  a.href = URL.createObjectURL(blob)
+  a.download = name
+  document.body.appendChild(a)
+  a.click()
+  a.remove()
+  setTimeout(() => URL.revokeObjectURL(a.href), 4000)
 }
 
 onMounted(() => {
@@ -888,6 +1024,48 @@ onMounted(() => {
             </template>
             <p v-else class="ver-none">本机导入星历无服务端版本归档</p>
             <p v-if="verMsg" class="ver-msg">{{ verMsg }}</p>
+          </div>
+
+          <!-- G2 精度对比：选中 OCM 作基准 A，与 TLE/AOE/另一份 OCM 做重叠时段 RTN 残差 -->
+          <div class="acc-block">
+            <div class="ver-head">
+              <span class="acc-title">{{ t('acc.title') }}</span>
+              <span class="acc-sub">{{ t('acc.sub') }}</span>
+            </div>
+            <p v-if="!accAvailable" class="ver-none">{{ t('acc.needOcm') }}</p>
+            <template v-else>
+              <div class="acc-form">
+                <span class="acc-a" :title="selected?.name">{{ t('acc.baseline') }}: OCM {{ selected?.name }}</span>
+                <span class="acc-vs">{{ t('acc.vs') }}</span>
+                <select v-model="accBSel" class="acc-select" :disabled="accLoading || !accSources.length">
+                  <option v-if="!accSources.length" value="">—</option>
+                  <option v-for="s in accSources" :key="accKey(s)" :value="accKey(s)">{{ s.label }}</option>
+                </select>
+                <button type="button" class="ver-btn acc-run" :disabled="accBusy || !accBSel" @click="runCompare">
+                  {{ accBusy ? t('acc.running') : t('acc.run') }}
+                </button>
+              </div>
+              <p v-if="accLoading && !accResult" class="ver-none">{{ t('acc.running') }}</p>
+              <p v-else-if="accErr" class="ver-err">{{ accErr }}</p>
+              <template v-else-if="accResult">
+                <div class="acc-meta">
+                  <span>{{ t('acc.overlap') }}：<span class="mono">{{ accIso(accResult.overlap.startMs) }} → {{ accIso(accResult.overlap.stopMs) }}</span></span>
+                  <span>{{ t('acc.samples') }}：{{ accResult.samples }}</span>
+                </div>
+                <div class="acc-kpis">
+                  <div class="acc-kpi"><span>{{ t('acc.rmsR') }}</span><b>{{ fmtKm(accResult.rms.radialKm) }}</b></div>
+                  <div class="acc-kpi"><span>{{ t('acc.rmsT') }}</span><b>{{ fmtKm(accResult.rms.alongKm) }}</b></div>
+                  <div class="acc-kpi"><span>{{ t('acc.rmsN') }}</span><b>{{ fmtKm(accResult.rms.crossKm) }}</b></div>
+                  <div class="acc-kpi"><span>{{ t('acc.rmsTotal') }}</span><b>{{ fmtKm(accResult.rms.totalKm) }}</b></div>
+                  <div class="acc-kpi"><span>{{ t('acc.max') }}</span><b>{{ fmtKm(accResult.rms.maxKm) }}</b></div>
+                  <div class="acc-kpi"><span>{{ t('acc.mean') }}</span><b>{{ fmtKm(accResult.rms.meanKm) }}</b></div>
+                </div>
+                <p v-for="(w, i) in accResult.warnings" :key="i" class="acc-warn">{{ w }}</p>
+                <button type="button" class="ver-btn" :disabled="accBusy" @click="downloadAccCsv">{{ t('acc.csv') }}</button>
+                <p class="acc-note">{{ t('acc.note') }}</p>
+              </template>
+              <p v-else class="ver-none">—</p>
+            </template>
           </div>
 
           <div class="actions-row">
@@ -1094,6 +1272,36 @@ h1 { margin: 0; font-size: 16px; font-weight: 650; }
   color: var(--text-muted); font-size: 10px; line-height: 1; padding: 3px 7px; border-radius: 3px; cursor: pointer;
 }
 .ver-pager button:disabled { opacity: 0.4; cursor: default; }
+/* 精度对比（G2：青绿色调与版本历史蓝调区分） */
+.acc-block {
+  margin: 0 0 14px; border: 1px solid rgba(90, 200, 170, 0.45);
+  background: rgba(90, 200, 170, 0.06); padding: 10px 12px; border-radius: 6px;
+}
+.acc-title { font-size: 11px; color: rgba(120, 220, 190, 0.9); }
+.acc-sub { font-size: 10px; color: var(--text-dim); }
+.acc-form { display: flex; align-items: center; gap: 8px; margin-top: 8px; flex-wrap: wrap; }
+.acc-a {
+  font-size: 11px; color: var(--text); max-width: 320px;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.acc-vs { font-size: 10px; color: var(--text-dim); }
+.acc-select {
+  appearance: none; border: 1px solid var(--border); background: var(--bg-deep);
+  color: var(--text); font-size: 11px; padding: 4px 8px; border-radius: 4px; max-width: 300px;
+}
+.acc-select:disabled { opacity: 0.5; }
+.acc-run { border-color: rgba(90, 200, 170, 0.5); color: #7ce0c2; }
+.acc-meta { display: flex; gap: 14px; flex-wrap: wrap; margin: 10px 0 8px; font-size: 11px; color: var(--text-dim); }
+.acc-meta .mono { font-family: var(--mono); font-size: 10px; color: var(--text); }
+.acc-kpis { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 6px; }
+.acc-kpi {
+  border: 1px solid var(--border); background: var(--bg-deep); border-radius: 4px;
+  padding: 6px 8px; display: flex; flex-direction: column; gap: 3px; min-width: 0;
+}
+.acc-kpi span { font-size: 9px; color: var(--text-dim); white-space: nowrap; }
+.acc-kpi b { font-family: var(--mono); font-size: 11px; font-weight: 650; color: var(--text); white-space: nowrap; }
+.acc-warn { margin: 8px 0 0; font-size: 11px; color: var(--warn); }
+.acc-note { margin: 8px 0 0; font-size: 10px; color: var(--text-dim); line-height: 1.45; }
 .actions-row { margin-bottom: 10px; }
 .hint { margin: 8px 0 0; font-size: 11px; color: var(--text-dim); line-height: 1.45; }
 .msg { margin: 12px 0 0; font-size: 12px; color: var(--accent-strong); }
@@ -1102,5 +1310,6 @@ h1 { margin: 0; font-size: 16px; font-weight: 650; }
   .split { grid-template-columns: 1fr; }
   .kv { grid-template-columns: repeat(2, 1fr); }
   .kv .span2 { grid-column: 1 / -1; }
+  .acc-kpis { grid-template-columns: repeat(3, minmax(0, 1fr)); }
 }
 </style>
