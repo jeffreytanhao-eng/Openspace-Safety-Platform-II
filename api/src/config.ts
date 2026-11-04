@@ -37,7 +37,18 @@ export const config = {
     baseUrl: process.env.AOE_BASE_URL || 'https://spacemapper.cn'
   },
   /** 每日日更时刻（UTC，'M H * * *' 形式），默认每日 06:00 */
-  dailyFetchCron: process.env.DAILY_FETCH_CRON || '0 6 * * *'
+  dailyFetchCron: process.env.DAILY_FETCH_CRON || '0 6 * * *',
+  /** 日报生成/投递时刻（UTC，'M H * * *' 形式），默认每日 06:30（在日更之后） */
+  dailyReportCron: process.env.DAILY_REPORT_CRON || '30 6 * * *',
+  /** 邮件渠道 SMTP（H2 可选）：未配置时 email 渠道投递如实记 skipped */
+  smtp: {
+    host: process.env.SMTP_HOST || '',
+    port: num(process.env.SMTP_PORT, 587),
+    user: process.env.SMTP_USER || '',
+    pass: process.env.SMTP_PASS || '',
+    from: process.env.SMTP_FROM || process.env.SMTP_USER || '',
+    secure: process.env.SMTP_SECURE === '1' || process.env.SMTP_SECURE === 'true'
+  }
 }
 
 if (!process.env.JWT_SECRET) {

@@ -16,6 +16,7 @@ import screens from './screens.js'
 import events from './events.js'
 import ca from './ca.js'
 import cred from './cred.js'
+import notify from './notify.js'
 import { getDailyFetchStatus } from '../db/fetchDb.js'
 import { isDailyFetchRunning } from '../jobs/dailyFetch.js'
 
@@ -71,6 +72,9 @@ router.use(ca)
 
 // Epic C2: 客户自配数据凭证（内部 requireAuth + 组织隔离）
 router.use(cred)
+
+// Epic H2: 日报与通知（渠道 CRUD / 测试投递 / 投递审计 / 日报预览与手动出报）
+router.use(notify)
 
 // New catalog helpers (stats / paginated tles / cdms)
 router.use(catalog)

@@ -23,6 +23,21 @@ import {
   type OrgBatchRow,
   type CredProvider
 } from '@/api/cred'
+import {
+  listChannels,
+  createChannel,
+  updateChannel,
+  deleteChannel,
+  testChannel,
+  listDeliveries,
+  getLatestReport,
+  runReport,
+  type NotifyChannel,
+  type DeliveryRow,
+  type DailyReportPayload,
+  type ChannelKind,
+  type MinLevel
+} from '@/api/notify'
 
 const { t, isZh } = useI18n()
 const auth = useAuthStore()
@@ -87,6 +102,7 @@ async function load(): Promise<void> {
     applyDefaults(resp.defaults)
     needOrg.value = false
     void loadCred() // C2: 凭据区随页面加载（失败不影响 CA 面板）
+    void loadNotify() // H2: 通知区随页面加载
   } catch (e) {
     if (e instanceof AuthError && (e.httpStatus === 401 || e.httpStatus === 403)) needOrg.value = true
     else loadError.value = e instanceof Error ? e.message : String(e)
@@ -324,6 +340,172 @@ function fmtTime(s: string | null): string {
 function fmtDur(ms: number | null): string {
   if (ms === null) return '—'
   return ms >= 1000 ? `${(ms / 1000).toFixed(1)} s` : `${ms} ms`
+}
+
+/* ------------------------- 日报与通知（H2） ------------------------- */
+
+const notifyItems = ref<NotifyChannel[]>([])
+const notifyDeliveries = ref<DeliveryRow[]>([])
+const notifyReport = ref<{ report_date: string; scope: string; created_at: string; payload: DailyReportPayload | null } | null>(null)
+const notifySmtp = ref(false)
+const notifyFormOpen = ref(false)
+const notifyFormId = ref<number | null>(null) // null = 新增
+const notifyForm = reactive({
+  kind: 'webhook' as ChannelKind,
+  target: '',
+  secret: '',
+  min_level: 'yellow' as MinLevel,
+  daily: true,
+  changes: true,
+  enabled: true
+})
+const notifyBusy = reactive<Record<string, boolean>>({})
+const notifyMsg = ref('')
+const notifyErr = ref('')
+
+function nBusy(action: string): boolean {
+  return !!notifyBusy[action]
+}
+function clearNotifyHint(): void {
+  notifyMsg.value = ''
+  notifyErr.value = ''
+}
+
+async function loadNotify(): Promise<void> {
+  try {
+    const resp = await listChannels()
+    notifyItems.value = resp.items
+    notifySmtp.value = resp.smtp_configured
+    const dr = await listDeliveries(20)
+    notifyDeliveries.value = dr.deliveries
+    try {
+      notifyReport.value = await getLatestReport()
+    } catch {
+      notifyReport.value = null // 尚无日报
+    }
+  } catch {
+    /* 通知区加载失败不影响其他面板 */
+  }
+}
+
+function openChannelForm(id: number | null): void {
+  clearNotifyHint()
+  notifyFormId.value = id
+  notifyFormOpen.value = true
+  const ch = id === null ? null : notifyItems.value.find((c) => c.id === id) ?? null
+  notifyForm.kind = ch?.kind ?? 'webhook'
+  notifyForm.target = ''
+  notifyForm.secret = ''
+  notifyForm.min_level = ch?.min_level ?? 'yellow'
+  notifyForm.daily = ch ? ch.subscribe.includes('daily') : true
+  notifyForm.changes = ch ? ch.subscribe.includes('changes') : true
+  notifyForm.enabled = ch ? ch.enabled : true
+}
+
+async function onSaveChannel(): Promise<void> {
+  if (nBusy('save')) return
+  clearNotifyHint()
+  if (!notifyForm.target.trim()) {
+    notifyErr.value = t('notify.err.missing')
+    return
+  }
+  if (!notifyForm.daily && !notifyForm.changes) {
+    notifyErr.value = t('notify.err.subEmpty')
+    return
+  }
+  notifyBusy.save = true
+  try {
+    const input = {
+      kind: notifyForm.kind,
+      target: notifyForm.target.trim(),
+      min_level: notifyForm.min_level,
+      subscribe: [notifyForm.daily ? 'daily' : '', notifyForm.changes ? 'changes' : ''].filter(Boolean),
+      enabled: notifyForm.enabled
+    } as { kind: ChannelKind; target: string; min_level: MinLevel; subscribe: string[]; enabled: boolean; secret?: string }
+    // 编辑且不填密钥 = 保持不变；新增填了才带
+    if (notifyForm.kind === 'webhook' && notifyForm.secret) input.secret = notifyForm.secret
+    if (notifyFormId.value === null) await createChannel(input)
+    else await updateChannel(notifyFormId.value, input)
+    notifyFormOpen.value = false
+    notifyMsg.value = t('notify.saved')
+    await loadNotify()
+  } catch (e) {
+    notifyErr.value = e instanceof Error ? e.message : String(e)
+  } finally {
+    notifyBusy.save = false
+  }
+}
+
+async function onTestChannel(id: number): Promise<void> {
+  if (nBusy(`test:${id}`)) return
+  clearNotifyHint()
+  notifyBusy[`test:${id}`] = true
+  try {
+    const r = await testChannel(id)
+    if (r.status === 'success') notifyMsg.value = t('notify.testOk')
+    else if (r.status === 'skipped') notifyMsg.value = `${t('notify.testSkipped')}${r.error ? `：${r.error}` : ''}`
+    else notifyErr.value = `${t('notify.testFail')}${r.error ? `：${r.error}` : ''}`
+    await loadNotify()
+  } catch (e) {
+    notifyErr.value = e instanceof Error ? e.message : String(e)
+  } finally {
+    notifyBusy[`test:${id}`] = false
+  }
+}
+
+async function onDelChannel(id: number): Promise<void> {
+  if (nBusy(`del:${id}`)) return
+  if (!window.confirm(t('notify.delConfirm'))) return
+  clearNotifyHint()
+  notifyBusy[`del:${id}`] = true
+  try {
+    await deleteChannel(id)
+    notifyMsg.value = t('notify.deleted')
+    await loadNotify()
+  } catch (e) {
+    notifyErr.value = e instanceof Error ? e.message : String(e)
+  } finally {
+    notifyBusy[`del:${id}`] = false
+  }
+}
+
+async function onRunReport(): Promise<void> {
+  if (nBusy('run')) return
+  clearNotifyHint()
+  notifyBusy.run = true
+  try {
+    const r = await runReport()
+    notifyMsg.value = t('notify.runDone', { delivered: r.delivered, failed: r.failed, skipped: r.skipped })
+    await loadNotify()
+  } catch (e) {
+    notifyErr.value = e instanceof Error ? e.message : String(e)
+  } finally {
+    notifyBusy.run = false
+  }
+}
+
+/** 交付渠道视图：channel_id → 掩码标签 */
+function channelTag(id: number): string {
+  const ch = notifyItems.value.find((c) => c.id === id)
+  if (!ch) return `#${id}`
+  return ch.kind === 'webhook' ? `${t('notify.kind.webhook')} ${ch.target}` : `${t('notify.kind.email')} ${ch.target}`
+}
+
+const NOTIFY_LEVELS: Array<'red' | 'orange' | 'yellow' | 'low'> = ['red', 'orange', 'yellow', 'low']
+function lvOf(l: string): string {
+  return t(`notify.lv.${l}` as I18nKey)
+}
+function chgOf(c: string): string {
+  return t(`notify.ch.${c}` as I18nKey)
+}
+function pcFmt(pc: number | null): string {
+  return pc === null ? '—' : pc.toExponential(2)
+}
+function missFmt(m: number | null): string {
+  return m === null ? '—' : `${m.toFixed(2)} km`
+}
+function srcName(s: string): string {
+  return s === 'spacetrack_gp' ? 'Space-Track GP' : s === 'spacetrack_cdm' ? 'Space-Track CDM' : s === 'aoe' ? 'AOE' : s
 }
 </script>
 
@@ -659,6 +841,202 @@ function fmtDur(ms: number | null): string {
           <p v-if="credBatchesLoaded && !credBatches.length" class="dim bt-empty">{{ t('cred.batchesEmpty') }}</p>
         </div>
       </section>
+
+      <!-- 日报与通知（H2）：渠道管理 + 日报预览 + 投递审计 -->
+      <section class="panel">
+        <header class="panel-h">
+          <div>
+            <div class="h-title">{{ t('notify.title') }}</div>
+            <div class="h-sub">{{ t('notify.sub') }}<template v-if="!notifySmtp"> · {{ t('notify.smtpOff') }}</template></div>
+          </div>
+          <button v-if="canEdit" type="button" class="ghost" @click="openChannelForm(null)">{{ t('notify.add') }}</button>
+        </header>
+
+        <!-- 渠道卡片 -->
+        <div class="cred-cards">
+          <div v-for="c in notifyItems" :key="c.id" class="cred-card">
+            <div class="cred-head">
+              <div class="cred-name">
+                <span class="pname">{{ t(`notify.kind.${c.kind}` as I18nKey) }}</span>
+                <span class="badge" :class="c.enabled ? 'on' : 'off'">{{ c.enabled ? t('notify.enabledOn') : t('notify.enabledOff') }}</span>
+                <span class="dim mono">{{ c.subscribe.split(',').map((s) => t(`notify.sub.${s}` as I18nKey)).join(' + ') }}</span>
+              </div>
+              <div v-if="canEdit" class="cred-ops">
+                <button type="button" class="ghost" @click="openChannelForm(c.id)">{{ t('notify.edit') }}</button>
+                <button type="button" class="ghost" :disabled="nBusy(`test:${c.id}`)" @click="onTestChannel(c.id)">
+                  {{ nBusy(`test:${c.id}`) ? t('notify.testing') : t('notify.test') }}
+                </button>
+                <button type="button" class="ghost danger" :disabled="nBusy(`del:${c.id}`)" @click="onDelChannel(c.id)">{{ t('notify.del') }}</button>
+              </div>
+            </div>
+            <div class="cred-status">
+              <span class="mono">{{ t('notify.target') }}: {{ c.target }}</span>
+              <span>{{ t('notify.minLevel') }}: {{ lvOf(c.min_level) }}</span>
+              <span>{{ t('notify.lastOk') }}: {{ fmtTime(c.last_ok_at) }}</span>
+              <span v-if="c.last_error" class="errline">{{ t('notify.lastError') }}: {{ c.last_error }}</span>
+              <span class="dim">{{ t('notify.updatedAt') }}: {{ fmtTime(c.updated_at) }}（{{ c.created_by }}）</span>
+            </div>
+          </div>
+          <p v-if="!notifyItems.length" class="dim bt-empty">{{ t('notify.empty') }}</p>
+        </div>
+
+        <!-- 渠道表单（新增 / 编辑） -->
+        <div v-if="notifyFormOpen && canEdit" class="cred-form nform">
+          <label>
+            <span>{{ t('notify.f.kind') }}</span>
+            <select v-model="notifyForm.kind">
+              <option value="webhook">{{ t('notify.kind.webhook') }}</option>
+              <option value="email">{{ t('notify.kind.email') }}</option>
+            </select>
+          </label>
+          <label>
+            <span>{{ notifyForm.kind === 'webhook' ? t('notify.f.url') : t('notify.f.email') }}</span>
+            <input
+              v-model="notifyForm.target"
+              type="text"
+              :placeholder="notifyForm.kind === 'webhook' ? 'https://example.com/hook/…' : 'ops@example.com'"
+              autocomplete="off"
+              spellcheck="false"
+            />
+          </label>
+          <label v-if="notifyForm.kind === 'webhook'">
+            <span>{{ t('notify.f.secret') }}</span>
+            <input v-model="notifyForm.secret" type="password" autocomplete="new-password" :placeholder="t('notify.f.secretPh')" />
+          </label>
+          <label>
+            <span>{{ t('notify.minLevel') }}</span>
+            <select v-model="notifyForm.min_level">
+              <option value="yellow">{{ t('notify.lv.yellow') }}</option>
+              <option value="orange">{{ t('notify.lv.orange') }}</option>
+              <option value="red">{{ t('notify.lv.red') }}</option>
+            </select>
+          </label>
+          <label class="chk">
+            <span>{{ t('notify.subscribe') }}</span>
+            <span class="chk-group">
+              <label class="radio"><input v-model="notifyForm.daily" type="checkbox" /> {{ t('notify.sub.daily') }}</label>
+              <label class="radio"><input v-model="notifyForm.changes" type="checkbox" /> {{ t('notify.sub.changes') }}</label>
+            </span>
+          </label>
+          <label class="chk">
+            <span>{{ t('notify.enabled') }}</span>
+            <label class="radio"><input v-model="notifyForm.enabled" type="checkbox" /> {{ t('notify.enabledOn') }}</label>
+          </label>
+          <div class="form-ops">
+            <button type="button" class="primary" :disabled="nBusy('save')" @click="onSaveChannel">
+              {{ nBusy('save') ? t('notify.saving') : t('notify.save') }}
+            </button>
+            <button type="button" class="ghost" @click="notifyFormOpen = false; clearNotifyHint()">{{ t('notify.cancel') }}</button>
+          </div>
+        </div>
+
+        <p v-if="notifyMsg" class="ok-msg">{{ notifyMsg }}</p>
+        <p v-if="notifyErr" class="err">{{ notifyErr }}</p>
+
+        <!-- 最新日报预览 -->
+        <div class="rep-block">
+          <div class="bt-title rep-head">
+            <span>{{ t('notify.repTitle') }}</span>
+            <template v-if="notifyReport">
+              <span class="badge on">{{ notifyReport.report_date }}</span>
+              <span class="dim">{{ notifyReport.scope === 'managed' ? t('notify.repScope.managed') : t('notify.repScope.global') }} · {{ t('notify.repGenerated') }} {{ fmtTime(notifyReport.created_at) }}</span>
+            </template>
+            <button v-if="canEdit" type="button" class="ghost" :disabled="nBusy('run')" @click="onRunReport">
+              {{ nBusy('run') ? t('notify.repRunning') : t('notify.repRun') }}
+            </button>
+          </div>
+          <template v-if="notifyReport?.payload">
+            <div class="rep-kpis">
+              <span v-for="l in NOTIFY_LEVELS" :key="l" class="kpi" :class="`lv-${l}`">
+                <i>{{ lvOf(l) }}</i><b class="mono">{{ notifyReport.payload.events.counts[l] }}</b>
+              </span>
+            </div>
+
+            <div class="bt-title">{{ t('notify.changes') }}</div>
+            <div v-if="notifyReport.payload.level_changes.length" class="chg-list">
+              <div v-for="c in notifyReport.payload.level_changes.slice(0, 10)" :key="c.key" class="chg-item">
+                <span class="badge" :class="c.change === 'upgrade' || c.change === 'new' ? 'bad' : 'off'">{{ chgOf(c.change) }}</span>
+                <span class="mono">{{ c.names }}</span>
+                <span class="dim">{{ c.from ? `${lvOf(c.from)} → ${lvOf(c.to)}` : lvOf(c.to) }}</span>
+                <span class="dim mono" v-if="c.tca">TCA {{ c.tca.slice(0, 16).replace('T', ' ') }}</span>
+              </div>
+            </div>
+            <p v-else class="dim bt-empty">{{ t('notify.changesNone') }}</p>
+
+            <div class="bt-title">{{ t('notify.repTop') }}</div>
+            <div v-if="notifyReport.payload.events.top.length" class="tbl bt-tbl">
+              <table>
+                <thead>
+                  <tr>
+                    <th>{{ t('notify.col.level') }}</th>
+                    <th>{{ t('notify.col.event') }}</th>
+                    <th>{{ t('notify.col.tca') }}</th>
+                    <th>{{ t('notify.col.pc') }}</th>
+                    <th>{{ t('notify.col.miss') }}</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr v-for="e in notifyReport.payload.events.top" :key="e.key">
+                    <td><span class="lv-dot" :class="`lv-${e.level}`">{{ lvOf(e.level) }}</span></td>
+                    <td class="mono">{{ e.nameA || e.noradA }} × {{ e.nameB || e.noradB }}</td>
+                    <td class="mono">{{ e.tca.slice(0, 16).replace('T', ' ') }}</td>
+                    <td class="mono">{{ pcFmt(e.pc) }}</td>
+                    <td class="mono">{{ missFmt(e.missKm) }}</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+            <p v-else class="dim bt-empty">{{ t('notify.repTopEmpty') }}</p>
+
+            <div class="bt-title">{{ t('notify.srcTitle') }}</div>
+            <div class="src-list">
+              <span v-for="(s, k) in notifyReport.payload.data_sources" :key="k" class="src-item">
+                <b>{{ srcName(String(k)) }}</b>
+                <span class="badge" :class="s.status === 'success' ? 'on' : s.status === 'failed' ? 'bad' : 'off'">{{ s.status }}</span>
+                <span class="dim">{{ t('notify.lastOk') }} {{ s.last_success ? s.last_success.slice(0, 16).replace('T', ' ') : '—' }}</span>
+                <span class="dim mono">{{ s.total }} / +{{ s.inserted }}</span>
+              </span>
+            </div>
+          </template>
+          <p v-else class="dim bt-empty">{{ t('notify.repNone') }}</p>
+        </div>
+
+        <!-- 投递审计 -->
+        <div class="cred-batches">
+          <div class="bt-title">{{ t('notify.deliveriesTitle') }}</div>
+          <div class="tbl bt-tbl">
+            <table>
+              <thead>
+                <tr>
+                  <th>{{ t('notify.col.time') }}</th>
+                  <th>{{ t('notify.col.channel') }}</th>
+                  <th>{{ t('notify.col.kind') }}</th>
+                  <th>{{ t('notify.col.status') }}</th>
+                  <th>{{ t('notify.col.attempts') }}</th>
+                  <th>{{ t('notify.col.code') }}</th>
+                  <th>{{ t('notify.col.error') }}</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr v-for="d in notifyDeliveries" :key="d.id">
+                  <td class="mono">{{ fmtTime(d.created_at) }}</td>
+                  <td class="dim">{{ channelTag(d.channel_id) }}</td>
+                  <td>{{ t(`notify.dk.${d.kind}` as I18nKey) }}</td>
+                  <td>
+                    <span class="badge" :class="d.status === 'success' ? 'on' : d.status === 'failed' ? 'bad' : 'off'">
+                      {{ t(`notify.st.${d.status}` as I18nKey) }}
+                    </span>
+                  </td>
+                  <td class="mono">{{ d.attempts }}</td>
+                  <td class="mono">{{ d.status_code ?? '—' }}</td>
+                  <td class="dim">{{ d.error || '—' }}</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+          <p v-if="!notifyDeliveries.length" class="dim bt-empty">{{ t('notify.deliveriesEmpty') }}</p>
+        </div>
+      </section>
     </template>
   </div>
 </template>
@@ -860,4 +1238,66 @@ td:first-child { color: var(--text); font-weight: 600; white-space: nowrap; }
   td, th { white-space: normal; }
 }
 .dim { color: var(--text-dim); font-size: 10px; }
+
+/* 日报与通知（H2） */
+.nform {
+  margin: 10px 14px 0;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  align-items: flex-start;
+  .chk { display: flex; align-items: center; gap: 6px; }
+  .chk-group { display: inline-flex; gap: 10px; }
+  .form-ops { display: flex; gap: 8px; align-self: flex-end; }
+}
+.rep-block {
+  padding: 10px 14px 4px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.rep-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  button { margin-left: auto; }
+}
+.rep-kpis { display: flex; gap: 8px; flex-wrap: wrap; }
+.kpi {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 6px;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  padding: 5px 10px;
+  font-size: 11px;
+  i { font-style: normal; color: var(--text-dim); }
+  b { font-size: 14px; color: var(--text); }
+}
+.kpi.lv-red b { color: var(--danger, #dc5a5a); }
+.kpi.lv-orange b { color: #e08c3a; }
+.kpi.lv-yellow b { color: #d4b13f; }
+.kpi.lv-low b { color: var(--text-dim); }
+.lv-dot { white-space: nowrap; }
+.lv-dot.lv-red, .chg-item .badge.bad { color: var(--danger, #dc5a5a); }
+.chg-list { display: flex; flex-direction: column; gap: 4px; }
+.chg-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  font-size: 11px;
+  padding: 3px 0;
+  border-bottom: 1px dashed var(--border);
+}
+.src-list { display: flex; flex-direction: column; gap: 4px; }
+.src-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 11px;
+  b { color: var(--text); }
+}
+.badge.bad { color: var(--danger); border-color: rgba(220, 90, 90, 0.4); }
 </style>

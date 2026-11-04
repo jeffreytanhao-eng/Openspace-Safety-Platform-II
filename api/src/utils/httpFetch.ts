@@ -10,6 +10,8 @@ export interface FetchOptions {
   timeoutMs?: number
   /** 每次请求前调用，用于附加会话 cookie */
   cookie?: () => string
+  /** 每轮尝试开始时回调（从 1 计），用于记录实际尝试次数 */
+  onAttempt?: (n: number) => void
 }
 
 function sleep(ms: number): Promise<void> {
@@ -36,6 +38,7 @@ export async function fetchWithRetry(url: string, opts: FetchOptions = {}): Prom
   const retries = opts.retries ?? 3
   let lastErr: unknown = null
   for (let attempt = 0; attempt <= retries; attempt++) {
+    opts.onAttempt?.(attempt + 1)
     try {
       const res = await once(url, opts)
       if (res.ok) return res

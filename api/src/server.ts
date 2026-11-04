@@ -6,7 +6,8 @@ import { ensureEphemSchema, countRowsDb } from './ephem/ephemDb.js'
 import { scanAndIngest, importFromIndexJson } from './ephem/ingest.js'
 import { ensureOrgSchema, ensurePlatformAdmin } from './db/orgDb.js'
 import { ensureFetchSchema } from './db/fetchDb.js'
-import { startDailyFetchScheduler } from './jobs/dailyFetch.js'
+import { startDailyFetchScheduler, parseDailyCron } from './jobs/dailyFetch.js'
+import { startDailyReportScheduler } from './jobs/dailyReport.js'
 
 const app = createApp()
 
@@ -23,6 +24,8 @@ app.listen(config.port, '0.0.0.0', () => {
     // 日更批次/版本化快照表（Epic C1）+ 每日调度器
     if (await ensureFetchSchema()) startDailyFetchScheduler()
     else console.warn('[fetch] schema not ready, daily-fetch scheduler not started')
+    // 日报调度器（Epic H2）：复用 'M H * * *' 解析；通知表由路由/job 内幂等建表
+    startDailyReportScheduler(parseDailyCron, config.dailyReportCron)
     // 平台超管 bootstrap（Epic B1）：凭据来自 .env，首次启动创建
     try {
       if (config.platformAdmin.password) {

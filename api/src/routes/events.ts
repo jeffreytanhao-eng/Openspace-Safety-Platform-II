@@ -88,7 +88,7 @@ function levelOfPc(pc: number | null): EventLevel {
 
 const LEVEL_RANK: Record<EventLevel, number> = { red: 3, orange: 2, yellow: 1, low: 0 }
 
-interface CdmRow extends RowDataPacket {
+export interface CdmRow extends RowDataPacket {
   id: number
   cdm_id: string | null
   creation_date: Date | string | null
@@ -142,8 +142,8 @@ function toIso(d: Date | string | null): string {
   return d instanceof Date ? d.toISOString() : new Date(d).toISOString()
 }
 
-/** 把 sat_cdm 行聚合成事件列表（gap-island 聚类） */
-function aggregateEvents(rows: CdmRow[]): ConjunctionEvent[] {
+/** 把 sat_cdm 行聚合成事件列表（gap-island 聚类）；日报 job（H2）复用同口径 */
+export function aggregateEvents(rows: CdmRow[]): ConjunctionEvent[] {
   interface Pair {
     a: number
     b: number
