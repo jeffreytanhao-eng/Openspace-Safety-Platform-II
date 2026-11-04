@@ -15,6 +15,16 @@ import {
   type LookupResult
 } from '@/api/objects'
 import { listLocalEphemerides } from '@/api/ephemerides'
+import {
+  listManeuvers,
+  createManeuver,
+  updateManeuver,
+  deleteManeuver,
+  startRescreen,
+  getRescreen,
+  type ManeuverPlan,
+  type RescreenResult
+} from '@/api/maneuvers'
 import { AuthError } from '@/api/auth'
 
 const { t } = useI18n()
@@ -153,9 +163,18 @@ async function openDetail(o: ManagedObject) {
     detailLoading.value = false
   }
   await loadBindList()
+  await loadManeuvers()
 }
 function closeDetail() {
   selected.value = null
+  mvFormOpen.value = false
+  maneuvers.value = []
+  mvResults.value = {}
+  mvShowResult.value = {}
+  if (mvTimer) {
+    clearTimeout(mvTimer)
+    mvTimer = null
+  }
 }
 
 async function saveDetail() {
@@ -253,6 +272,157 @@ async function doUnbind(ephemId: string) {
   } catch (e) {
     bindMsg.value = e instanceof Error ? e.message : String(e)
   }
+}
+
+/* ---- 机动计划（Epic J 占位：候选管理 + 机动后 10 天防新交会再筛查） ---- */
+const maneuvers = ref<ManeuverPlan[]>([])
+const mvLoading = ref(false)
+const mvMsg = ref('')
+const mvFormOpen = ref(false)
+const mvForm = ref({ windowStart: '', windowEnd: '', dvMs: '', direction: '', notes: '' })
+const mvSubmitting = ref(false)
+const mvBusyId = ref(0)
+const mvResults = ref<Record<number, RescreenResult | null>>({})
+const mvShowResult = ref<Record<number, boolean>>({})
+let mvTimer: ReturnType<typeof setTimeout> | null = null
+
+/** datetime-local 本地时间串（+ms 偏移） */
+function localInput(d: Date): string {
+  const p = (n: number): string => String(n).padStart(2, '0')
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}T${p(d.getHours())}:${p(d.getMinutes())}`
+}
+
+function resetMvForm() {
+  const now = Date.now()
+  mvForm.value = {
+    windowStart: localInput(new Date(now + 3600_000)),
+    windowEnd: localInput(new Date(now + 3 * 3600_000)),
+    dvMs: '',
+    direction: '',
+    notes: ''
+  }
+}
+
+async function loadManeuvers() {
+  if (!selected.value) return
+  mvLoading.value = true
+  mvMsg.value = ''
+  try {
+    const d = await listManeuvers(selected.value.id)
+    maneuvers.value = d.items
+    // 有进行中的再筛查则恢复轮询
+    for (const m of maneuvers.value) {
+      if (m.rescreen_job_id && mvResults.value[m.id] === undefined) {
+        void pollRescreen(m.id)
+      }
+    }
+  } catch (e) {
+    mvMsg.value = e instanceof Error ? e.message : String(e)
+  } finally {
+    mvLoading.value = false
+  }
+}
+
+function openMvForm() {
+  mvFormOpen.value = true
+  resetMvForm()
+}
+
+async function submitMv() {
+  if (!selected.value) return
+  if (!mvForm.value.windowStart || !mvForm.value.windowEnd) {
+    mvMsg.value = t('mv.errWindow')
+    return
+  }
+  mvSubmitting.value = true
+  mvMsg.value = ''
+  try {
+    await createManeuver(selected.value.id, {
+      windowStart: new Date(mvForm.value.windowStart).toISOString(),
+      windowEnd: new Date(mvForm.value.windowEnd).toISOString(),
+      dvMs: mvForm.value.dvMs === '' ? null : Number(mvForm.value.dvMs),
+      direction: mvForm.value.direction,
+      notes: mvForm.value.notes.trim() || null
+    })
+    mvFormOpen.value = false
+    await loadManeuvers()
+  } catch (e) {
+    mvMsg.value = e instanceof Error ? e.message : String(e)
+  } finally {
+    mvSubmitting.value = false
+  }
+}
+
+async function setStatus(m: ManeuverPlan, status: ManeuverPlan['status']) {
+  if (status === 'cancelled' && !window.confirm(t('mv.cancelConfirm'))) return
+  mvBusyId.value = m.id
+  mvMsg.value = ''
+  try {
+    await updateManeuver(m.id, { status })
+    await loadManeuvers()
+  } catch (e) {
+    mvMsg.value = e instanceof Error ? e.message : String(e)
+  } finally {
+    mvBusyId.value = 0
+  }
+}
+
+async function removeMv(m: ManeuverPlan) {
+  if (!window.confirm(t('mv.deleteConfirm'))) return
+  mvBusyId.value = m.id
+  mvMsg.value = ''
+  try {
+    await deleteManeuver(m.id)
+    delete mvResults.value[m.id]
+    await loadManeuvers()
+  } catch (e) {
+    mvMsg.value = e instanceof Error ? e.message : String(e)
+  } finally {
+    mvBusyId.value = 0
+  }
+}
+
+/** 发起机动后再筛查（异步 job，立即进入轮询展示进度） */
+async function doRescreen(m: ManeuverPlan) {
+  mvBusyId.value = m.id
+  mvMsg.value = ''
+  try {
+    await startRescreen(m.id)
+    mvShowResult.value[m.id] = true
+    mvResults.value[m.id] = null
+    await loadManeuvers()
+    void pollRescreen(m.id)
+  } catch (e) {
+    mvMsg.value = e instanceof Error ? e.message : String(e)
+  } finally {
+    mvBusyId.value = 0
+  }
+}
+
+/** 轮询再筛查结果直至终态（3s 间隔，展示排队/计算进度） */
+async function pollRescreen(maneuverId: number) {
+  if (mvTimer) clearTimeout(mvTimer)
+  try {
+    const d = await getRescreen(maneuverId)
+    mvResults.value[maneuverId] = d
+    if (d.job.status === 'queued' || d.job.status === 'running') {
+      mvTimer = setTimeout(() => void pollRescreen(maneuverId), 3000)
+    }
+  } catch (e) {
+    mvMsg.value = e instanceof Error ? e.message : String(e)
+  }
+}
+
+function toggleResult(m: ManeuverPlan) {
+  mvShowResult.value[m.id] = !mvShowResult.value[m.id]
+  if (mvShowResult.value[m.id] && mvResults.value[m.id] === undefined) {
+    void pollRescreen(m.id)
+  }
+}
+
+function fmtPcExp(v: number | null): string {
+  if (v == null) return '—'
+  return v === 0 ? '0' : v.toExponential(2)
 }
 </script>
 
@@ -412,6 +582,101 @@ async function doUnbind(ephemId: string) {
             <div v-if="bindMsg" class="hint err">{{ bindMsg }}</div>
           </div>
 
+          <div class="block">
+            <div class="bt-row">
+              <div class="bt">{{ t('mv.title') }}</div>
+              <button type="button" class="mini" @click="mvFormOpen ? (mvFormOpen = false) : openMvForm()">
+                {{ mvFormOpen ? t('obj.close') : t('mv.add') }}
+              </button>
+            </div>
+            <p class="mv-hint">{{ t('mv.hint') }}</p>
+
+            <div v-if="mvFormOpen" class="form mv-form">
+              <label><span>{{ t('mv.winStart') }}</span><input v-model="mvForm.windowStart" type="datetime-local" /></label>
+              <label><span>{{ t('mv.winEnd') }}</span><input v-model="mvForm.windowEnd" type="datetime-local" /></label>
+              <label><span>{{ t('mv.dv') }}</span><input v-model="mvForm.dvMs" type="number" min="0" step="any" /></label>
+              <label><span>{{ t('mv.direction') }}</span>
+                <select v-model="mvForm.direction">
+                  <option value="">—</option>
+                  <option value="prograde">{{ t('mv.dir.prograde') }}</option>
+                  <option value="retrograde">{{ t('mv.dir.retrograde') }}</option>
+                  <option value="radial">{{ t('mv.dir.radial') }}</option>
+                  <option value="cross_track">{{ t('mv.dir.cross_track') }}</option>
+                  <option value="other">{{ t('mv.dir.other') }}</option>
+                </select>
+              </label>
+              <label><span>{{ t('mv.notes') }}</span><input v-model="mvForm.notes" type="text" maxlength="500" /></label>
+              <button type="button" class="btn primary" :disabled="mvSubmitting" @click="submitMv">
+                {{ mvSubmitting ? t('obj.saving') : t('mv.submit') }}
+              </button>
+            </div>
+
+            <div v-if="mvMsg" class="hint err">{{ mvMsg }}</div>
+            <div v-if="mvLoading" class="empty">{{ t('obj.loading') }}</div>
+            <ul v-else-if="maneuvers.length" class="mv-list">
+              <li v-for="m in maneuvers" :key="m.id" class="mv-item">
+                <div class="li-top">
+                  <span class="mv-status" :class="`st-${m.status}`">{{ t(`mv.status.${m.status}`) }}</span>
+                  <span class="meta">{{ fmtTime(m.window_start) }} → {{ fmtTime(m.window_end) }}</span>
+                </div>
+                <div class="mv-line">
+                  <span v-if="m.dv_m_s != null">ΔV {{ m.dv_m_s }} m/s</span>
+                  <span v-if="m.direction">· {{ t(`mv.dir.${m.direction}`) }}</span>
+                  <span v-if="m.event_key">· {{ t('mv.srcEvent') }} {{ m.event_level ? `[${m.event_level}] ` : '' }}{{ m.event_key }}</span>
+                </div>
+                <div v-if="m.notes" class="meta">{{ m.notes }}</div>
+                <div class="mv-actions">
+                  <button v-if="m.status === 'proposed'" type="button" class="mini" :disabled="mvBusyId === m.id" @click="setStatus(m, 'approved')">{{ t('mv.approve') }}</button>
+                  <button v-if="m.status === 'approved'" type="button" class="mini" :disabled="mvBusyId === m.id" @click="setStatus(m, 'executed')">{{ t('mv.execute') }}</button>
+                  <button v-if="m.status !== 'cancelled' && m.status !== 'executed'" type="button" class="mini" :disabled="mvBusyId === m.id" @click="setStatus(m, 'cancelled')">{{ t('mv.cancel') }}</button>
+                  <button type="button" class="mini" :disabled="mvBusyId === m.id || m.status === 'cancelled'" @click="doRescreen(m)">{{ t('mv.rescreen') }}</button>
+                  <button v-if="m.rescreen_job_id" type="button" class="mini" @click="toggleResult(m)">{{ mvShowResult[m.id] ? t('mv.hideResult') : t('mv.viewResult') }}</button>
+                  <button type="button" class="mini" :disabled="mvBusyId === m.id" @click="removeMv(m)">{{ t('mv.delete') }}</button>
+                </div>
+
+                <!-- 再筛查结果面板（排队/计算中自动轮询） -->
+                <div v-if="mvShowResult[m.id]" class="mv-res">
+                  <template v-if="mvResults[m.id] === undefined || mvResults[m.id] === null">
+                    <div class="meta">{{ t('mv.loading') }}</div>
+                  </template>
+                  <template v-else-if="mvResults[m.id]!.job.status === 'queued'">
+                    <div class="meta">{{ t('mv.jobQueued') }}</div>
+                  </template>
+                  <template v-else-if="mvResults[m.id]!.job.status === 'running'">
+                    <div class="meta">{{ t('mv.jobRunning') }} · {{ Math.round((Date.now() - new Date(mvResults[m.id]!.job.queued_at).getTime()) / 1000) }}s</div>
+                  </template>
+                  <template v-else-if="mvResults[m.id]!.job.status === 'failed'">
+                    <div class="meta err-text">{{ t('mv.jobFailed') }}: {{ mvResults[m.id]!.job.error_message }}</div>
+                  </template>
+                  <template v-else>
+                    <div class="mv-sum">
+                      <span>{{ t('mv.jobDone') }} · {{ mvResults[m.id]!.job.duration_ms }}ms</span>
+                      <span>{{ t('mv.summaryEvents') }} {{ mvResults[m.id]!.summary.n_events }}</span>
+                      <span>{{ t('mv.worstLevel') }}: {{ mvResults[m.id]!.summary.worst_level ? t(`scr.level.${mvResults[m.id]!.summary.worst_level}`) : '—' }}</span>
+                      <span>{{ t('mv.maxPc') }}: {{ fmtPcExp(mvResults[m.id]!.summary.max_pc) }}</span>
+                    </div>
+                    <table v-if="mvResults[m.id]!.events.length" class="mv-tbl">
+                      <thead>
+                        <tr><th>TCA</th><th>{{ t('mv.colSecondary') }}</th><th>Miss(km)</th><th>Pc</th><th>{{ t('mv.colLevel') }}</th></tr>
+                      </thead>
+                      <tbody>
+                        <tr v-for="ev in mvResults[m.id]!.events" :key="ev.id">
+                          <td class="mono">{{ fmtTime(ev.tca) }}</td>
+                          <td>{{ ev.secondary_name }} <span class="mono dim-text">{{ ev.secondary_norad }}</span></td>
+                          <td class="mono">{{ ev.miss_km.toFixed(2) }}</td>
+                          <td class="mono">{{ fmtPcExp(ev.pc) }}</td>
+                          <td><span class="lv" :class="`lv-${ev.level}`">{{ t(`scr.level.${ev.level}`) }}</span></td>
+                        </tr>
+                      </tbody>
+                    </table>
+                    <p v-else class="empty">{{ t('mv.noEvents') }}</p>
+                  </template>
+                </div>
+              </li>
+            </ul>
+            <p v-else class="empty">{{ t('mv.empty') }}</p>
+          </div>
+
           <div class="block actions">
             <RouterLink class="btn" :to="`/ephemerides?q=${selected.norad_id}`">{{ t('obj.openEphem') }}</RouterLink>
             <RouterLink class="btn" to="/conjunctions">{{ t('obj.relatedConj') }}</RouterLink>
@@ -540,6 +805,35 @@ li {
 .mini:hover { color: var(--text); background: var(--bg-hover); }
 .meta { font-size: 10px; color: var(--text-dim); }
 .empty { font-size: 12px; color: var(--text-dim); }
+
+/* Epic J 机动计划 */
+.bt-row { display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px; }
+.bt-row .bt { margin-bottom: 0; }
+.mv-hint { margin: 0 0 8px; font-size: 10px; line-height: 1.5; color: var(--text-dim); }
+.mv-form { border: 1px dashed var(--border); border-radius: 6px; padding: 10px; }
+.mv-list { margin: 0; padding: 0; list-style: none; }
+.mv-item { padding: 9px 0; border-bottom: 1px solid var(--border); display: flex; flex-direction: column; gap: 4px; }
+.mv-status {
+  font-size: 10px; padding: 1px 7px; border-radius: 3px; border: 1px solid var(--border);
+  letter-spacing: 0.03em;
+}
+.mv-status.st-proposed { color: var(--text-muted); }
+.mv-status.st-approved { color: var(--warn); border-color: rgba(196, 146, 74, 0.45); }
+.mv-status.st-executed { color: var(--ok); border-color: rgba(90, 154, 120, 0.4); }
+.mv-status.st-cancelled { color: var(--text-dim); text-decoration: line-through; }
+.mv-line { font-size: 11px; color: var(--text-muted); display: flex; flex-wrap: wrap; gap: 4px; }
+.mv-actions { display: flex; flex-wrap: wrap; gap: 6px; }
+.mv-res { margin-top: 4px; background: var(--bg-panel-2); border: 1px solid var(--border); border-radius: 6px; padding: 8px; }
+.mv-sum { display: flex; flex-wrap: wrap; gap: 10px; font-size: 11px; color: var(--text-muted); margin-bottom: 6px; }
+.mv-tbl { width: 100%; border-collapse: collapse; font-size: 10px; }
+.mv-tbl th { text-align: left; color: var(--text-dim); padding: 4px 6px; border-bottom: 1px solid var(--border); }
+.mv-tbl td { padding: 4px 6px; border-bottom: 1px solid rgba(255, 255, 255, 0.04); color: var(--text-muted); }
+.err-text { color: var(--danger, #d38); }
+.dim-text { color: var(--text-dim); }
+.lv { font-size: 10px; padding: 0 5px; border-radius: 3px; border: 1px solid var(--border); }
+.lv-red { color: var(--danger, #d38); border-color: rgba(214, 84, 124, 0.45); }
+.lv-orange { color: var(--warn); border-color: rgba(196, 146, 74, 0.45); }
+.lv-yellow { color: var(--text-muted); }
 .bind-row { display: flex; gap: 8px; margin-top: 8px; }
 .bind-row select { flex: 1; }
 .actions { display: flex; flex-wrap: wrap; gap: 8px; }

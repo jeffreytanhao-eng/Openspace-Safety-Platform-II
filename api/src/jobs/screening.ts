@@ -208,10 +208,11 @@ function apsisFromTle(line1: string, line2: string): { perigeeKm: number; apogee
 /** 主星轨迹时间步长（与粗筛 Δt 同口径） */
 const PRIMARY_STEP_MS = 60_000
 
-/** 托管目标 → sat_tle TLE → SGP4 采样 EphTrack */
+/** 托管目标 → sat_tle TLE → SGP4 采样 EphTrack（startMs 缺省 = 当前时刻对齐分钟，Epic J 再筛查可显式指定） */
 async function loadPrimaryTracks(
   norads: Array<{ objectId: number; noradId: number; name: string }>,
-  windowH: number
+  windowH: number,
+  startMs?: number
 ): Promise<EphTrack[]> {
   if (!norads.length) return []
   const ids = norads.map((n) => n.noradId)
@@ -221,7 +222,8 @@ async function loadPrimaryTracks(
   )
   const byNorad = new Map(rows.map((r) => [Number(r.norad_id), r]))
   const n = Math.max(2, Math.floor((windowH * 3600_000) / PRIMARY_STEP_MS) + 1)
-  const startMs = Math.floor(Date.now() / PRIMARY_STEP_MS) * PRIMARY_STEP_MS
+  const sMs = startMs ?? Date.now()
+  const start = Math.floor(sMs / PRIMARY_STEP_MS) * PRIMARY_STEP_MS
   const tracks: EphTrack[] = []
   for (const p of norads) {
     const r = byNorad.get(p.noradId)
@@ -242,7 +244,7 @@ async function loadPrimaryTracks(
     const vv = new Float64Array(n * 3)
     let ok = true
     for (let i = 0; i < n; i++) {
-      const pv = propagateJ2000(rec, startMs + i * PRIMARY_STEP_MS)
+      const pv = propagateJ2000(rec, start + i * PRIMARY_STEP_MS)
       if (!pv) {
         ok = false
         break
@@ -260,7 +262,7 @@ async function loadPrimaryTracks(
       noradId: p.noradId,
       name: obj.name,
       createdMs: r.epoch.getTime(),
-      startMs,
+      startMs: start,
       stepMs: PRIMARY_STEP_MS,
       n,
       r: rv,
@@ -330,14 +332,30 @@ async function runJob(job: ScreenJobRow): Promise<void> {
   const hbrM = job.hbr_m
   const orgId = job.org_id
 
+  // Epic J 再筛查参数（params_json 扩展）：主星白名单 + 窗口起点；普通筛查两值为空
+  let primaryNorads: number[] = []
+  let startMs: number | undefined
+  try {
+    const p = job.params_json ? (JSON.parse(job.params_json) as { primaryNorads?: unknown; startMs?: unknown }) : null
+    if (Array.isArray(p?.primaryNorads)) {
+      primaryNorads = p!.primaryNorads!.map((x) => Number(x)).filter((x) => Number.isInteger(x) && x > 0)
+    }
+    if (p && Number.isFinite(Number(p.startMs)) && Number(p.startMs) > 0) startMs = Number(p.startMs)
+  } catch {
+    /* params 解析失败按普通筛查处理 */
+  }
+
   // 托管目标（当前 TLE 主星；绑定星历的主星通道在 G1/后续接入）
   const [objs] = await pool.query<Array<RowDataPacket & { id: number; norad_id: number; name: string }>>(
-    `SELECT id, norad_id, name FROM objects WHERE org_id = ? AND claim_status = 'claimed'`,
-    [orgId]
+    `SELECT id, norad_id, name FROM objects WHERE org_id = ? AND claim_status = 'claimed'${
+      primaryNorads.length ? ' AND norad_id IN (?)' : ''
+    }`,
+    primaryNorads.length ? [orgId, primaryNorads] : [orgId]
   )
   const primaries = await loadPrimaryTracks(
     objs.map((o) => ({ objectId: Number(o.id), noradId: Number(o.norad_id), name: String(o.name ?? '') })),
-    windowH
+    windowH,
+    startMs
   )
   if (!primaries.length) {
     throw new Error('无可筛查的主星（托管目标缺少有效两行根数）')
@@ -359,7 +377,8 @@ async function runJob(job: ScreenJobRow): Promise<void> {
     vRelMaxKms: 15.5,
     stepMs,
     windowStartMs,
-    windowEndMs: Math.min(windowEndMs, nowMs + windowH * 3600_000)
+    // 显式起点（再筛查）时不以当前时刻截断：窗口起点可在未来（机动预演）
+    windowEndMs: startMs ? windowEndMs : Math.min(windowEndMs, nowMs + windowH * 3600_000)
   }
 
   // 心跳：长任务期间每 30s 输出进度，便于运维观察（也避免日志长期静默）

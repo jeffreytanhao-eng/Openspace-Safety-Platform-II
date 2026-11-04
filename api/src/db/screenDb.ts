@@ -155,8 +155,18 @@ export async function createScreenJob(input: {
   windowH: number
   missMaxKm: number
   hbrM: number
+  /** Epic J 再筛查：限定主星 NORAD 白名单（缺省 = 该组织全部托管目标） */
+  primaryNorads?: number[]
+  /** Epic J 再筛查：窗口起点 ms（缺省 = 当前时刻对齐分钟） */
+  startMs?: number
 }): Promise<number> {
-  const params = JSON.stringify({ windowH: input.windowH, missMaxKm: input.missMaxKm, hbrM: input.hbrM })
+  const params = JSON.stringify({
+    windowH: input.windowH,
+    missMaxKm: input.missMaxKm,
+    hbrM: input.hbrM,
+    primaryNorads: input.primaryNorads ?? null,
+    startMs: input.startMs ?? null
+  })
   const [r] = await pool.query(
     `INSERT INTO screening_jobs (org_id, triggered_by, status, params_json, window_h, miss_max_km, hbr_m)
      VALUES (?, ?, 'queued', ?, ?, ?, ?)`,

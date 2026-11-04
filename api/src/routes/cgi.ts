@@ -17,6 +17,7 @@ import events from './events.js'
 import ca from './ca.js'
 import cred from './cred.js'
 import notify from './notify.js'
+import maneuvers from './maneuvers.js'
 import { getDailyFetchStatus } from '../db/fetchDb.js'
 import { isDailyFetchRunning } from '../jobs/dailyFetch.js'
 
@@ -75,6 +76,9 @@ router.use(cred)
 
 // Epic H2: 日报与通知（渠道 CRUD / 测试投递 / 投递审计 / 日报预览与手动出报）
 router.use(notify)
+
+// Epic J: 机动候选与再筛查（占位任务：候选管理 + 机动后 10 天防新交会复检）
+router.use(maneuvers)
 
 // New catalog helpers (stats / paginated tles / cdms)
 router.use(catalog)
