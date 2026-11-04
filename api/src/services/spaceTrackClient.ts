@@ -1,23 +1,33 @@
 /**
  * Space-Track 客户端：登录（cookie 会话）+ 查询 JSON。
- * 凭据来自 .env 的 SPACETRACK_USER / SPACETRACK_PASS（C1 系统日更）。
+ * 凭据：构造函数可传入（C2 客户自配凭证走组织队列）；缺省回落 .env 的
+ * SPACETRACK_USER / SPACETRACK_PASS（C1 系统日更）。
  */
 import { config } from '../config.js'
 import { CookieJar, fetchWithRetry } from '../utils/httpFetch.js'
+
+export interface SpaceTrackCreds {
+  username: string
+  password: string
+}
 
 export class SpaceTrackClient {
   jar = new CookieJar()
   loggedIn = false
 
+  constructor(private creds?: SpaceTrackCreds) {}
+
   async login(): Promise<void> {
     if (this.loggedIn) return
-    if (!config.spaceTrack.user || !config.spaceTrack.pass) {
-      throw new Error('SPACETRACK_USER / SPACETRACK_PASS 未配置，无法登录 Space-Track')
+    const user = this.creds?.username || config.spaceTrack.user
+    const pass = this.creds?.password || config.spaceTrack.pass
+    if (!user || !pass) {
+      throw new Error('Space-Track 凭据缺失（未配置 SPACETRACK_USER / SPACETRACK_PASS，也未传入客户凭证）')
     }
     const url = `${config.spaceTrack.baseUrl.replace(/\/$/, '')}/ajaxauth/login`
     const body = new URLSearchParams({
-      identity: config.spaceTrack.user,
-      password: config.spaceTrack.pass
+      identity: user,
+      password: pass
     }).toString()
     let res: Response
     try {

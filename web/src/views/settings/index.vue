@@ -12,6 +12,17 @@ import {
   type CovMode,
   type Propagator
 } from '@/api/ca'
+import {
+  listCredentials,
+  saveCredential,
+  deleteCredential,
+  testCredential,
+  fetchNow,
+  listBatches,
+  type CredStatus,
+  type OrgBatchRow,
+  type CredProvider
+} from '@/api/cred'
 
 const { t, isZh } = useI18n()
 const auth = useAuthStore()
@@ -75,6 +86,7 @@ async function load(): Promise<void> {
     suggestions.value = resp.suggestions ?? []
     applyDefaults(resp.defaults)
     needOrg.value = false
+    void loadCred() // C2: 凭据区随页面加载（失败不影响 CA 面板）
   } catch (e) {
     if (e instanceof AuthError && (e.httpStatus === 401 || e.httpStatus === 403)) needOrg.value = true
     else loadError.value = e instanceof Error ? e.message : String(e)
@@ -170,6 +182,148 @@ function savedUpdated(): string {
 function onEdit(): void {
   dirty.value = true
   saveMsg.value = ''
+}
+
+/* ------------------------- 数据凭证（C2） ------------------------- */
+
+const PROVIDERS: CredProvider[] = ['spacetrack', 'aoe']
+
+const credItems = ref<CredStatus[]>([])
+const credBatches = ref<OrgBatchRow[]>([])
+const credBatchesLoaded = ref(false)
+const credEditMode = reactive<Record<CredProvider, boolean>>({ spacetrack: false, aoe: false })
+const credForm = reactive({
+  spacetrack: { username: '', password: '' },
+  aoe: { token: '' }
+})
+const credBusy = reactive<Record<string, boolean>>({})
+const credMsg = reactive<Record<CredProvider, string>>({ spacetrack: '', aoe: '' })
+const credErr = reactive<Record<CredProvider, string>>({ spacetrack: '', aoe: '' })
+
+function credOf(p: CredProvider): CredStatus | null {
+  return credItems.value.find((c) => c.provider === p) ?? null
+}
+function isBusy(p: CredProvider, action: string): boolean {
+  return !!credBusy[`${p}:${action}`]
+}
+function setBusy(p: CredProvider, action: string, v: boolean): void {
+  credBusy[`${p}:${action}`] = v
+}
+function clearCredHint(p: CredProvider): void {
+  credMsg[p] = ''
+  credErr[p] = ''
+}
+function failOf(e: unknown): string {
+  return e instanceof Error ? e.message : String(e)
+}
+
+async function loadCred(): Promise<void> {
+  try {
+    const resp = await listCredentials()
+    credItems.value = resp.items
+    void loadBatches()
+  } catch {
+    /* 凭据区加载失败不影响 CA 面板 */
+  }
+}
+
+async function loadBatches(): Promise<void> {
+  try {
+    const resp = await listBatches(20)
+    credBatches.value = resp.batches
+    credBatchesLoaded.value = true
+  } catch {
+    /* 批次历史加载失败不阻断 */
+  }
+}
+
+async function onSaveCred(p: CredProvider): Promise<void> {
+  if (isBusy(p, 'save')) return
+  clearCredHint(p)
+  const st = credForm.spacetrack
+  const token = credForm.aoe.token.trim()
+  if ((p === 'spacetrack' && (!st.username.trim() || !st.password)) || (p === 'aoe' && !token)) {
+    credErr[p] = t('cred.err.missing')
+    return
+  }
+  setBusy(p, 'save', true)
+  try {
+    if (p === 'spacetrack') await saveCredential(p, { username: st.username.trim(), password: st.password })
+    else await saveCredential(p, { token })
+    st.username = ''
+    st.password = ''
+    credForm.aoe.token = ''
+    credEditMode[p] = false
+    credMsg[p] = t('cred.saved')
+    await loadCred()
+  } catch (e) {
+    credErr[p] = failOf(e)
+  } finally {
+    setBusy(p, 'save', false)
+  }
+}
+
+async function onTestCred(p: CredProvider): Promise<void> {
+  if (isBusy(p, 'test')) return
+  clearCredHint(p)
+  setBusy(p, 'test', true)
+  try {
+    const r = await testCredential(p)
+    if (r.ok) credMsg[p] = t('cred.testOk', { ms: r.latency_ms ?? 0 })
+    else credErr[p] = `${t('cred.testFail')}: ${r.error ?? ''}`
+    await loadCred() // 刷新 last_ok_at / last_error
+  } catch (e) {
+    credErr[p] = failOf(e)
+  } finally {
+    setBusy(p, 'test', false)
+  }
+}
+
+async function onFetchCred(p: CredProvider, kind?: 'gp' | 'cdm'): Promise<void> {
+  const action = `fetch:${kind ?? p}` // gp / cdm / aoe 分别计数
+  if (isBusy(p, action)) return
+  clearCredHint(p)
+  setBusy(p, action, true)
+  try {
+    const r = await fetchNow(p, kind)
+    credMsg[p] = t('cred.fetchDone', {
+      total: r.total,
+      inserted: r.inserted,
+      skipped: r.skipped,
+      scoped: r.scoped_targets
+    })
+    await loadCred()
+  } catch (e) {
+    credErr[p] = failOf(e)
+    await loadBatches() // 失败批次已留痕，刷新审计表
+  } finally {
+    setBusy(p, action, false)
+  }
+}
+
+async function onDeleteCred(p: CredProvider): Promise<void> {
+  if (isBusy(p, 'del')) return
+  if (!window.confirm(t('cred.clearConfirm'))) return
+  clearCredHint(p)
+  setBusy(p, 'del', true)
+  try {
+    await deleteCredential(p)
+    credEditMode[p] = false
+    credMsg[p] = t('cred.deleted')
+    await loadCred()
+  } catch (e) {
+    credErr[p] = failOf(e)
+  } finally {
+    setBusy(p, 'del', false)
+  }
+}
+
+function fmtTime(s: string | null): string {
+  return s ? s.replace('T', ' ').slice(0, 16) : '—'
+}
+function fmtDur(ms: number | null): string {
+  if (ms === null) return '—'
+  return ms >= 1000 ? `${(ms / 1000).toFixed(1)} s` : `${ms} ms`
 }
 </script>
 
@@ -351,18 +505,158 @@ function onEdit(): void {
         <p class="note">{{ t('ca.defaultsNote') }}</p>
       </section>
 
-      <!-- 数据凭证（C2）：灰显占位 -->
+      <!-- 数据凭证（C2）：组织自配 Space-Track / AOE，服务端加密存储 -->
       <section class="panel">
         <header class="panel-h">
           <div>
-            <div class="h-title">{{ t('ca.credTitle') }}</div>
-            <div class="h-sub">{{ t('ca.credSub') }}</div>
+            <div class="h-title">{{ t('cred.title') }}</div>
+            <div class="h-sub">{{ t('cred.sub') }}</div>
           </div>
-          <span class="ro-tag">{{ t('ca.comingSoon') }}</span>
+          <span v-if="!canEdit" class="ro-tag">{{ t('ca.readOnly') }}</span>
         </header>
-        <div class="cred-place">
-          <div class="cred-row"><span>Space-Track</span><span class="dim">{{ t('ca.comingSoon') }}</span></div>
-          <div class="cred-row"><span>AOE</span><span class="dim">{{ t('ca.comingSoon') }}</span></div>
+
+        <div class="cred-cards">
+          <div v-for="p in PROVIDERS" :key="p" class="cred-card">
+            <div class="cred-head">
+              <div class="cred-name">
+                <span class="pname">{{ p === 'spacetrack' ? 'Space-Track' : 'AOE (spacemapper)' }}</span>
+                <span class="badge" :class="credOf(p)?.configured ? 'on' : 'off'">
+                  {{ credOf(p)?.configured ? t('cred.configured') : t('cred.notConfigured') }}
+                </span>
+              </div>
+              <div v-if="canEdit" class="cred-ops">
+                <template v-if="!credEditMode[p]">
+                  <button type="button" class="ghost" @click="credEditMode[p] = true; clearCredHint(p)">
+                    {{ credOf(p)?.configured ? t('cred.replace') : t('cred.enter') }}
+                  </button>
+                  <button
+                    type="button"
+                    class="ghost"
+                    :disabled="!credOf(p)?.configured || isBusy(p, 'test')"
+                    @click="onTestCred(p)"
+                  >
+                    {{ isBusy(p, 'test') ? t('cred.testing') : t('cred.test') }}
+                  </button>
+                </template>
+                <template v-else>
+                  <button type="button" class="primary" :disabled="isBusy(p, 'save')" @click="onSaveCred(p)">
+                    {{ isBusy(p, 'save') ? t('cred.saving') : t('cred.save') }}
+                  </button>
+                  <button type="button" class="ghost" @click="credEditMode[p] = false; clearCredHint(p)">
+                    {{ t('cred.cancel') }}
+                  </button>
+                </template>
+              </div>
+            </div>
+
+            <div class="cred-status">
+              <span v-if="credOf(p)?.configured" class="mono">{{ t('cred.masked') }}: {{ credOf(p)?.masked || '******' }}</span>
+              <span>{{ t('cred.lastOk') }}: {{ fmtTime(credOf(p)?.last_ok_at ?? null) }}</span>
+              <span v-if="credOf(p)?.last_error" class="errline">{{ t('cred.lastError') }}: {{ credOf(p)?.last_error }}</span>
+              <span v-if="credOf(p)?.updated_at" class="dim">
+                {{ t('cred.updatedAt') }}: {{ fmtTime(credOf(p)?.updated_at ?? null) }}（{{ credOf(p)?.updated_by }}）
+              </span>
+            </div>
+
+            <!-- 录入表单（org_admin） -->
+            <div v-if="credEditMode[p] && canEdit" class="cred-form">
+              <template v-if="p === 'spacetrack'">
+                <label>
+                  <span>{{ t('cred.username') }}</span>
+                  <input v-model="credForm.spacetrack.username" type="text" autocomplete="off" spellcheck="false" @input="clearCredHint(p)" />
+                </label>
+                <label>
+                  <span>{{ t('cred.password') }}</span>
+                  <input v-model="credForm.spacetrack.password" type="password" autocomplete="new-password" @input="clearCredHint(p)" />
+                </label>
+              </template>
+              <template v-else>
+                <label>
+                  <span>{{ t('cred.token') }}</span>
+                  <input v-model="credForm.aoe.token" type="password" autocomplete="new-password" spellcheck="false" @input="clearCredHint(p)" />
+                </label>
+              </template>
+            </div>
+
+            <!-- 组织队列拉取（org_admin）：GP / CDM / AOE -->
+            <div v-if="canEdit && !credEditMode[p]" class="cred-fetch">
+              <template v-if="p === 'spacetrack'">
+                <button
+                  type="button"
+                  class="ghost"
+                  :disabled="!credOf(p)?.configured || isBusy(p, 'fetch:gp')"
+                  @click="onFetchCred(p, 'gp')"
+                >
+                  {{ isBusy(p, 'fetch:gp') ? t('cred.fetching') : t('cred.fetchGp') }}
+                </button>
+                <button
+                  type="button"
+                  class="ghost"
+                  :disabled="!credOf(p)?.configured || isBusy(p, 'fetch:cdm')"
+                  @click="onFetchCred(p, 'cdm')"
+                >
+                  {{ isBusy(p, 'fetch:cdm') ? t('cred.fetching') : t('cred.fetchCdm') }}
+                </button>
+              </template>
+              <button
+                type="button"
+                class="ghost"
+                :disabled="!credOf(p)?.configured || isBusy(p, 'fetch:aoe')"
+                @click="onFetchCred(p)"
+              >
+                {{ isBusy(p, 'fetch:aoe') ? t('cred.fetching') : t('cred.fetchAoe') }}
+              </button>
+              <button
+                type="button"
+                class="ghost danger"
+                :disabled="!credOf(p)?.configured || isBusy(p, 'del')"
+                @click="onDeleteCred(p)"
+              >
+                {{ t('cred.clear') }}
+              </button>
+            </div>
+
+            <p v-if="credMsg[p]" class="ok-msg">{{ credMsg[p] }}</p>
+            <p v-if="credErr[p]" class="err">{{ credErr[p] }}</p>
+          </div>
+        </div>
+
+        <!-- 组织拉取批次（审计记条数） -->
+        <div class="cred-batches">
+          <div class="bt-title">{{ t('cred.batchesTitle') }}</div>
+          <div class="tbl bt-tbl">
+            <table>
+              <thead>
+                <tr>
+                  <th>{{ t('cred.col.started') }}</th>
+                  <th>{{ t('cred.col.provider') }}</th>
+                  <th>{{ t('cred.col.kind') }}</th>
+                  <th>{{ t('cred.col.status') }}</th>
+                  <th>{{ t('cred.col.counts') }}</th>
+                  <th>{{ t('cred.col.duration') }}</th>
+                  <th>{{ t('cred.col.by') }}</th>
+                  <th>{{ t('cred.col.error') }}</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr v-for="b in credBatches" :key="b.id">
+                  <td class="mono">{{ fmtTime(b.started_at) }}</td>
+                  <td>{{ b.provider === 'spacetrack' ? 'Space-Track' : 'AOE' }}</td>
+                  <td class="mono">{{ t(`cred.kind.${b.kind}` as I18nKey) }}</td>
+                  <td>
+                    <span class="badge" :class="b.status === 'success' ? 'on' : b.status === 'failed' ? 'bad' : 'off'">
+                      {{ t(`cred.st.${b.status}` as I18nKey) }}
+                    </span>
+                  </td>
+                  <td class="mono">{{ b.total }} / {{ b.inserted }} / {{ b.updated }} / {{ b.skipped }}</td>
+                  <td class="mono">{{ fmtDur(b.duration_ms) }}</td>
+                  <td class="dim">{{ b.triggered_by }}</td>
+                  <td class="dim">{{ b.error_message || '—' }}</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+          <p v-if="credBatchesLoaded && !credBatches.length" class="dim bt-empty">{{ t('cred.batchesEmpty') }}</p>
         </div>
       </section>
     </template>
@@ -486,15 +780,84 @@ td:first-child { color: var(--text); font-weight: 600; white-space: nowrap; }
 .err { margin: 8px 14px 0; font-size: 11px; color: var(--danger); }
 .note { margin: 8px 14px 12px; font-size: 10px; color: var(--text-dim); }
 
-.cred-place { padding: 8px 14px 12px; display: flex; flex-direction: column; gap: 6px; }
-.cred-row {
+/* 数据凭证（C2） */
+.cred-cards {
   display: flex;
-  justify-content: space-between;
-  font-size: 12px;
-  color: var(--text-muted);
-  border: 1px dashed var(--border);
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px 14px 4px;
+}
+.cred-card {
+  border: 1px solid var(--border);
   border-radius: 6px;
-  padding: 8px 10px;
+  padding: 10px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.cred-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.cred-name { display: flex; align-items: center; gap: 8px; }
+.pname { font-size: 12px; font-weight: 650; color: var(--text); }
+.badge {
+  font-size: 10px;
+  border-radius: 3px;
+  padding: 2px 6px;
+  border: 1px solid var(--border);
+  white-space: nowrap;
+}
+.badge.on { color: var(--ok, #63b463); border-color: rgba(99, 180, 99, 0.4); }
+.badge.off { color: var(--text-dim); }
+.badge.bad { color: var(--danger); border-color: rgba(220, 90, 90, 0.4); }
+.cred-ops { display: flex; gap: 6px; flex-wrap: wrap; }
+.cred-status {
+  display: flex;
+  gap: 14px;
+  flex-wrap: wrap;
+  font-size: 11px;
+  color: var(--text-muted);
+}
+.errline { color: var(--danger); }
+.cred-form {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+  label {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 11px;
+    color: var(--text-dim);
+  }
+  input {
+    appearance: none;
+    border: 1px solid var(--border);
+    background: var(--bg-deep);
+    color: var(--text);
+    border-radius: 4px;
+    padding: 4px 6px;
+    font-size: 11px;
+    font-family: var(--mono);
+    outline: none;
+    width: 220px;
+  }
+  input:focus { border-color: var(--accent); }
+}
+.cred-fetch { display: flex; gap: 6px; flex-wrap: wrap; }
+.ghost.danger:hover { color: var(--danger); border-color: var(--danger); }
+.cred-card .ok-msg,
+.cred-card .err { margin: 0; }
+.cred-batches {
+  padding: 6px 14px 12px;
+  .bt-title { font-size: 11px; color: var(--text-dim); margin: 4px 0 6px; }
+  .bt-empty { font-size: 11px; margin: 4px 0 0; }
+  .bt-tbl { padding: 0; }
+  td, th { white-space: normal; }
 }
 .dim { color: var(--text-dim); font-size: 10px; }
 </style>
