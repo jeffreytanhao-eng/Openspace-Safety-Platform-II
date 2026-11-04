@@ -15,6 +15,9 @@ function headers(): Record<string, string> {
 
 export type ManeuverStatus = 'proposed' | 'approved' | 'executed' | 'cancelled'
 
+/** 机动方向（与后端枚举一致） */
+export type ManeuverDirection = 'prograde' | 'retrograde' | 'radial' | 'cross_track' | 'other'
+
 /** 机动候选行（后端已把时间序列转为 ISO 串） */
 export interface ManeuverPlan {
   id: number
@@ -28,7 +31,7 @@ export interface ManeuverPlan {
   window_start: string
   window_end: string
   dv_m_s: number | null
-  direction: string
+  direction: ManeuverDirection
   status: ManeuverStatus
   rescreen_job_id: number | null
   rescreen_at: string | null
@@ -84,7 +87,7 @@ export interface RescreenEvent {
 export interface RescreenResult {
   job: RescreenJob
   events: RescreenEvent[]
-  summary: { n_events: number; worst_level: string | null; max_pc: number | null }
+  summary: { n_events: number; worst_level: 'red' | 'orange' | 'yellow' | null; max_pc: number | null }
   maneuver: ManeuverPlan | null
 }
 

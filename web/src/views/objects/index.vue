@@ -424,6 +424,11 @@ function fmtPcExp(v: number | null): string {
   if (v == null) return '—'
   return v === 0 ? '0' : v.toExponential(2)
 }
+
+/** 再筛查最高分级 → i18n 文案 */
+function fmtWorstLevel(v: 'red' | 'orange' | 'yellow' | null): string {
+  return v ? t(`scr.level.${v}`) : '—'
+}
 </script>
 
 <template>
@@ -652,7 +657,7 @@ function fmtPcExp(v: number | null): string {
                     <div class="mv-sum">
                       <span>{{ t('mv.jobDone') }} · {{ mvResults[m.id]!.job.duration_ms }}ms</span>
                       <span>{{ t('mv.summaryEvents') }} {{ mvResults[m.id]!.summary.n_events }}</span>
-                      <span>{{ t('mv.worstLevel') }}: {{ mvResults[m.id]!.summary.worst_level ? t(`scr.level.${mvResults[m.id]!.summary.worst_level}`) : '—' }}</span>
+                      <span>{{ t('mv.worstLevel') }}: {{ fmtWorstLevel(mvResults[m.id]!.summary.worst_level) }}</span>
                       <span>{{ t('mv.maxPc') }}: {{ fmtPcExp(mvResults[m.id]!.summary.max_pc) }}</span>
                     </div>
                     <table v-if="mvResults[m.id]!.events.length" class="mv-tbl">
