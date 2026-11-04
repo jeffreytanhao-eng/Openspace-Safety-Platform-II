@@ -1,9 +1,9 @@
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref } from 'vue'
+import { computed, onMounted, onUnmounted, reactive, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useI18n } from '@/composables/useI18n'
 
-const { t } = useI18n()
+const { t, locale } = useI18n()
 import {
   getEvent,
   getCdmRaw,
@@ -325,6 +325,62 @@ function maxMethodPc(run: PcRun): number | null {
 function fmtWhen(iso: string): string {
   return iso ? iso.replace('T', ' ').slice(0, 19) : '—'
 }
+
+/* ------------------- 事件包导出（H1）：Markdown / HTML 打印 / CSV ------------------- */
+
+import { useAuthStore } from '@/stores/auth'
+import {
+  buildMarkdown,
+  buildPrintableHtml,
+  buildTimelineCsv,
+  downloadText,
+  exportBaseName,
+  type ExportEventCtx
+} from './exportEvent'
+
+const auth = useAuthStore()
+const expOpen = ref(false)
+const expWrap = ref<HTMLElement | null>(null)
+
+/** 点外关闭（不拦截外部点击，语言切换等按钮首点即生效） */
+function onDocClick(e: MouseEvent): void {
+  if (expWrap.value && !expWrap.value.contains(e.target as Node)) expOpen.value = false
+}
+watch(expOpen, (v) => {
+  if (v) document.addEventListener('click', onDocClick)
+  else document.removeEventListener('click', onDocClick)
+})
+onUnmounted(() => document.removeEventListener('click', onDocClick))
+
+function expCtx(): ExportEventCtx {
+  return {
+    event: event.value!,
+    cdms: cdms.value,
+    primary: primary.value,
+    secondary: secondary.value,
+    cmp: cmp.value,
+    cmpError: cmpError.value,
+    runs: rcRuns.value,
+    t,
+    locale: locale.value,
+    exportedBy: auth.user?.email ?? '',
+    generatedAt: new Date().toISOString()
+  }
+}
+
+function doExport(kind: 'md' | 'html' | 'csv'): void {
+  if (!event.value) return
+  const ctx = expCtx()
+  const base = exportBaseName(event.value)
+  if (kind === 'md') {
+    downloadText(`${base}.md`, buildMarkdown(ctx), 'text/markdown;charset=utf-8')
+  } else if (kind === 'html') {
+    downloadText(`${base}.html`, buildPrintableHtml(ctx), 'text/html;charset=utf-8')
+  } else {
+    downloadText(`${base}.csv`, buildTimelineCsv(ctx), 'text/csv;charset=utf-8')
+  }
+  expOpen.value = false
+}
 </script>
 
 <template>
@@ -348,6 +404,16 @@ function fmtWhen(iso: string): string {
         </p>
       </div>
       <div class="actions">
+        <div ref="expWrap" class="exp-wrap">
+          <button type="button" class="btn" @click="expOpen = !expOpen">
+            {{ t('exp.menu') }} <span class="caret">{{ expOpen ? '▴' : '▾' }}</span>
+          </button>
+          <div v-if="expOpen" class="exp-menu">
+            <button type="button" @click="doExport('md')">{{ t('exp.md') }}</button>
+            <button type="button" @click="doExport('html')">{{ t('exp.html') }}</button>
+            <button type="button" @click="doExport('csv')">{{ t('exp.csv') }}</button>
+          </div>
+        </div>
         <a class="btn primary" :href="situationLink" @click.prevent="router.push(situationLink)">
           {{ t('conj.openSituation') }}
         </a>
@@ -713,6 +779,22 @@ h1 {
 }
 .head p { margin: 4px 0 0; font-size: 11px; color: var(--text-dim); }
 .actions { display: flex; gap: 6px; }
+.btn.primary.sm { margin-left: auto; }
+
+/* H1 事件包导出下拉 */
+.exp-wrap { position: relative; }
+.exp-menu {
+  position: absolute; right: 0; top: calc(100% + 4px); z-index: 41; min-width: 180px;
+  background: var(--bg-panel); border: 1px solid var(--border-strong); border-radius: 6px;
+  padding: 4px; display: flex; flex-direction: column; gap: 2px;
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.35);
+}
+.exp-menu button {
+  appearance: none; border: none; background: transparent; color: var(--text-muted);
+  text-align: left; font-size: 12px; padding: 6px 10px; border-radius: 4px; cursor: pointer; white-space: nowrap;
+}
+.exp-menu button:hover { background: var(--bg-panel-2); color: var(--text); }
+.caret { font-size: 9px; color: var(--text-dim); }
 .btn {
   appearance: none; border: 1px solid var(--border-strong); background: var(--bg-panel);
   color: var(--text-muted); border-radius: 4px; padding: 6px 12px; font-size: 12px; cursor: pointer;
