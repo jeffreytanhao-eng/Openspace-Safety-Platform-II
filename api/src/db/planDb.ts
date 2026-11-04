@@ -6,7 +6,9 @@
  * - org_quota_overrides：组织级覆盖（超管在 B1 配置），effective = override ?? default；
  * - limit_value 统一整数语义：数值型键为数量上限；
  *   枚举/位图型键按约定编码（见 FEATURE_KEYS 注释）；
- * - 用量计算器按功能键注册，业务表未建的键返回 0（E1/D1 接入后自动生效）。
+ * - 用量计算器按功能键注册，业务表未建的键返回 0（E1/D1 接入后自动生效）；
+ * - C3 起 system_tle_scope 语义升级为四档（见 TLE_SCOPE 注释），
+ *   首次启动检测到旧三档签名时自动重播 seed（幂等，不覆盖运营后续调整）。
  */
 import { pool } from './pool.js'
 import type { RowDataPacket } from 'mysql2'
@@ -24,7 +26,7 @@ export interface FeatureMeta {
  * - ephem_upload_day   每日星历上传次数（count/天）
  * - screen_day         每日筛查任务数（count/天）
  * - recompute_day      每日重算次数（count/天）
- * - system_tle_scope   系统池 TLE 可见范围（scope：0=不开放 1=平台公开池）
+ * - system_tle_scope   系统池 TLE 可见范围（scope 四档，见 TLE_SCOPE）
  * - system_cdm_days    系统 CDM 历史可查天数（days）
  * - pc_methods         可用 Pc 算法位图（bitmap：1=Foster 2=Chan 4=Alfano 8=官方CDM）
  * - api_keys_max       API Key 数量上限（count）
@@ -46,8 +48,21 @@ export const FEATURE_KEYS: FeatureMeta[] = [
 export const PC_BIT = { Foster: 1, Chan: 2, Alfano: 4, OfficialCDM: 8 } as const
 
 /**
+ * system_tle_scope 四档编码（C3 按档位裁剪系统池）：
+ * - 0 = 不开放系统池
+ * - 1 = 样例窗：公共小子集（按更新时间最新 TLE_SAMPLE_LIMIT 条）
+ * - 2 = 托管相关：仅本组织托管 NORAD 的 TLE
+ * - 3 = 全量公开池
+ */
+export const TLE_SCOPE = { NONE: 0, SAMPLE: 1, MANAGED: 2, FULL: 3 } as const
+
+/** 样例窗大小（scope=1 时的公共小子集条数） */
+export const TLE_SAMPLE_LIMIT = 500
+
+/**
  * 档位默认限额（首次 seed 后可运营在库内调整，代码不再强约束）。
- * bitmap/scope 语义见 FEATURE_KEYS。
+ * bitmap/scope 语义见 FEATURE_KEYS / TLE_SCOPE。
+ * C3 口径：免费=样例窗+3 天 CDM 样例；普通=托管相关+30 天；VIP=全量+365 天。
  */
 const PLAN_SEED: Record<'free' | 'normal' | 'vip', Record<string, number>> = {
   free: {
@@ -55,8 +70,8 @@ const PLAN_SEED: Record<'free' | 'normal' | 'vip', Record<string, number>> = {
     ephem_upload_day: 5,
     screen_day: 5,
     recompute_day: 20,
-    system_tle_scope: 0,
-    system_cdm_days: 0,
+    system_tle_scope: TLE_SCOPE.SAMPLE,
+    system_cdm_days: 3,
     pc_methods: PC_BIT.Foster | PC_BIT.Chan,
     api_keys_max: 0,
     members_max: 2
@@ -66,7 +81,7 @@ const PLAN_SEED: Record<'free' | 'normal' | 'vip', Record<string, number>> = {
     ephem_upload_day: 100,
     screen_day: 100,
     recompute_day: 500,
-    system_tle_scope: 1,
+    system_tle_scope: TLE_SCOPE.MANAGED,
     system_cdm_days: 30,
     pc_methods: PC_BIT.Foster | PC_BIT.Chan | PC_BIT.Alfano | PC_BIT.OfficialCDM,
     api_keys_max: 3,
@@ -77,7 +92,7 @@ const PLAN_SEED: Record<'free' | 'normal' | 'vip', Record<string, number>> = {
     ephem_upload_day: 1000,
     screen_day: 1000,
     recompute_day: 5000,
-    system_tle_scope: 1,
+    system_tle_scope: TLE_SCOPE.FULL,
     system_cdm_days: 365,
     pc_methods: PC_BIT.Foster | PC_BIT.Chan | PC_BIT.Alfano | PC_BIT.OfficialCDM,
     api_keys_max: 20,
@@ -114,15 +129,9 @@ export function ensurePlanSchema(): Promise<boolean> {
         }
         const [cnt] = await pool.query<RowDataPacket[]>('SELECT COUNT(*) AS n FROM plan_defaults')
         if (Number((cnt[0] as { n: number }).n) === 0) {
-          for (const [plan, limits] of Object.entries(PLAN_SEED)) {
-            for (const [key, value] of Object.entries(limits)) {
-              await pool.query(
-                'INSERT IGNORE INTO plan_defaults (plan, feature_key, limit_value) VALUES (?, ?, ?)',
-                [plan, key, value]
-              )
-            }
-          }
-          console.log('[plan] seeded plan_defaults (free/normal/vip)')
+          await seedPlanDefaults()
+        } else {
+          await migrateScopeSemantics()
         }
         return true
       } catch (e) {
@@ -132,6 +141,37 @@ export function ensurePlanSchema(): Promise<boolean> {
     })()
   }
   return schemaReady
+}
+
+function seedPlanDefaults(): Promise<void> {
+  return (async () => {
+    for (const [plan, limits] of Object.entries(PLAN_SEED)) {
+      for (const [key, value] of Object.entries(limits)) {
+        await pool.query(
+          'INSERT IGNORE INTO plan_defaults (plan, feature_key, limit_value) VALUES (?, ?, ?)',
+          [plan, key, value]
+        )
+      }
+    }
+    console.log('[plan] seeded plan_defaults (free/normal/vip)')
+  })()
+}
+
+/**
+ * C3 一次性迁移：system_tle_scope 旧三档签名（free=0 & normal=1 & vip=1）
+ * → 删除两个范围键行后按新四档语义重播；迁移后签名不再命中，不会重复重置。
+ */
+async function migrateScopeSemantics(): Promise<void> {
+  const [rows] = await pool.query<RowDataPacket[]>(
+    `SELECT plan, limit_value FROM plan_defaults WHERE feature_key = 'system_tle_scope'`
+  )
+  const byPlan = new Map(rows.map((r) => [String(r.plan), Number(r.limit_value)]))
+  if (byPlan.get('free') !== 0 || byPlan.get('normal') !== 1 || byPlan.get('vip') !== 1) return
+  await pool.query(
+    `DELETE FROM plan_defaults WHERE feature_key IN ('system_tle_scope','system_cdm_days')`
+  )
+  await seedPlanDefaults()
+  console.log('[plan] migrated system_tle_scope semantics: free=sample(1) normal=managed(2) vip=full(3)')
 }
 
 export interface EffectiveLimit {

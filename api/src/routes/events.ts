@@ -18,9 +18,10 @@ import { Router, type Request, type Response, type NextFunction } from 'express'
 import type { RowDataPacket } from 'mysql2/promise'
 import { pool } from '../db/pool.js'
 import { ok, fail } from '../utils/response.js'
-import { requireAuth, type AuthContext } from './auth.js'
+import { requireAuth, optionalAuth, type AuthContext } from './auth.js'
 import { quotaExceeded } from '../middleware/plan.js'
 import { parseCdmText } from '../services/cdmParse.js'
+import { resolvePoolPolicy, poolBadge } from '../services/systemPool.js'
 import { buildSatrec, propagateJ2000 } from '../screen/coarse.js'
 import { tleCovariance } from '../screen/covariance.js'
 import { encounterPlane, foster2D } from '../screen/pc.js'
@@ -37,7 +38,8 @@ type ScopedRequest = Request & { auth?: AuthContext }
 
 let schemaReady = false
 
-/** sat_cdm 补 source 列（区分系统日更与客户上传）+ 对/TCA 复合索引；MySQL 8 无 IF NOT EXISTS，先查再 ALTER */
+/** sat_cdm 补 source 列（区分系统日更与客户上传）+ 对/TCA 复合索引；MySQL 8 无 IF NOT EXISTS，先查再 ALTER。
+ *  C3：补 org_id 列（source=customer 的上传组织，公开列表按组织隔离）。 */
 export async function ensureCdmSchema(): Promise<boolean> {
   if (schemaReady) return true
   try {
@@ -49,6 +51,11 @@ export async function ensureCdmSchema(): Promise<boolean> {
     if (!names.has('source')) {
       await pool.query(
         `ALTER TABLE sat_cdm ADD COLUMN source varchar(20) NOT NULL DEFAULT 'system'`
+      )
+    }
+    if (!names.has('org_id')) {
+      await pool.query(
+        `ALTER TABLE sat_cdm ADD COLUMN org_id bigint unsigned NULL DEFAULT NULL COMMENT '上传组织（source=customer 组织隔离）'`
       )
     }
     const [idx] = await pool.query<RowDataPacket[]>(
@@ -96,6 +103,7 @@ interface CdmRow extends RowDataPacket {
   collision_probability: number | null
   hard_body_radius_m: number | null
   source: string
+  org_id: number | null
 }
 
 export interface ConjunctionEvent {
@@ -113,17 +121,20 @@ export interface ConjunctionEvent {
   missKm: number | null // 最小脱靶距离
   relSpeedKmS: number | null
   sources: string[] // 成员来源去重
+  dataSource: 'system_pool' | 'org_credential' // C3：含客户上传成员 → org_credential
 }
 
 const GAP_MS = 3 * 3600 * 1000
 const LIST_LIMIT = 5000
 
-/** 窗口参数：24h/3d/7d/all（默认 3d）；from = now-1d 保证刚过的 TCA 仍可见 */
-function windowRange(window: string | undefined): { from: Date; to: Date } {
+/** 窗口参数：24h/3d/7d/all（默认 3d）；from 缺省 = now-1d 保证刚过的 TCA 仍可见，
+ *  all = 回看至当前档位 CDM 历史深度（C3：免费 3 天 / 普通 30 天 / VIP 365 天） */
+function windowRange(window: string | undefined, cdmDays = 3): { from: Date; to: Date } {
   const now = Date.now()
   const fwdMs =
     window === '24h' ? 24 * 3600e3 : window === '7d' ? 7 * 24 * 3600e3 : window === 'all' ? 30 * 24 * 3600e3 : 3 * 24 * 3600e3
-  return { from: new Date(now - 24 * 3600e3), to: new Date(now + fwdMs) }
+  const backMs = window === 'all' ? Math.min(Math.max(cdmDays, 0), 365) * 24 * 3600e3 : 24 * 3600e3
+  return { from: new Date(now - backMs), to: new Date(now + fwdMs) }
 }
 
 function toIso(d: Date | string | null): string {
@@ -193,7 +204,8 @@ function aggregateEvents(rows: CdmRow[]): ConjunctionEvent[] {
         pcSource,
         missKm,
         relSpeedKmS: items.find((x) => x.rel_speed_km_per_s !== null)?.rel_speed_km_per_s ?? null,
-        sources: [...new Set(items.map((x) => x.source))]
+        sources: [...new Set(items.map((x) => x.source))],
+        dataSource: items.some((x) => x.source === 'customer') ? 'org_credential' : 'system_pool'
       })
     }
     for (let i = 1; i < p.items.length; i++) {
@@ -280,6 +292,7 @@ router.post('/events/import', requireAuth, async (req: ScopedRequest, res) => {
   let inserted = 0
   let updated = 0
   const skipped = failed
+  const orgId = req.auth.org!.id
   const conn = await pool.getConnection()
   try {
     await conn.beginTransaction()
@@ -295,13 +308,13 @@ router.post('/events/import', requireAuth, async (req: ScopedRequest, res) => {
       const vals = [
         cdmId, c.creationDate, c.originator || 'CUSTOMER', c.tca, 'SCREENING', 0,
         c.noradA, c.nameA, c.noradB, c.nameB,
-        c.missDistanceKm, null, c.relSpeedKmS, c.collisionProbability, c.hardBodyRadiusM, c.rawJson
+        c.missDistanceKm, null, c.relSpeedKmS, c.collisionProbability, c.hardBodyRadiusM, c.rawJson, orgId
       ]
       if (ex.length) {
         await conn.query(
           `UPDATE sat_cdm SET cdm_id=?, creation_date=?, originator=?, tca=?, type=?, focus_a=?,
            norad_a=?, name_a=?, norad_b=?, name_b=?, miss_distance_km=?, radial_distance_km=?,
-           rel_speed_km_per_s=?, collision_probability=?, hard_body_radius_m=?, raw_json=?, source='customer'
+           rel_speed_km_per_s=?, collision_probability=?, hard_body_radius_m=?, raw_json=?, org_id=?, source='customer'
            WHERE id=?`,
           [...vals, ex[0].id]
         )
@@ -310,8 +323,8 @@ router.post('/events/import', requireAuth, async (req: ScopedRequest, res) => {
         await conn.query(
           `INSERT INTO sat_cdm (cdm_id, creation_date, originator, tca, type, focus_a,
            norad_a, name_a, norad_b, name_b, miss_distance_km, radial_distance_km,
-           rel_speed_km_per_s, collision_probability, hard_body_radius_m, raw_json, source)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'customer')`,
+           rel_speed_km_per_s, collision_probability, hard_body_radius_m, raw_json, org_id, source)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'customer')`,
           vals
         )
         inserted++
@@ -330,23 +343,35 @@ router.post('/events/import', requireAuth, async (req: ScopedRequest, res) => {
   res.json(ok({ parsed: parsed.length, inserted, updated, skipped }))
 })
 
-/** 事件聚合列表（公开只读）：window=24h|3d|7d|all，level/q 前端过滤即可 */
-router.get('/events', async (req, res) => {
-  const { from, to } = windowRange(String(req.query.window ?? ''))
+/** 事件聚合列表（公开只读，C3 按档裁剪）：window=24h|3d|7d|all，level/q 前端过滤即可；
+ *  客户上传 CDM（source=customer）仅上传组织可见；all 窗口回看深度按档 system_cdm_days。 */
+router.get('/events', optionalAuth, async (req: ScopedRequest, res) => {
+  const org = req.auth?.org ?? null
+  const policy = await resolvePoolPolicy(org)
+  const { from, to } = windowRange(String(req.query.window ?? ''), policy.cdmDays)
+  // 客户 CDM 组织隔离：匿名只见系统池；登录组织额外可见自己上传的行
+  const isoSql = org ? `AND (source <> 'customer' OR org_id = ?)` : `AND source <> 'customer'`
+  const params: unknown[] = org ? [from, to, org.id] : [from, to]
   const [rows] = await pool.query<CdmRow[]>(
     `SELECT id, cdm_id, creation_date, originator, tca, norad_a, name_a, norad_b, name_b,
-            miss_distance_km, rel_speed_km_per_s, collision_probability, hard_body_radius_m, source
+            miss_distance_km, rel_speed_km_per_s, collision_probability, hard_body_radius_m, source, org_id
      FROM sat_cdm
-     WHERE tca IS NOT NULL AND tca >= ? AND tca <= ?
+     WHERE tca IS NOT NULL AND tca >= ? AND tca <= ? ${isoSql}
      ORDER BY tca ASC
      LIMIT ${LIST_LIMIT}`,
-    [from, to]
+    params
   )
-  res.json(ok({ events: aggregateEvents(rows), window: { from: from.toISOString(), to: to.toISOString() } }))
+  res.json(
+    ok({
+      events: aggregateEvents(rows),
+      window: { from: from.toISOString(), to: to.toISOString() },
+      pool: poolBadge(policy)
+    })
+  )
 })
 
-/** 事件详情：成员 CDM（不含 raw）+ 双方 sat_tle 档案 */
-router.get('/events/:key', async (req, res) => {
+/** 事件详情：成员 CDM（不含 raw）+ 双方 sat_tle 档案（C3：客户 CDM 组织隔离） */
+router.get('/events/:key', optionalAuth, async (req: ScopedRequest, res) => {
   const key = String(req.params.key ?? '')
   const m = /^(\d+):(\d+):(\d+)$/.exec(key)
   if (!m) {
@@ -360,15 +385,20 @@ router.get('/events/:key', async (req, res) => {
   // 宽窗口取行（覆盖多圈内多次交会 + 聚类边界），再精确定位岛
   const tcaFrom = new Date(firstTcaMs - 10 * 24 * 3600e3)
   const tcaTo = new Date(firstTcaMs + 10 * 24 * 3600e3)
+  const org = req.auth?.org ?? null
+  const isoSql = org ? `AND (source <> 'customer' OR org_id = ?)` : `AND source <> 'customer'`
+  const qParams: unknown[] = org
+    ? [tcaFrom, tcaTo, a, b, a, b, org.id]
+    : [tcaFrom, tcaTo, a, b, a, b]
   const [rows] = await pool.query<CdmRow[]>(
     `SELECT id, cdm_id, creation_date, originator, tca, norad_a, name_a, norad_b, name_b,
-            miss_distance_km, rel_speed_km_per_s, collision_probability, hard_body_radius_m, source
+            miss_distance_km, rel_speed_km_per_s, collision_probability, hard_body_radius_m, source, org_id
      FROM sat_cdm
      WHERE tca IS NOT NULL AND tca >= ? AND tca <= ?
-       AND (norad_a IN (?, ?)) AND (norad_b IN (?, ?))
+       AND (norad_a IN (?, ?)) AND (norad_b IN (?, ?)) ${isoSql}
      ORDER BY tca ASC
      LIMIT ${LIST_LIMIT}`,
-    [tcaFrom, tcaTo, a, b, a, b]
+    qParams
   )
   const island = findIsland(rows, a, b, firstTcaMs)
   if (!island || !island.length) {
@@ -423,8 +453,8 @@ router.get('/events/:key', async (req, res) => {
   }))
 })
 
-/** 单条 CDM 原文（raw_json） */
-router.get('/events/:key/cdm/:cdmId/raw', async (req, res) => {
+/** 单条 CDM 原文（raw_json）—— C3：客户上传的原文仅上传组织可读 */
+router.get('/events/:key/cdm/:cdmId/raw', optionalAuth, async (req: ScopedRequest, res) => {
   const key = String(req.params.key ?? '')
   const m = /^(\d+):(\d+):(\d+)$/.exec(key)
   const cdmId = Number(req.params.cdmId)
@@ -433,17 +463,26 @@ router.get('/events/:key/cdm/:cdmId/raw', async (req, res) => {
     return
   }
   const [rows] = await pool.query<RowDataPacket[]>(
-    `SELECT id, cdm_id, raw_json FROM sat_cdm WHERE id = ? LIMIT 1`,
+    `SELECT id, cdm_id, raw_json, source, org_id FROM sat_cdm WHERE id = ? LIMIT 1`,
     [cdmId]
   )
   if (!rows.length) {
     res.status(404).json(fail(404, 'CDM 不存在'))
     return
   }
-  const raw = rows[0].raw_json
+  const row = rows[0]
+  if (String(row.source) === 'customer') {
+    const ownerOrgId = row.org_id == null ? null : Number(row.org_id)
+    const reqOrgId = req.auth?.org?.id ?? null
+    if (ownerOrgId === null || ownerOrgId !== reqOrgId) {
+      res.status(403).json(fail(403, '客户上传的 CDM 仅上传组织可读'))
+      return
+    }
+  }
+  const raw = row.raw_json
   res.json(ok({
-    id: rows[0].id,
-    cdm_id: rows[0].cdm_id,
+    id: row.id,
+    cdm_id: row.cdm_id,
     raw: typeof raw === 'string' ? raw : JSON.stringify(raw, null, 2)
   }))
 })

@@ -165,10 +165,17 @@ export async function createScreenJob(input: {
   return Number((r as { insertId: number }).insertId)
 }
 
-/** 领取下一个排队任务（单进程内由 runner 串行调用） */
+/**
+ * 领取下一个排队任务（单进程内由 runner 串行调用）。
+ * C3 优先队列：VIP > 普通 > 免费档，同级按排队先后（id ASC）。
+ */
 export async function claimNextQueuedJob(): Promise<ScreenJobRow | null> {
   const [rows] = await pool.query<RawJob[]>(
-    `SELECT * FROM screening_jobs WHERE status = 'queued' ORDER BY id ASC LIMIT 1`
+    `SELECT j.* FROM screening_jobs j
+      LEFT JOIN organizations o ON o.id = j.org_id
+      WHERE j.status = 'queued'
+      ORDER BY CASE COALESCE(o.plan, 'free') WHEN 'vip' THEN 0 WHEN 'normal' THEN 1 ELSE 2 END ASC, j.id ASC
+      LIMIT 1`
   )
   const job = rows[0]
   if (!job) return null

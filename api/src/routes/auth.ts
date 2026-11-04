@@ -208,4 +208,28 @@ router.get('/auth/me', requireAuth, async (req, res) => {
   res.json(ok(req.auth ?? null))
 })
 
+/**
+ * 可选认证（C3 按档裁剪用）：带合法 Bearer token 则装配 auth 上下文，
+ * 无 token / token 失效一律匿名放行（不拒绝），供公开接口按档位差异化响应。
+ */
+export async function optionalAuth(req: Request, _res: Response, next: NextFunction): Promise<void> {
+  try {
+    const header = req.headers.authorization || ''
+    const token = header.startsWith('Bearer ') ? header.slice(7) : ''
+    if (token) {
+      const payload = jwt.verify(token, config.jwtSecret) as { uid?: number }
+      const row = payload.uid ? await findUserById(payload.uid) : null
+      if (row && row.status === 'active') {
+        const org = row.org_id ? await findOrgById(row.org_id) : null
+        if (!org || org.status !== 'closed') {
+          req.auth = { user: toSafeUser(row), org: org ? toSafeOrg(org) : null }
+        }
+      }
+    }
+  } catch {
+    // 匿名放行
+  }
+  next()
+}
+
 export default router

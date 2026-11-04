@@ -30,6 +30,8 @@ export interface ConjunctionEvent {
   missKm: number | null
   relSpeedKmS: number | null
   sources: string[]
+  /** C3：含客户上传成员 → org_credential，否则 system_pool */
+  dataSource?: 'system_pool' | 'org_credential'
 }
 
 /** 成员 CDM（不含原文） */

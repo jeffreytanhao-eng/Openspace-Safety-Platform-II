@@ -27,6 +27,20 @@ function typeLabel(k: string) {
   return TYPE_LABEL[k] || k
 }
 
+/** C3：系统池档位徽标（样例窗/托管相关/全量） */
+const { cloudPool } = useCatalog()
+type PoolKey = 'pool.sample' | 'pool.managed' | 'pool.full' | 'pool.none'
+const poolTag = computed<PoolKey | null>(() => {
+  const m = cloudPool.value?.mode
+  if (m === 'sample') return 'pool.sample'
+  if (m === 'managed') return 'pool.managed'
+  if (m === 'full') return 'pool.full'
+  if (m === 'none') return 'pool.none'
+  return null
+})
+/** CSS 类名用连字符（pool-full），i18n 键用点号（pool.full），两者分开绑定 */
+const poolCss = computed(() => (poolTag.value ? poolTag.value.replace('.', '-') : ''))
+
 defineProps<{ open: boolean }>()
 const emit = defineEmits<{
   (e: 'close'): void
@@ -343,7 +357,13 @@ onMounted(() => {
           </div>
         </div>
 
-        <div class="sp-section-label">{{ t('sat.catalog') }}</div>
+        <div class="sp-section-label sp-catalog-head">
+          <span>{{ t('sat.catalog') }}</span>
+          <span v-if="poolTag" class="sp-pool-tag" :class="poolCss">
+            {{ t(poolTag) }}
+          </span>
+        </div>
+        <div v-if="cloudPool && cloudPool.mode !== 'full'" class="sp-pool-hint">{{ t('pool.upgrade') }}</div>
         <div v-if="error" class="sp-empty">{{ t('sat.loadFail') }}<br />{{ error }}</div>
         <div v-else-if="loading && activeTypes.length && !filtered.length" class="sp-empty">{{ t('sat.loading') }}</div>
         <div v-else-if="!filtered.length && !loading && (activeTypes.length || keyword.trim())" class="sp-empty">{{ t('sat.none') }}</div>
@@ -399,6 +419,29 @@ onMounted(() => {
   text-align: center;
   border-top: 1px solid rgba(120, 160, 220, 0.16);
   &:first-child { border-top: 0; margin-top: 4px; padding-top: 0; }
+}
+
+.sp-catalog-head {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+}
+.sp-pool-tag {
+  font-size: 10px;
+  padding: 1px 6px;
+  border-radius: 3px;
+  color: #8fd0ff;
+  background: rgba(63, 157, 255, 0.12);
+  border: 1px solid rgba(63, 157, 255, 0.3);
+  &.pool-full { color: #7ee2a8; background: rgba(70, 200, 130, 0.12); border-color: rgba(70, 200, 130, 0.35); }
+  &.pool-none { color: #ffb37e; background: rgba(255, 140, 60, 0.12); border-color: rgba(255, 140, 60, 0.35); }
+}
+.sp-pool-hint {
+  margin: -2px 0 6px;
+  font-size: 10px;
+  color: rgba(190, 208, 235, 0.6);
+  text-align: center;
 }
 
 .sp-item {

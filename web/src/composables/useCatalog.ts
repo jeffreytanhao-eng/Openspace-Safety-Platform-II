@@ -42,8 +42,19 @@ export interface CatalogStats {
   db: string
   tle: number
   cdm: number
+  tleVisible?: number
+  cdmVisible?: number
+  pool?: PoolBadge
   lastGpSync?: unknown
   lastCdmSync?: unknown
+}
+
+/** C3：快照响应/缓存附带档位徽标（scope 决定可见范围，缓存键按 scope 隔离） */
+export interface PoolBadge {
+  scope: number
+  mode: 'none' | 'sample' | 'managed' | 'full'
+  sampleLimit: number
+  cdmDays: number
 }
 
 /** Old `/cgi/sat_tle/constellation` compact snapshot (reconstructed contract). */
@@ -55,6 +66,7 @@ export interface ConstellationSnapshot {
   regimeIndex: string[]
   nameIndex: string[]
   countryIndex?: string[]
+  pool?: PoolBadge
   list: [
     number, number, number, number, number, number, number, number, number, number,
     number | null, string[], number, number | null, number | null, number | null
@@ -86,8 +98,18 @@ interface ApiWrap<T> {
   data: T | null
 }
 
+/** C3 按档裁剪：公开编目接口带登录态请求，服务端按组织档位返回对应可见范围 */
+function authHeaders(): Record<string, string> {
+  try {
+    const t = localStorage.getItem('osp-token')
+    return t ? { Authorization: `Bearer ${t}` } : {}
+  } catch {
+    return {}
+  }
+}
+
 async function getJson<T>(url: string): Promise<T> {
-  const res = await fetch(url)
+  const res = await fetch(url, { headers: authHeaders() })
   if (!res.ok) throw new Error(`HTTP ${res.status}`)
   const body = (await res.json()) as ApiWrap<T>
   if (body.code !== 0 || body.data == null) throw new Error(body.msg || 'api error')
@@ -95,7 +117,15 @@ async function getJson<T>(url: string): Promise<T> {
 }
 
 
-const CLOUD_IDB_KEY = 'osp:cloud:v1'
+/** C3：档位徽标（最近一次快照的可见范围），供面板展示数据源与升级提示 */
+const cloudPool = ref<PoolBadge | null>(null)
+
+const CLOUD_IDB_BASE = 'osp:cloud:v2'
+
+/** C3：快照按 scope 隔离缓存（登录/退出/升档后互不串数据） */
+function cloudIdbKey(pool: PoolBadge | null | undefined): string {
+  return `${CLOUD_IDB_BASE}:s${pool?.scope ?? 1}`
+}
 
 function idbOpen(): Promise<IDBDatabase | null> {
   return new Promise((resolve) => {
@@ -271,6 +301,14 @@ export function useCatalog() {
     return data
   }
 
+  /** 快照 → 云点列表（含徽标） */
+  function applySnapshot(snap: ConstellationSnapshot): void {
+    cloudList.value = decodeConstellation(snap)
+    cloudSnapT.value = snap.t || Date.now()
+    tlesTotal.value = snap.total
+    cloudPool.value = snap.pool ?? cloudPool.value
+  }
+
   /**
    * Old BaseScene.loadConstellation — fetch compact point cloud once.
    * Does NOT imply 3D visibility; type chips (typeF) gate rendering.
@@ -281,20 +319,22 @@ export function useCatalog() {
     cloudError.value = ''
     try {
       if (!force) {
-        const cached = await idbGet<ConstellationSnapshot>(CLOUD_IDB_KEY)
+        const cached = await idbGet<ConstellationSnapshot>(cloudIdbKey(cloudPool.value))
         if (cached?.list?.length) {
           cloudList.value = decodeConstellation(cached)
           cloudSnapT.value = cached.t || Date.now()
           tlesTotal.value = cached.total
+          cloudPool.value = cached.pool ?? cloudPool.value
           console.info('[catalog] constellation IDB', cached.total)
           // Background refresh — do not block first paint / chip-on
           void (async () => {
             try {
               const snap = await getJson<ConstellationSnapshot>('/cgi/sat_tle/constellation')
-              cloudList.value = decodeConstellation(snap)
-              cloudSnapT.value = snap.t || Date.now()
-              tlesTotal.value = snap.total
-              void idbSet(CLOUD_IDB_KEY, snap)
+              applySnapshot(snap)
+              if (snap.pool) {
+                cloudPool.value = snap.pool
+                void idbSet(cloudIdbKey(snap.pool), snap)
+              }
             } catch { /* keep IDB */ }
           })()
           return cloudList.value
@@ -302,10 +342,9 @@ export function useCatalog() {
       }
       const qs = force ? '?refresh=1' : ''
       const snap = await getJson<ConstellationSnapshot>(`/cgi/sat_tle/constellation${qs}`)
-      cloudList.value = decodeConstellation(snap)
-      cloudSnapT.value = snap.t || Date.now()
-      tlesTotal.value = snap.total
-      void idbSet(CLOUD_IDB_KEY, snap)
+      applySnapshot(snap)
+      cloudPool.value = snap.pool ?? cloudPool.value
+      void idbSet(cloudIdbKey(snap.pool), snap)
       console.info('[catalog] constellation', snap.total, 'skipped', snap.skipped)
       return cloudList.value
     } catch (e) {
@@ -415,7 +454,7 @@ export function useCatalog() {
 
   return {
     stats, tles, tlesTotal, cdms, loading, error,
-    cloudList, cloudSnapT, cloudLoading, cloudError,
+    cloudList, cloudSnapT, cloudLoading, cloudError, cloudPool,
     tleLineMap, tleLinesLoading,
     loadStats, loadTles, loadAllTles, fetchTleByNorad, loadCdms,
     loadConstellation, loadTleLines, materializeTlesForTypes
