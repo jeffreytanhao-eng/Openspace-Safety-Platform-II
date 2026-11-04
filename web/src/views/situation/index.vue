@@ -23,10 +23,15 @@ import {
   refreshEphemList
 } from './ephem/useUserEphemeris'
 import { listLocalEphemerides, fetchEphemerisText } from '@/api/ephemerides'
+import { listEvents, type ConjunctionEvent } from '@/api/events'
 import { parseEphemeris } from './ephem/parse'
 import { putSet } from './ephem/store'
 import type { EphemSet } from './ephem/types'
 import type { CatalogTle } from '@/composables/useCatalog'
+import { useCatalog } from '@/composables/useCatalog'
+import { buildEventCloudItems, type EventCloudItem } from './eventCloudThree'
+
+type I18nKey = Parameters<ReturnType<typeof useI18n>['t']>[0]
 
 type PanelKind = 'sat' | 'site' | 'cons'
 
@@ -216,6 +221,176 @@ function onLocateMan(
 function onViewportReady() {
   // Restore track zoom if an ephem is already active after viewport rebuild
   paintUserEphem(activeEphem.value ? { track: true } : undefined)
+  viewportReady.value = true
+  void runPendingEventDeepLink()
+}
+
+/* ---------------- 交会危险事件云（E4） ---------------- */
+
+const viewportReady = ref(false)
+const eventOn = ref(false)
+const eventLoading = ref(false)
+/** 原始黄/橙/红事件（拉取一次缓存） */
+const eventRaw = ref<ConjunctionEvent[]>([])
+/** 已挂云的事件（含场景锚点），供点击回查 */
+const eventItems = ref<(EventCloudItem & { pos: unknown })[]>([])
+const selEvent = ref<(EventCloudItem & { pos: unknown }) | null>(null)
+const EVENT_CLOUD_CAP = 300
+
+const eventCount = computed(() => eventRaw.value.length)
+const worstLevel = computed<'red' | 'orange' | 'yellow'>(() => {
+  if (eventRaw.value.some((e) => e.level === 'red')) return 'red'
+  if (eventRaw.value.some((e) => e.level === 'orange')) return 'orange'
+  return 'yellow'
+})
+
+function toCloudItem(e: ConjunctionEvent): EventCloudItem {
+  return {
+    key: e.key,
+    noradA: e.noradA,
+    noradB: e.noradB,
+    nameA: e.nameA,
+    nameB: e.nameB,
+    tca: e.tca,
+    tcaMs: new Date(e.tca).getTime(),
+    level: e.level as EventCloudItem['level'],
+    pc: e.pc,
+    missKm: e.missKm,
+    relSpeedKmS: e.relSpeedKmS,
+    cdmCount: e.cdmCount
+  }
+}
+
+async function ensureEventRaw(): Promise<ConjunctionEvent[]> {
+  if (eventRaw.value.length) return eventRaw.value
+  const { events } = await listEvents('7d')
+  eventRaw.value = events.filter((e) => e.level !== 'low')
+  return eventRaw.value
+}
+
+/** 数量软上限：红 > 橙 > 黄优先，TCA 早者优先，超出截断 */
+function capEvents(list: ConjunctionEvent[]): ConjunctionEvent[] {
+  if (list.length <= EVENT_CLOUD_CAP) return list
+  const rank = (lv: string) => (lv === 'red' ? 0 : lv === 'orange' ? 1 : 2)
+  return [...list]
+    .sort((a, b) => rank(a.level) - rank(b.level) || a.tca.localeCompare(b.tca))
+    .slice(0, EVENT_CLOUD_CAP)
+}
+
+async function toggleEventCloud(): Promise<boolean> {
+  if (eventOn.value) {
+    eventOn.value = false
+    closeEventCard()
+    sceneRef.value?.showEventCloud(null)
+    eventItems.value = []
+    return false
+  }
+  eventLoading.value = true
+  try {
+    // 锚点依赖编目快照状态向量，未就绪先拉一次
+    const { cloudList, loadConstellation } = useCatalog()
+    if (!cloudList.value.length) await loadConstellation()
+    const raw = capEvents(await ensureEventRaw())
+    const built = buildEventCloudItems(raw.map(toCloudItem))
+    eventItems.value = built.items
+    if (!built.items.length) {
+      ElMessage.info(t('sit.eventNone'))
+      return false
+    }
+    if (built.skipped) console.info('[situation] event cloud skipped (no catalog pos)', built.skipped)
+    eventOn.value = true
+    sceneRef.value?.showEventCloud(built.items)
+    return true
+  } catch (e) {
+    console.warn('[situation] event cloud load failed', e)
+    ElMessage.error(t('sit.eventLoadFail'))
+    return false
+  } finally {
+    eventLoading.value = false
+  }
+}
+
+/** 三维点击事件云 → 高亮 + 详情卡（再点空白/关闭取消） */
+function onEventPick(key: string | null) {
+  if (!key) {
+    closeEventCard()
+    return
+  }
+  const hit = eventItems.value.find((x) => x.key === key)
+  if (!hit) return
+  if (selEvent.value?.key === key) {
+    closeEventCard()
+    return
+  }
+  selEvent.value = hit
+  sceneRef.value?.focusEventCloud(key, false)
+}
+
+function closeEventCard() {
+  selEvent.value = null
+  sceneRef.value?.focusEventCloud(null)
+}
+
+function fmtEventTca(tca: string): string {
+  const d = new Date(tca)
+  if (Number.isNaN(d.getTime())) return tca
+  return `${pad2(d.getUTCMonth() + 1)}-${pad2(d.getUTCDate())} ${pad2(d.getUTCHours())}:${pad2(d.getUTCMinutes())} UTC`
+}
+
+function fmtPcSci(pc: number | null): string {
+  if (pc == null || !Number.isFinite(pc)) return '—'
+  return pc === 0 ? '0' : pc.toExponential(2)
+}
+
+/* 深链 /situation?conj=A-B&tca=ms：打开事件云 → 定位 TCA → 飞向并高亮该事件 */
+let pendingEventDeepLink = false
+
+watch(
+  () => [route.query.conj, route.query.tca] as const,
+  ([conj, tca]) => {
+    if (!conj) return
+    pendingEventDeepLink = true
+    void runPendingEventDeepLink()
+  },
+  { immediate: true }
+)
+
+async function runPendingEventDeepLink() {
+  if (!pendingEventDeepLink) return
+  const conj = String(route.query.conj || '')
+  const tcaMs = Number(route.query.tca) || 0
+  if (!viewportReady.value || !conj) return
+  pendingEventDeepLink = false
+  if (!eventOn.value) {
+    const ok = await toggleEventCloud()
+    if (!ok) return
+  }
+  const [a, b] = conj.split('-').map((n) => Number(n))
+  let hit = tcaMs
+    ? eventItems.value.find((x) => x.key === `${a}:${b}:${tcaMs}`)
+    : undefined
+  if (!hit) {
+    // 数据刷新后 TCA 可能漂移：同交会对 ±6h 内取最近
+    let bestD = 6 * 3600e3
+    for (const it of eventItems.value) {
+      if (it.noradA !== a || it.noradB !== b) continue
+      const d = tcaMs ? Math.abs(it.tcaMs - tcaMs) : 0
+      if (d < bestD) {
+        bestD = d
+        hit = it
+      }
+    }
+  }
+  if (!hit) {
+    ElMessage.warning(t('sit.eventMiss'))
+    return
+  }
+  // 把 TCA 带进仿真钟（并重锚 24h 滑杆窗口）
+  simAnchorMs.value = hit.tcaMs
+  simTimeMs.value = hit.tcaMs
+  sceneRef.value?.setSimTime(hit.tcaMs)
+  sceneRef.value?.focusEventCloud(hit.key, true)
+  selEvent.value = hit
 }
 
 /** 关联入库前去掉逐点协方差，避免 OCM 撑爆 IndexedDB；轨道绘制不需要 cov（保留集合级 hasCov 标记） */
@@ -326,7 +501,7 @@ watch(
 <template>
   <div class="constel-page">
     <!-- Embedded 态势: no own logo / title / platform clock (AppShell owns those). -->
-    <SceneCore ref="sceneRef" @viewport-ready="onViewportReady" />
+    <SceneCore ref="sceneRef" @viewport-ready="onViewportReady" @event-pick="onEventPick" />
 
     <SatListPanel
       :open="dockMode === 'sat'"
@@ -379,6 +554,16 @@ watch(
     </div>
 
     <div class="constel-dock">
+      <button
+        class="dock-btn"
+        :class="{ on: eventOn }"
+        :title="t('sit.eventTip')"
+        :disabled="eventLoading"
+        @click="toggleEventCloud"
+      >
+        <span class="dock-ico">☁</span><span class="dock-txt">{{ t('sit.eventCloud') }}</span>
+        <span v-if="eventCount" class="dock-badge" :class="'lv-' + worstLevel">{{ eventCount }}</span>
+      </button>
       <button class="dock-btn" :title="t('sit.heatTip')" @click="notReady(t('sit.heat'))">
         <span class="dock-ico">✱</span><span class="dock-txt">{{ t('sit.heat') }}</span>
       </button>
@@ -409,6 +594,30 @@ watch(
       :title="t('sit.ephemAnalTip')"
       @click="toggleEphemDock"
     >{{ t('sit.ephemAnal') }}</button>
+
+    <!-- E4 交会事件详情卡：点击事件云 / 深链定位时显示 -->
+    <div v-if="selEvent" class="event-card" :class="'lv-' + selEvent.level">
+      <div class="ev-head">
+        <span class="ev-badge">{{ t(`sit.eventLv.${selEvent.level}` as I18nKey) }}</span>
+        <b class="ev-name mono">
+          {{ selEvent.nameA || selEvent.noradA }} × {{ selEvent.nameB || selEvent.noradB }}
+        </b>
+        <button class="ev-close" :title="t('sit.eventClose')" @click="closeEventCard">×</button>
+      </div>
+      <div class="ev-grid">
+        <span>{{ t('conj.col.tca') }}</span><b class="mono">{{ fmtEventTca(selEvent.tca) }}</b>
+        <span>{{ t('conj.col.pc') }}</span><b class="mono strong">{{ fmtPcSci(selEvent.pc) }}</b>
+        <span>{{ t('conj.col.miss') }}</span>
+        <b class="mono">{{ selEvent.missKm != null ? selEvent.missKm.toFixed(3) + ' km' : '—' }}</b>
+        <span>{{ t('conj.relVel') }}</span>
+        <b class="mono">{{ selEvent.relSpeedKmS != null ? selEvent.relSpeedKmS.toFixed(2) + ' km/s' : '—' }}</b>
+        <span>{{ t('conj.col.cdm') }}</span><b class="mono">{{ selEvent.cdmCount }}</b>
+      </div>
+      <router-link
+        class="ev-link"
+        :to="{ name: 'conjunction-detail', params: { id: selEvent.key } }"
+      >{{ t('sit.eventOpen') }} →</router-link>
+    </div>
   </div>
 </template>
 

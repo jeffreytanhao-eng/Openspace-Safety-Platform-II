@@ -59,8 +59,17 @@ import {
   getEphemPositionAt,
   ephemDisplayLabel
 } from './ephemOrbitThree'
+import {
+  setEventCloud,
+  updateEventCloud,
+  setEventCloudSelected,
+  pickEventCloud,
+  getEventCloudAnchor,
+  clearEventCloud,
+  type EventCloudItem
+} from './eventCloudThree'
 
-const emit = defineEmits<{ (e: 'viewport-ready'): void }>()
+const emit = defineEmits<{ (e: 'viewport-ready'): void; (e: 'event-pick', key: string | null): void }>()
 import type { EphemSet, EphemState } from './ephem/types'
 import { useCatalog, type CatalogTle } from '@/composables/useCatalog'
 import {
@@ -673,6 +682,7 @@ function loop(now: number) {
 
   updateCatalogCloud(simMs, camera)
   updateEphemOrbitMarker(simMs)
+  updateEventCloud(simMs)
 
   const flying = updateCameraFly(now)
 
@@ -752,8 +762,11 @@ function stopViewport() {
   resizeObserver?.disconnect()
   resizeObserver = null
   window.removeEventListener('resize', onResize)
+  containerEl.value?.removeEventListener('pointerdown', onScenePointerDown)
+  containerEl.value?.removeEventListener('pointerup', onScenePointerUp)
   clearCatalogCloud(threeScene)
   clearEphemOrbit()
+  clearEventCloud(threeScene)
   clearCatalogPoints(getCesiumScene())
   destroyCesium()
   cesiumActive = false
@@ -786,6 +799,8 @@ async function startViewport() {
   resizeObserver = new ResizeObserver(onResize)
   resizeObserver.observe(el)
   window.addEventListener('resize', onResize)
+  el.addEventListener('pointerdown', onScenePointerDown)
+  el.addEventListener('pointerup', onScenePointerUp)
 
   const ok = await applyCesiumBase(el)
   if (ok && !disposed) {
@@ -797,6 +812,7 @@ async function startViewport() {
     if (lastFilterTypes.length) void paintFromSnapshot(lastFilterTypes)
     // Re-draw user ephemeris that was requested before Three/Cesium finished
     flushUserEphem()
+    flushEventCloud()
     emit('viewport-ready')
   }
 }
@@ -915,6 +931,55 @@ function clearUserEphemOrbit() {
   setManLabelVisible(false)
   clearEphemOrbit()
 }
+
+/* ------------- 交会危险事件云（E4）：挂载 / 聚焦 / 拾取 ------------- */
+
+/** Last requested event-cloud set — flushed when Three scene becomes ready. */
+let lastEventItems: (EventCloudItem & { pos: THREE.Vector3 })[] | null = null
+
+function flushEventCloud() {
+  const scene = threeScene
+  if (!scene) return
+  if (lastEventItems) setEventCloud(scene, lastEventItems)
+  else clearEventCloud(scene)
+}
+
+/** 挂载/清空事件云；items=null 清空（保留缓存以便视口重建后 flush 由 null 决定） */
+function showEventCloud(items: (EventCloudItem & { pos: THREE.Vector3 })[] | null) {
+  lastEventItems = items
+  const scene = threeScene
+  if (!scene) return
+  if (items) setEventCloud(scene, items)
+  else clearEventCloud(scene)
+}
+
+/** 深链/列表定位：相机飞向事件云锚点并高亮；fly=false 仅高亮（点击场景已可见）；key=null 取消高亮 */
+function focusEventCloud(key: string | null, fly = true): boolean {
+  setEventCloudSelected(key)
+  if (!key || !camera || !fly) return true
+  if (!getEventCloudAnchor(key, _trackPos)) return false
+  framePointAtTrackDist(_trackPos)
+  return true
+}
+
+/** 事件云点击拾取：把 Cesium 交互 canvas 上的「点击」（非拖拽）转为 NDC raycast */
+function onScenePointerDown(e: PointerEvent) {
+  pickDown = { x: e.clientX, y: e.clientY }
+}
+function onScenePointerUp(e: PointerEvent) {
+  const down = pickDown
+  pickDown = null
+  if (!down || !camera || !containerEl.value) return
+  if (Math.hypot(e.clientX - down.x, e.clientY - down.y) > 5) return // 拖拽不算点击
+  const rect = containerEl.value.getBoundingClientRect()
+  const ndc = new THREE.Vector2(
+    ((e.clientX - rect.left) / rect.width) * 2 - 1,
+    -((e.clientY - rect.top) / rect.height) * 2 + 1
+  )
+  emit('event-pick', pickEventCloud(ndc, camera))
+}
+let pickDown: { x: number; y: number } | null = null
+
 defineExpose({
   resetCameraHome,
   setSimTime,
@@ -932,7 +997,9 @@ defineExpose({
   showEphemOrbit,
   showEphemManeuver,
   focusEphemManIndex,
-  clearUserEphemOrbit
+  clearUserEphemOrbit,
+  showEventCloud,
+  focusEventCloud
 })
 </script>
 
