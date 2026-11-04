@@ -12,6 +12,9 @@ web/public/cesium/
 .env.*.local
 deploy/.env
 
+# 本地测试账号（含明文密码，仅本机使用）
+本地测试账号.md
+
 # 日志
 *.log
 npm-debug.log*
