@@ -8,9 +8,11 @@
  * - 拾取 raycaster 独立实现，命中后由 SceneCore 转发 Vue 层弹窗。
  */
 import * as THREE from 'three'
+import { twoline2satrec, propagate } from 'satellite.js'
 import { eciToScene } from './scene'
 import { twoBodyPropagate } from './ephem/screening'
 import { useCatalog } from '@/composables/useCatalog'
+import { loadSharedModelGeom, resolveCatalogModelKey } from './catalogCloudThree'
 
 export interface EventCloudItem {
   key: string
@@ -40,11 +42,22 @@ const FAR_MS = 86_400_000 * 3
 const DIM_OPACITY = 0.3
 /** 选中环 */
 const RING_SIZE = 0.05
+/** 交会放大态白圈（近景尺度，避免铺满屏幕） */
+const RING_FOCUS_SIZE = 0.014
 
 let group: THREE.Group | null = null
 let items: (EventCloudItem & { pos: THREE.Vector3 })[] = []
 let sprites: THREE.Sprite[] = []
 let ring: THREE.Sprite | null = null
+/** 白圈基准尺寸（宽景 RING_SIZE / 近景 RING_FOCUS_SIZE） */
+let ringBaseSize = RING_SIZE
+/* R2-7 交会放大态：双方轨道 + 双方模型（选中时构建，取消选中即销毁） */
+let focus: THREE.Group | null = null
+let focusToken = 0
+const CONJ_ORBIT_SAMPLES = 180
+/** 模型视觉最小/最大间距（场景单位；1 单位 = 6371 km，真实脱靶距离在此尺度下不可见） */
+const CONJ_MIN_SEP = 0.007
+const CONJ_MAX_SEP = 0.03
 let lastOpacitySimMs = Number.NaN
 let attachedScene: THREE.Scene | null = null
 
@@ -105,18 +118,53 @@ function propagateNorad(norad: number, tcaMs: number): [number, number, number] 
   return prop ? [prop.r[0], prop.r[1], prop.r[2]] : null
 }
 
+/** TLE（tleLineMap）→ SGP4 在 tcaMs 的 ECI km 位置（编目快照外的目标兜底） */
+function propagateByTle(norad: number, tcaMs: number): [number, number, number] | null {
+  const line = useCatalog().tleLineMap.value.get(norad)
+  if (!line) return null
+  try {
+    const satrec = twoline2satrec(line[0], line[1])
+    const pv = propagate(satrec, new Date(tcaMs))
+    const p = pv?.position
+    if (!p || !Number.isFinite(p.x) || !Number.isFinite(p.y) || !Number.isFinite(p.z)) return null
+    return [p.x, p.y, p.z]
+  } catch {
+    return null
+  }
+}
+
+/** 目标在 TCA 的位置：优先编目快照两体推进，缺失时用 TLE/SGP4 兜底 */
+function positionOf(norad: number, tcaMs: number): [number, number, number] | null {
+  return propagateNorad(norad, tcaMs) ?? propagateByTle(norad, tcaMs)
+}
+
 /**
- * 组装带锚点的事件集：双方编目位置几何中心（缺一用另一方，全缺丢弃）。
- * 返回附带 pos 的条目数组与被丢弃数量。
+ * 组装带锚点的事件集：双方位置几何中心（缺一用另一方，全缺丢弃）。
+ * 编目快照（约 450 目标）之外的事件用 sat_tle 全量 TLE 兜底锚点，
+ * 保证深链/任意交会事件都能落进场景。
  */
-export function buildEventCloudItems(
+export async function buildEventCloudItems(
   raw: EventCloudItem[]
-): { items: (EventCloudItem & { pos: THREE.Vector3 })[]; skipped: number } {
+): Promise<{ items: (EventCloudItem & { pos: THREE.Vector3 })[]; skipped: number }> {
+  const hasAnchor = (ev: EventCloudItem) =>
+    !!propagateNorad(ev.noradA, ev.tcaMs) ||
+    (ev.noradB !== ev.noradA && !!propagateNorad(ev.noradB, ev.tcaMs))
+  if (raw.some((ev) => !hasAnchor(ev))) {
+    const { tleLineMap, loadTleLines } = useCatalog()
+    if (!tleLineMap.value.size) {
+      try {
+        await loadTleLines()
+      } catch (e) {
+        console.warn('[situation] tle_lines load failed, keep snapshot anchors only', e)
+      }
+    }
+  }
+
   const out: (EventCloudItem & { pos: THREE.Vector3 })[] = []
   let skipped = 0
   for (const ev of raw) {
-    const a = propagateNorad(ev.noradA, ev.tcaMs)
-    const b = ev.noradB !== ev.noradA ? propagateNorad(ev.noradB, ev.tcaMs) : null
+    const a = positionOf(ev.noradA, ev.tcaMs)
+    const b = ev.noradB !== ev.noradA ? positionOf(ev.noradB, ev.tcaMs) : null
     let r: [number, number, number] | null = null
     if (a && b) r = [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2, (a[2] + b[2]) / 2]
     else r = a ?? b
@@ -188,8 +236,10 @@ export function updateEventCloud(simMs: number): void {
   }
 }
 
-/** 选中高亮：白环锚在事件云位置；key=null 取消 */
+/** 选中高亮：白环锚在事件云位置；key=null 取消（同时销毁交会放大态） */
 export function setEventCloudSelected(key: string | null): void {
+  disposeFocus()
+  ringBaseSize = RING_SIZE
   if (!ring) return
   const it = key ? items.find((x) => x.key === key) : null
   if (!it) {
@@ -198,6 +248,173 @@ export function setEventCloudSelected(key: string | null): void {
   }
   ring.position.copy(it.pos)
   ring.visible = true
+  // 近景：白圈收小到与模型同量级，避免铺满屏幕
+  ringBaseSize = RING_FOCUS_SIZE
+  ring.scale.setScalar(RING_FOCUS_SIZE)
+  focusToken++
+  void buildFocus(focusToken, it)
+}
+
+/**
+ * 每帧白圈动效（R2-7）：缓慢自转 + 呼吸缩放。
+ * wallSec = 墙钟秒（performance.now()/1000），与仿真倍速解耦。
+ */
+export function updateEventCloudFocus(wallSec: number): void {
+  if (!ring || !ring.visible) return
+  const mat = ring.material as THREE.SpriteMaterial
+  mat.rotation = wallSec * 0.35
+  ring.scale.setScalar(ringBaseSize * (1 + 0.14 * Math.sin(wallSec * 1.7)))
+}
+
+/* ---------- 交会放大态：双方轨道 + 双方 3D 模型 ---------- */
+
+/** TLE → 以 TCA 为中心的一个完整轨道周期采样（连续椭圆，首尾闭合） */
+function orbitByTle(norad: number, tcaMs: number): THREE.Vector3[] | null {
+  const line = useCatalog().tleLineMap.value.get(norad)
+  if (!line) return null
+  let satrec: ReturnType<typeof twoline2satrec>
+  try {
+    satrec = twoline2satrec(line[0], line[1])
+  } catch {
+    return null
+  }
+  const no = satrec.no
+  if (!no || !Number.isFinite(no)) return null
+  // no: rad/min → 轨道周期 ms
+  const periodMs = ((2 * Math.PI) / no) * 60000
+  const pts: THREE.Vector3[] = []
+  for (let i = 0; i <= CONJ_ORBIT_SAMPLES; i++) {
+    const tMs = tcaMs - periodMs / 2 + (periodMs * i) / CONJ_ORBIT_SAMPLES
+    const pv = propagate(satrec, new Date(tMs))
+    const p = pv?.position
+    if (!p || !Number.isFinite(p.x) || !Number.isFinite(p.y) || !Number.isFinite(p.z)) return null
+    pts.push(eciToScene(p.x, p.y, p.z))
+  }
+  return pts
+}
+
+/** 无 TLE 时由编目快照状态向量做二体椭圆采样（连续轨道兜底） */
+function orbitByState(norad: number, tcaMs: number): THREE.Vector3[] | null {
+  const { cloudList, cloudSnapT } = useCatalog()
+  const p = cloudList.value.find((c) => c.norad_id === norad)
+  if (!p || !cloudSnapT.value) return null
+  const dtSec = (tcaMs - cloudSnapT.value) / 1000
+  if (!Number.isFinite(dtSec) || Math.abs(dtSec) > 86400 * 30) return null
+  const s0 = twoBodyPropagate([p.x, p.y, p.z], [p.vx, p.vy, p.vz], dtSec)
+  if (!s0) return null
+  const [r0, v0] = [s0.r, s0.v]
+  const rmag = Math.hypot(r0[0], r0[1], r0[2])
+  const vmag = Math.hypot(v0[0], v0[1], v0[2])
+  const mu = 398600.4418
+  const a = 1 / (2 / rmag - (vmag * vmag) / mu)
+  if (!Number.isFinite(a) || a <= 0) return null
+  const periodSec = 2 * Math.PI * Math.sqrt((a * a * a) / mu)
+  const pts: THREE.Vector3[] = []
+  for (let i = 0; i <= CONJ_ORBIT_SAMPLES; i++) {
+    const dt = -periodSec / 2 + (periodSec * i) / CONJ_ORBIT_SAMPLES
+    const s = twoBodyPropagate(r0, v0, dt)
+    if (!s) return null
+    pts.push(eciToScene(s.r[0], s.r[1], s.r[2]))
+  }
+  return pts
+}
+
+/** 交会双方在 TCA 的场景位置；真实间距过小/过大时做视觉归一（方向保持真实） */
+function conjPairPositions(
+  ev: EventCloudItem & { pos: THREE.Vector3 },
+  outA: THREE.Vector3,
+  outB: THREE.Vector3
+): { a: boolean; b: boolean } {
+  const pa = positionOf(ev.noradA, ev.tcaMs)
+  const pb = ev.noradB !== ev.noradA ? positionOf(ev.noradB, ev.tcaMs) : null
+  const va = pa ? eciToScene(pa[0], pa[1], pa[2]) : null
+  const vb = pb ? eciToScene(pb[0], pb[1], pb[2]) : null
+  if (!va && !vb) return { a: false, b: false }
+  if (!va || !vb) {
+    outA.copy(va ?? ev.pos)
+    outB.copy(vb ?? ev.pos)
+    return { a: !!va, b: !!vb }
+  }
+  const dir = new THREE.Vector3().subVectors(vb, va)
+  if (dir.lengthSq() < 1e-12) {
+    // 位置重合：用「径向 × 天向」构造稳定分离方向（仅视觉，不改锚点）
+    const radial = ev.pos.clone().normalize()
+    dir.crossVectors(radial, new THREE.Vector3(0, 1, 0))
+    if (dir.lengthSq() < 1e-9) dir.set(1, 0, 0)
+  }
+  dir.normalize()
+  const half = Math.min(CONJ_MAX_SEP / 2, Math.max(CONJ_MIN_SEP / 2, va.distanceTo(vb) / 2))
+  outA.copy(ev.pos).addScaledVector(dir, -half)
+  outB.copy(ev.pos).addScaledVector(dir, half)
+  return { a: true, b: true }
+}
+
+/** 构建交会放大态（异步：轨道同步入组，模型解析完成后按 token 校验补挂） */
+async function buildFocus(token: number, ev: EventCloudItem & { pos: THREE.Vector3 }): Promise<void> {
+  const scene = attachedScene
+  if (!scene || token !== focusToken) return
+  const g = new THREE.Group()
+  g.name = 'ospConjFocus'
+
+  const { tleLineMap, loadTleLines } = useCatalog()
+  if (!tleLineMap.value.size) {
+    try {
+      await loadTleLines()
+    } catch {
+      /* 无 TLE 时轨道走二体兜底 */
+    }
+  }
+  if (token !== focusToken) return
+
+  const addOrbit = (norad: number, color: number) => {
+    const pts = orbitByTle(norad, ev.tcaMs) ?? orbitByState(norad, ev.tcaMs)
+    if (!pts || pts.length < 2) return
+    const line = new THREE.Line(
+      new THREE.BufferGeometry().setFromPoints(pts),
+      new THREE.LineBasicMaterial({ color, transparent: true, opacity: 0.85 })
+    )
+    line.name = `ospConjOrbit_${norad}`
+    g.add(line)
+  }
+  addOrbit(ev.noradA, 0x62d0ff)
+  if (ev.noradB !== ev.noradA) addOrbit(ev.noradB, 0xffb066)
+
+  const posA = new THREE.Vector3()
+  const posB = new THREE.Vector3()
+  const pair = conjPairPositions(ev, posA, posB)
+
+  const addModel = async (norad: number, name: string, pos: THREE.Vector3) => {
+    const gm = await loadSharedModelGeom(resolveCatalogModelKey(name, norad), 'med')
+    if (!gm || token !== focusToken || focus !== g) return
+    const mat = (gm.mat as THREE.Material).clone()
+    mat.userData.cloned = true
+    const mesh = new THREE.Mesh(gm.geom, mat)
+    mesh.name = `ospConjModel_${norad}`
+    mesh.position.copy(pos)
+    // 机头/天顶沿径向（与云模型同一姿态口径）
+    mesh.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), pos.clone().normalize())
+    g.add(mesh)
+  }
+  if (pair.a) void addModel(ev.noradA, ev.nameA, posA)
+  if (pair.b && ev.noradB !== ev.noradA) void addModel(ev.noradB, ev.nameB, posB)
+
+  scene.add(g)
+  focus = g
+}
+
+/** 销毁交会放大态（几何为共享缓存不 dispose，克隆材质/线资源需释放） */
+function disposeFocus(): void {
+  if (!focus) return
+  focus.traverse((o) => {
+    const mesh = o as THREE.Mesh
+    if ((o as unknown as { isLine?: boolean }).isLine || (o as unknown as { isMesh?: boolean }).isMesh) {
+      const mat = mesh.material as THREE.Material
+      if (mat?.userData?.cloned) mat.dispose()
+      if ((o as unknown as { isLine?: boolean }).isLine) mesh.geometry?.dispose()
+    }
+  })
+  focus.removeFromParent()
+  focus = null
 }
 
 /** 点击拾取：NDC 坐标 → 最近事件 key（未命中返回 null） */
@@ -222,6 +439,7 @@ export function hasEventCloud(): boolean {
 }
 
 export function clearEventCloud(scene?: THREE.Scene | null): void {
+  disposeFocus()
   const sc = scene ?? attachedScene
   if (group && sc) sc.remove(group)
   for (const sp of sprites) {

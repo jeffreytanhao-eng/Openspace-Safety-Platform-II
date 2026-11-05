@@ -1,6 +1,6 @@
 /**
  * 机动候选库层（Epic J，占位任务）：
- *  - maneuver_plans：组织为托管目标登记的机动候选（OKAPI 式 observe/critical → 机动候选）。
+ *  - maneuver_plans：组织为目标登记的机动候选（OKAPI 式 observe/critical → 机动候选）。
  *  - 本期不实现机动引擎（不做 ΔV→轨道推演）；「再筛查」= 以当前在编根数对机动窗口结束后
  *    的 10 天窗口发起单主星防新交会筛查（复用 Epic E1 管线，rescreen_job_id 关联）。
  *  - 状态机：proposed（候选）→ approved（批准）→ executed（已执行）；cancelled（取消，终态）。

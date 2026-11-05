@@ -1,8 +1,9 @@
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted, ref } from 'vue'
+import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useI18n } from '@/composables/useI18n'
 import type { MessageKey } from '@/i18n/messages'
 import {
+  cancelScreen,
   createScreen,
   getScreen,
   listScreens,
@@ -10,9 +11,13 @@ import {
   type ScreenJob,
   type ScreenJobStatus
 } from '@/api/screens'
+import { listObjects, syncTle, type ManagedObject, type SyncTleResult } from '@/api/objects'
 import { AuthError } from '@/api/auth'
 
 const { t } = useI18n()
+
+/** 与后端 SCREEN_MAX_PRIMARY 默认值保持一致；后端为准，超限时以其报错文案提示 */
+const MAX_PRIMARY = 50
 
 const loading = ref(true)
 const needOrg = ref(false)
@@ -30,21 +35,160 @@ const hbrM = ref(15)
 const submitting = ref(false)
 const submitError = ref('')
 
+/* --------------------- R0-2：主星分批（大星座避免一次打满队列） --------------------- */
+
+const managed = ref<ManagedObject[]>([])
+const managedLoaded = ref(false)
+const useSubset = ref(false)
+const pickedNorads = ref<number[]>([])
+const pickQuery = ref('')
+const pickOpen = ref(false)
+
+const managedFiltered = computed(() => {
+  const q = pickQuery.value.trim().toLowerCase()
+  if (!q) return managed.value
+  return managed.value.filter(
+    (o) => String(o.norad_id).includes(q) || o.name.toLowerCase().includes(q)
+  )
+})
+
+async function loadManaged() {
+  try {
+    managed.value = await listObjects()
+    // 超过单任务上限：默认进入分批模式并预选首批，避免直接提交被后端拒绝
+    if (managed.value.length > MAX_PRIMARY) {
+      useSubset.value = true
+      if (!pickedNorads.value.length) {
+        pickedNorads.value = managed.value.slice(0, MAX_PRIMARY).map((o) => o.norad_id)
+      }
+    }
+  } catch {
+    /* 无组织或接口不可用时留空，提交时由后端错误文案兜底 */
+  } finally {
+    managedLoaded.value = true
+  }
+}
+
+function isPicked(norad: number): boolean {
+  return pickedNorads.value.includes(norad)
+}
+function togglePick(norad: number) {
+  const i = pickedNorads.value.indexOf(norad)
+  if (i >= 0) pickedNorads.value.splice(i, 1)
+  else pickedNorads.value.push(norad)
+}
+/** 全选 = 预选前 MAX_PRIMARY 颗（单任务上限内） */
+function pickAll() {
+  pickedNorads.value = managed.value.slice(0, MAX_PRIMARY).map((o) => o.norad_id)
+}
+function pickClear() {
+  pickedNorads.value = []
+}
+
+/* ------------------------ R0-2：目标根数自检 ------------------------ */
+
+const syncLoading = ref(false)
+const syncResult = ref<SyncTleResult | null>(null)
+const syncError = ref('')
+
+async function runSyncTle() {
+  if (syncLoading.value) return
+  syncLoading.value = true
+  syncError.value = ''
+  try {
+    syncResult.value = await syncTle()
+    await loadManaged()
+  } catch (e) {
+    syncError.value = e instanceof Error ? e.message : String(e)
+  } finally {
+    syncLoading.value = false
+  }
+}
+
+/* --------------------- R2-8：数据源（一单一源） --------------------- */
+
+const primarySource = ref<'tle' | 'ephem'>('tle')
+const secondarySource = ref<'catalog' | 'cdm'>('catalog')
+
+/** 当前主星范围内已绑定星历的目标数（决定「精密星历」选项是否可选） */
+const ephemBoundCount = computed(() => {
+  const pool =
+    useSubset.value && pickedNorads.value.length
+      ? managed.value.filter((o) => pickedNorads.value.includes(o.norad_id))
+      : managed.value
+  return pool.filter((o) => Number(o.bound_ephemerides ?? 0) > 0).length
+})
+
+watch(ephemBoundCount, (n) => {
+  if (!n && primarySource.value === 'ephem') primarySource.value = 'tle'
+})
+
+function sourceLabel(j: ScreenJob): string {
+  const p = j.primary_source === 'ephem' ? t('scr.tagEphem') : t('scr.tagTle')
+  const s = j.secondary_source === 'cdm' ? t('scr.tagCdm') : t('scr.tagCatalog')
+  return `${p} × ${s}`
+}
+
 async function submit() {
   if (submitting.value) return
   submitError.value = ''
   const w = Math.min(168, Math.max(1, Math.round(Number(windowH.value) || 72)))
   const m = Math.min(50, Math.max(0.5, Number(missMaxKm.value) || 10))
   const h = Math.min(1000, Math.max(1, Number(hbrM.value) || 15))
+  const subset = useSubset.value ? pickedNorads.value.slice() : undefined
+  if (subset && !subset.length) {
+    submitError.value = t('scr.pickNone')
+    return
+  }
+  if (subset && subset.length > MAX_PRIMARY) {
+    submitError.value = t('scr.pickHint', { n: MAX_PRIMARY })
+    return
+  }
+  if (primarySource.value === 'ephem' && !ephemBoundCount.value) {
+    submitError.value = t('scr.ephemNone')
+    return
+  }
   submitting.value = true
   try {
-    const job = await createScreen({ windowH: w, missMaxKm: m, hbrM: h })
+    const job = await createScreen({
+      windowH: w,
+      missMaxKm: m,
+      hbrM: h,
+      primaryNorads: subset,
+      primarySource: primarySource.value,
+      secondarySource: secondarySource.value
+    })
     await loadJobs()
     selectJob(job.id)
   } catch (e) {
     submitError.value = e instanceof Error ? e.message : String(e)
   } finally {
     submitting.value = false
+  }
+}
+
+/* ------------------------------ R0-3：取消 ------------------------------ */
+
+const cancellingId = ref<number | null>(null)
+const cancelError = ref('')
+
+function canCancel(j: ScreenJob): boolean {
+  return (j.status === 'queued' || j.status === 'running') && !j.cancel_requested
+}
+
+async function askCancel(j: ScreenJob) {
+  if (cancellingId.value !== null) return
+  if (!window.confirm(t('scr.cancelConfirm'))) return
+  cancellingId.value = j.id
+  cancelError.value = ''
+  try {
+    await cancelScreen(j.id)
+    await loadJobs()
+    if (selectedId.value === j.id) await selectJob(j.id)
+  } catch (e) {
+    cancelError.value = e instanceof Error ? e.message : String(e)
+  } finally {
+    cancellingId.value = null
   }
 }
 
@@ -76,7 +220,7 @@ async function selectJob(id: number) {
 async function loadAll() {
   loading.value = true
   try {
-    await loadJobs()
+    await Promise.all([loadJobs(), loadManaged()])
     if (!selectedId.value && jobs.value.length) await selectJob(jobs.value[0].id)
   } finally {
     loading.value = false
@@ -107,10 +251,15 @@ const STATUS_CLASS: Record<ScreenJobStatus, string> = {
   queued: 'queued',
   running: 'running',
   done: 'ok',
-  failed: 'failed'
+  failed: 'failed',
+  cancelled: 'cancelled'
 }
 function statusLabel(s: ScreenJobStatus): MessageKey {
   return `scr.status.${s}` as MessageKey
+}
+function pct(j: ScreenJob): number {
+  const n = Number(j.progress_pct)
+  return Number.isFinite(n) ? Math.max(0, Math.min(100, Math.round(n))) : 0
 }
 function levelLabel(l: ScreenEvent['level']): MessageKey {
   return `scr.level.${l}` as MessageKey
@@ -180,10 +329,102 @@ function pcSourceLabel(e: ScreenEvent): string {
                 <span class="lbl">{{ t('scr.hbr') }}</span>
                 <input v-model.number="hbrM" type="number" min="1" max="1000" step="1" />
               </label>
+
+              <!-- R2-8：数据源（一单一源；AOE / Stargaze 本轮不提供） -->
+              <label class="field">
+                <span class="lbl">{{ t('scr.primarySource') }}</span>
+                <select v-model="primarySource">
+                  <option value="tle">{{ t('scr.srcTle') }}</option>
+                  <option value="ephem" :disabled="!ephemBoundCount">{{ t('scr.srcEphem') }}</option>
+                </select>
+              </label>
+              <div v-if="primarySource === 'ephem'" class="pick-hint">{{ t('scr.ephemHint') }}</div>
+              <label class="field">
+                <span class="lbl">{{ t('scr.secondarySource') }}</span>
+                <select v-model="secondarySource">
+                  <option value="catalog">{{ t('scr.srcCatalog') }}</option>
+                  <option value="cdm">{{ t('scr.srcCdm') }}</option>
+                </select>
+              </label>
+              <div v-if="secondarySource === 'cdm'" class="pick-hint">{{ t('scr.cdmHint') }}</div>
+
+              <!-- R0-2：主星范围（目标超过单任务上限时分批选择） -->
+              <div class="picker">
+                <div class="picker-head">
+                  <span class="lbl">{{ t('scr.pickPrimary') }}</span>
+                  <label v-if="managed.length" class="switch">
+                    <input v-model="useSubset" type="checkbox" />
+                    <span>{{ t('scr.pickSubset') }}</span>
+                  </label>
+                </div>
+                <template v-if="managed.length">
+                  <div class="picker-bar">
+                    <span v-if="useSubset" class="muted">
+                      {{ t('scr.pickCount', { n: pickedNorads.length, total: managed.length }) }}
+                    </span>
+                    <span v-else class="muted">{{ t('scr.pickAll') }} · {{ managed.length }}</span>
+                    <template v-if="useSubset">
+                      <button type="button" class="mini" @click="pickAll">{{ t('scr.pickAllBtn') }}</button>
+                      <button type="button" class="mini" @click="pickClear">{{ t('scr.pickClearBtn') }}</button>
+                      <button type="button" class="mini" @click="pickOpen = !pickOpen">
+                        {{ pickOpen ? '−' : '+' }}
+                      </button>
+                    </template>
+                  </div>
+                  <div v-if="useSubset" class="pick-hint">{{ t('scr.pickHint', { n: MAX_PRIMARY }) }}</div>
+                  <template v-if="useSubset && pickOpen">
+                    <input
+                      v-model="pickQuery"
+                      class="pick-search"
+                      type="text"
+                      :placeholder="t('scr.pickSearch')"
+                    />
+                    <div class="pick-list">
+                      <label v-for="o in managedFiltered" :key="o.id" class="pick-item">
+                        <input
+                          type="checkbox"
+                          :checked="isPicked(o.norad_id)"
+                          @change="togglePick(o.norad_id)"
+                        />
+                        <span class="pick-name">{{ o.name }}</span>
+                        <span class="pick-norad">{{ o.norad_id }}</span>
+                      </label>
+                      <div v-if="!managedFiltered.length" class="empty">{{ t('scr.pickNoMatch') }}</div>
+                    </div>
+                  </template>
+                </template>
+                <div v-else-if="managedLoaded" class="pick-hint">{{ t('scr.noManaged') }}</div>
+              </div>
+
               <button type="button" class="primary" :disabled="submitting" @click="submit">
                 {{ submitting ? t('scr.submitting') : t('scr.submit') }}
               </button>
               <div v-if="submitError" class="err">{{ submitError }}</div>
+
+              <!-- R0-2：根数自检（系统池 TLE 可用性与龄期） -->
+              <div class="sync">
+                <button type="button" class="ghost" :disabled="syncLoading" @click="runSyncTle">
+                  {{ syncLoading ? t('scr.syncing') : t('scr.syncTle') }}
+                </button>
+                <span
+                  v-if="syncResult"
+                  class="sync-sum"
+                  :class="{ warn: syncResult.missing > 0 || syncResult.stale_7d > 0 }"
+                >
+                  <template v-if="syncResult.total">
+                    {{
+                      t('scr.syncTleSummary', {
+                        total: syncResult.total,
+                        withTle: syncResult.with_tle,
+                        missing: syncResult.missing,
+                        stale: syncResult.stale_7d
+                      })
+                    }}
+                  </template>
+                  <template v-else>{{ t('scr.syncTleEmpty') }}</template>
+                </span>
+                <span v-if="syncError" class="err">{{ syncError }}</span>
+              </div>
             </div>
           </div>
 
@@ -199,28 +440,55 @@ function pcSourceLabel(e: ScreenEvent): string {
             <div class="job-list">
               <div v-if="loading && !jobs.length" class="empty">{{ t('obj.loading') }}</div>
               <div v-else-if="!jobs.length" class="empty">{{ t('scr.noJobs') }}</div>
-              <button
+              <div v-if="cancelError" class="err cancel-err">{{ cancelError }}</div>
+              <div
                 v-for="j in jobs"
                 :key="j.id"
-                type="button"
                 class="job"
                 :class="{ on: selectedId === j.id }"
+                role="button"
+                tabindex="0"
                 @click="selectJob(j.id)"
+                @keydown.enter="selectJob(j.id)"
               >
                 <div class="job-top">
                   <span class="jid">#{{ j.id }}</span>
                   <span class="state" :class="STATUS_CLASS[j.status]">{{ t(statusLabel(j.status)) }}</span>
                   <span class="when">{{ fmtWhen(j.queued_at) }}</span>
+                  <button
+                    v-if="canCancel(j)"
+                    type="button"
+                    class="cancel"
+                    :disabled="cancellingId === j.id"
+                    @click.stop="askCancel(j)"
+                  >
+                    {{ cancellingId === j.id ? t('scr.cancelling') : t('scr.cancel') }}
+                  </button>
+                  <span v-else-if="j.cancel_requested" class="cancel-pending">{{ t('scr.cancelling') }}</span>
                 </div>
                 <div class="job-meta">
                   <span>{{ t('scr.col.window') }} {{ j.window_h }}h</span>
                   <span>{{ t('scr.col.miss') }} {{ j.miss_max_km }}</span>
                   <span>HBR {{ j.hbr_m }}m</span>
+                  <span class="src-tag">{{ sourceLabel(j) }}</span>
                   <span>{{ t('scr.col.events') }} {{ j.n_events }}</span>
-                  <span v-if="j.status === 'done' || j.status === 'failed'">{{ fmtDur(j.duration_ms) }}</span>
+                  <span v-if="j.status !== 'queued' && j.status !== 'cancelled'">
+                    {{ t('scr.col.primary') }} {{ j.n_primary }} · {{ t('scr.col.secondary') }}
+                    {{ j.n_secondary }}
+                  </span>
+                  <span v-if="j.status === 'done' || j.status === 'failed' || j.status === 'cancelled'">
+                    {{ fmtDur(j.duration_ms) }}
+                  </span>
+                </div>
+                <div v-if="j.status === 'running'" class="job-progress">
+                  <div class="bar"><i :style="{ width: `${pct(j)}%` }"></i></div>
+                  <div class="prog-note">
+                    <span>{{ j.progress_note || t('scr.progress') }}</span>
+                    <span>{{ pct(j) }}%</span>
+                  </div>
                 </div>
                 <div v-if="j.error_message" class="job-err">{{ j.error_message }}</div>
-              </button>
+              </div>
             </div>
           </div>
         </aside>
@@ -355,6 +623,17 @@ function pcSourceLabel(e: ScreenEvent): string {
   outline: none;
 }
 .field input:focus { border-color: var(--accent); }
+.field select {
+  appearance: none;
+  border: 1px solid var(--border);
+  background: var(--bg-deep);
+  color: var(--text);
+  border-radius: 4px;
+  padding: 6px 8px;
+  font-size: 12px;
+  outline: none;
+}
+.field select:focus { border-color: var(--accent); }
 .primary {
   appearance: none;
   border: 1px solid rgba(74, 125, 154, 0.5);
@@ -369,6 +648,65 @@ function pcSourceLabel(e: ScreenEvent): string {
 .primary:hover { border-color: var(--accent); }
 .primary:disabled { opacity: 0.55; cursor: default; }
 .err { font-size: 11px; color: var(--danger); line-height: 1.5; }
+
+/* 主星分批选择（R0-2） */
+.picker {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  border-top: 1px dashed var(--border);
+  padding-top: 8px;
+}
+.picker-head { display: flex; align-items: center; justify-content: space-between; gap: 6px; }
+.switch { display: inline-flex; align-items: center; gap: 4px; font-size: 10px; color: var(--text-muted); cursor: pointer; }
+.picker-bar { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.muted { font-size: 10px; color: var(--text-dim); }
+.mini {
+  appearance: none;
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--text-muted);
+  border-radius: 3px;
+  padding: 1px 6px;
+  font-size: 10px;
+  cursor: pointer;
+}
+.mini:hover { color: var(--accent-strong); border-color: var(--accent); }
+.pick-hint { font-size: 10px; color: var(--text-dim); line-height: 1.4; }
+.pick-search {
+  appearance: none;
+  border: 1px solid var(--border);
+  background: var(--bg-deep);
+  color: var(--text);
+  border-radius: 4px;
+  padding: 5px 8px;
+  font-size: 11px;
+  outline: none;
+}
+.pick-search:focus { border-color: var(--accent); }
+.pick-list {
+  max-height: 180px;
+  overflow: auto;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--bg-deep);
+  display: flex;
+  flex-direction: column;
+}
+.pick-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 6px;
+  font-size: 11px;
+  cursor: pointer;
+}
+.pick-item:hover { background: var(--bg-panel-2); }
+.pick-name { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.pick-norad { font-family: var(--mono); font-size: 10px; color: var(--text-dim); }
+.sync { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.sync-sum { font-size: 10px; color: var(--text-dim); line-height: 1.4; }
+.sync-sum.warn { color: var(--warn); }
 
 /* 任务列表 */
 .jobs { flex: 1; }
@@ -409,6 +747,43 @@ function pcSourceLabel(e: ScreenEvent): string {
 .state.running { color: var(--accent-strong); border-color: rgba(74, 125, 154, 0.4); }
 .state.ok { color: var(--ok); border-color: rgba(90, 154, 120, 0.35); }
 .state.failed { color: var(--danger); border-color: rgba(196, 91, 91, 0.4); }
+.state.cancelled { color: var(--text-dim); border-style: dashed; }
+.cancel {
+  appearance: none;
+  border: 1px solid rgba(196, 91, 91, 0.45);
+  background: transparent;
+  color: var(--danger);
+  border-radius: 3px;
+  padding: 1px 6px;
+  font-size: 9px;
+  cursor: pointer;
+}
+.cancel:hover { background: rgba(196, 91, 91, 0.12); }
+.cancel:disabled { opacity: 0.5; cursor: default; }
+.cancel-pending { font-size: 9px; color: var(--warn); }
+.cancel-err { padding: 4px 8px; }
+.job-progress { margin-top: 6px; }
+.job-progress .bar {
+  height: 4px;
+  border-radius: 2px;
+  background: var(--bg-deep);
+  border: 1px solid var(--border);
+  overflow: hidden;
+}
+.job-progress .bar i {
+  display: block;
+  height: 100%;
+  background: var(--accent);
+  transition: width 0.4s ease;
+}
+.prog-note {
+  margin-top: 3px;
+  display: flex;
+  justify-content: space-between;
+  gap: 6px;
+  font-size: 10px;
+  color: var(--text-dim);
+}
 .job-meta {
   margin-top: 5px;
   display: flex;
@@ -416,6 +791,12 @@ function pcSourceLabel(e: ScreenEvent): string {
   gap: 6px;
   font-size: 10px;
   color: var(--text-dim);
+}
+.src-tag {
+  padding: 0 4px;
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  color: var(--accent);
 }
 .job-err {
   margin-top: 4px;

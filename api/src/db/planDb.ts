@@ -22,7 +22,7 @@ export interface FeatureMeta {
 
 /**
  * 功能键语义：
- * - objects_max        托管目标数量上限（count）
+ * - objects_max        目标数量上限（count）
  * - ephem_upload_day   每日星历上传次数（count/天）
  * - screen_day         每日筛查任务数（count/天）
  * - recompute_day      每日重算次数（count/天）
@@ -33,7 +33,7 @@ export interface FeatureMeta {
  * - members_max        组织成员数上限（count）
  */
 export const FEATURE_KEYS: FeatureMeta[] = [
-  { key: 'objects_max', label: '托管目标数', unit: 'count' },
+  { key: 'objects_max', label: '目标数', unit: 'count' },
   { key: 'ephem_upload_day', label: '每日星历上传', unit: 'count' },
   { key: 'screen_day', label: '每日筛查任务', unit: 'count' },
   { key: 'recompute_day', label: '每日重算次数', unit: 'count' },

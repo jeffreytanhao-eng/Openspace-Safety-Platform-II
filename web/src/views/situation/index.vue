@@ -69,10 +69,6 @@ watch(
   { immediate: true }
 )
 
-function notReady(name: string) {
-  ElMessage.info(t('sit.later', { name }))
-}
-
 function reloadSystem() {
   // 初始化 = 回到最初状态：先清星历激活态（否则视口重建后 onViewportReady 会恢复轨道），右侧星历弹出窗一并收回
   deactivateEphem()
@@ -291,7 +287,7 @@ async function toggleEventCloud(): Promise<boolean> {
     const { cloudList, loadConstellation } = useCatalog()
     if (!cloudList.value.length) await loadConstellation()
     const raw = capEvents(await ensureEventRaw())
-    const built = buildEventCloudItems(raw.map(toCloudItem))
+    const built = await buildEventCloudItems(raw.map(toCloudItem))
     eventItems.value = built.items
     if (!built.items.length) {
       ElMessage.info(t('sit.eventNone'))
@@ -323,7 +319,8 @@ function onEventPick(key: string | null) {
     return
   }
   selEvent.value = hit
-  sceneRef.value?.focusEventCloud(key, false)
+  // R2-7：点选交会点直接进入放大态（双方模型 + 双方轨道 + 白圈）
+  sceneRef.value?.focusEventCloud(key, true)
 }
 
 function closeEventCard() {
@@ -564,9 +561,6 @@ watch(
         <span class="dock-ico">☁</span><span class="dock-txt">{{ t('sit.eventCloud') }}</span>
         <span v-if="eventCount" class="dock-badge" :class="'lv-' + worstLevel">{{ eventCount }}</span>
       </button>
-      <button class="dock-btn" :title="t('sit.heatTip')" @click="notReady(t('sit.heat'))">
-        <span class="dock-ico">✱</span><span class="dock-txt">{{ t('sit.heat') }}</span>
-      </button>
       <button class="dock-btn" :title="t('sit.reloadTip')" @click="reloadSystem">
         <span class="dock-ico">↻</span><span class="dock-txt">{{ t('sit.reload') }}</span>
       </button>
@@ -610,7 +604,7 @@ watch(
         <span>{{ t('conj.col.miss') }}</span>
         <b class="mono">{{ selEvent.missKm != null ? selEvent.missKm.toFixed(3) + ' km' : '—' }}</b>
         <span>{{ t('conj.relVel') }}</span>
-        <b class="mono">{{ selEvent.relSpeedKmS != null ? selEvent.relSpeedKmS.toFixed(2) + ' km/s' : '—' }}</b>
+        <b class="mono">{{ selEvent.relSpeedKmS != null ? selEvent.relSpeedKmS.toFixed(2) + ' km/s' : t('conj.relVelNaShort') }}</b>
         <span>{{ t('conj.col.cdm') }}</span><b class="mono">{{ selEvent.cdmCount }}</b>
       </div>
       <router-link

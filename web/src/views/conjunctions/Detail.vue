@@ -394,7 +394,11 @@ function doExport(kind: 'md' | 'html' | 'csv'): void {
       <div>
         <button type="button" class="link" @click="router.push('/conjunctions')">{{ t('conj.back') }}</button>
         <h1>
-          <span class="pill" :class="event.level">{{ levelLabel(event.level) }}</span>
+          <span
+            class="pill"
+            :class="event.level"
+            :title="event.levelBasis === 'miss' ? t('conj.missBasis') : undefined"
+          >{{ levelLabel(event.level) }}</span>
           {{ event.nameA || `NORAD ${event.noradA}` }} × {{ event.nameB || `NORAD ${event.noradB}` }}
         </h1>
         <p>
@@ -427,7 +431,11 @@ function doExport(kind: 'md' | 'html' | 'csv'): void {
         <div class="sub">{{ event.pcSource ? srcLabel(event.pcSource) : '—' }}</div>
       </div>
       <div class="card"><div class="k">{{ t('conj.missDist') }}</div><div class="v mono">{{ num(event.missKm, 3) }} km</div></div>
-      <div class="card"><div class="k">{{ t('conj.relVel') }}</div><div class="v mono">{{ num(event.relSpeedKmS, 2) }} km/s</div></div>
+      <div class="card">
+        <div class="k">{{ t('conj.relVel') }}</div>
+        <div v-if="event.relSpeedKmS != null" class="v mono">{{ num(event.relSpeedKmS, 2) }} km/s</div>
+        <div v-else class="v sm">{{ t('conj.relVelNa') }}</div>
+      </div>
       <div class="card"><div class="k">TCA</div><div class="v mono sm">{{ fmtTca(event.tca) }}</div></div>
     </section>
 

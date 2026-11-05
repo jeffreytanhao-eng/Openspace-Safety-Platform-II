@@ -219,7 +219,7 @@ function dailyText(p: DailyReportPayload, orgName: string): string {
   const zhLevel: Record<EventLevel, string> = { red: '红(高危)', orange: '橙(警告)', yellow: '黄(关注)', low: '灰(低)' }
   const lines: string[] = []
   lines.push(`[Openspace Safety] 日报 ${p.date} · ${orgName}`)
-  lines.push(`范围：${p.scope === 'managed' ? '托管目标相关' : '系统池全量'} · 窗口 ${p.events.window.from.slice(0, 16)} ~ ${p.events.window.to.slice(0, 16)} UTC`)
+  lines.push(`范围：${p.scope === 'managed' ? '目标相关' : '系统池全量'} · 窗口 ${p.events.window.from.slice(0, 16)} ~ ${p.events.window.to.slice(0, 16)} UTC`)
   lines.push('')
   lines.push(`事件概览：红 ${p.events.counts.red} · 橙 ${p.events.counts.orange} · 黄 ${p.events.counts.yellow} · 灰 ${p.events.counts.low}`)
   if (p.level_changes.length) {

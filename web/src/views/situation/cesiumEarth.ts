@@ -20,7 +20,8 @@
  *
  * 离线数据（不使用 Cesium ion / token）：
  *   · 影像：configureEarthBase() 接离线瓦片包（xyz / tms / arcgis MapServer 三种形态），
- *     未配置时用 ArcGIS Online 公网服务兜底；
+ *     未配置时用 ArcGIS Online 公网服务兜底；两者都不可用时以 Cesium 自带的
+ *     NaturalEarthII（public/cesium/Assets）作底层兜底，保证不会出现纯黑地球；
  *   · 地形：自定义 OfflineHeightmap provider 读取 DEM 生成的离线 heightmap 地形包目录
  *     （由 scripts/build-terrain-tiles.mjs 生成，见 createTerrainProvider）。
  * ============================================================ */
@@ -72,33 +73,56 @@ export function configureEarthBase(cfg: EarthBaseConfig): void {
 const FALLBACK_IMAGERY_URL =
   'https://services.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer'
 
-/** 按配置创建底图图层（离线包优先，公网兜底）。 */
-async function createImageryLayer(): Promise<import('cesium').ImageryLayer> {
+/** 按配置创建底图图层（离线包优先，公网兜底）。失败返回 null，由内置离线底图兜底。 */
+async function createImageryLayer(): Promise<import('cesium').ImageryLayer | null> {
   const Cs = Cesium as CesiumModule
   const { imageryUrl, imageryKind, maximumLevel } = baseCfg
-  if (imageryUrl) {
-    if (imageryKind === 'xyz') {
-      // XYZ 目录树瓦片（如 /tiles/{z}/{x}/{y}.png）
-      return new Cs.ImageryLayer(
-        new Cs.UrlTemplateImageryProvider({ url: imageryUrl, maximumLevel, credit: '' })
-      )
-    }
-    if (imageryKind === 'tms') {
-      // TMS 瓦片包（目录含 tilemapresource.xml；GDAL2Tiles / 切图转换产物常用此形态）
-      const provider = await Cs.TileMapServiceImageryProvider.fromUrl(
-        new Cs.Resource(imageryUrl),
-        { credit: '' }
-      )
+  try {
+    if (imageryUrl) {
+      if (imageryKind === 'xyz') {
+        // XYZ 目录树瓦片（如 /tiles/{z}/{x}/{y}.png）
+        return new Cs.ImageryLayer(
+          new Cs.UrlTemplateImageryProvider({ url: imageryUrl, maximumLevel, credit: '' })
+        )
+      }
+      if (imageryKind === 'tms') {
+        // TMS 瓦片包（目录含 tilemapresource.xml；GDAL2Tiles / 切图转换产物常用此形态）
+        const provider = await Cs.TileMapServiceImageryProvider.fromUrl(
+          new Cs.Resource(imageryUrl),
+          { credit: '' }
+        )
+        return new Cs.ImageryLayer(provider)
+      }
+      // arcgis：MapServer REST（在线服务或静态托管的自建服务）
+      const provider = await Cs.ArcGisMapServerImageryProvider.fromUrl(imageryUrl, { credit: '' })
       return new Cs.ImageryLayer(provider)
     }
-    // arcgis：MapServer REST（在线服务或静态托管的自建服务）
-    const provider = await Cs.ArcGisMapServerImageryProvider.fromUrl(imageryUrl, { credit: '' })
-    return new Cs.ImageryLayer(provider)
+    const fallback = await Cs.ArcGisMapServerImageryProvider.fromUrl(FALLBACK_IMAGERY_URL, {
+      credit: ''
+    })
+    return new Cs.ImageryLayer(fallback)
+  } catch (e) {
+    console.warn('[cesiumEarth] 在线/自定义影像不可用，改用内置离线底图：', e)
+    return null
   }
-  const fallback = await Cs.ArcGisMapServerImageryProvider.fromUrl(FALLBACK_IMAGERY_URL, {
-    credit: ''
-  })
-  return new Cs.ImageryLayer(fallback)
+}
+
+/**
+ * Cesium 自带离线底图（Assets/Textures/NaturalEarthII，随 public/cesium 分发）。
+ * 无外网或在线瓦片不可达时保证地球有可见贴图，避免整颗球呈纯黑。
+ */
+async function createOfflineBaseLayer(): Promise<import('cesium').ImageryLayer | null> {
+  const Cs = Cesium as CesiumModule
+  try {
+    const provider = await Cs.TileMapServiceImageryProvider.fromUrl(
+      new Cs.Resource(Cs.buildModuleUrl('Assets/Textures/NaturalEarthII')),
+      { credit: '' }
+    )
+    return new Cs.ImageryLayer(provider)
+  } catch (e) {
+    console.warn('[cesiumEarth] 内置离线底图不可用：', e)
+    return null
+  }
 }
 
 /* ---------------- 离线 heightmap 地形包（CesiumTerrainProvider 的离线替代） ---------------- */
@@ -239,10 +263,12 @@ export async function initCesium(container: HTMLElement, hooks?: CesiumInitHooks
     Cesium = await import('cesium')
     const Cs = Cesium
 
+    // 内置离线底图垫底（无外网/在线瓦片不可达时仍有贴图），在线/自定义影像叠在其上
+    const offlineBase = await createOfflineBaseLayer()
     const baseLayer = await createImageryLayer()
 
     widget = new Cs.CesiumWidget(container, {
-      baseLayer,
+      baseLayer: baseLayer ?? false,
       scene3DOnly: true,
       // 渲染并入 BaseScene 动画循环（renderCesium 手动逐帧驱动），避免双 RAF 抢帧导致相机错位
       useDefaultRenderLoop: false,
@@ -254,6 +280,7 @@ export async function initCesium(container: HTMLElement, hooks?: CesiumInitHooks
       msaaSamples: 4
     })
     scene = widget.scene
+    if (offlineBase) scene.imageryLayers.add(offlineBase, 0)
 
     // 星空 / 太阳 / 月亮由 Three 层负责（ECI 口径，与卫星、星官同一套视觉）；
     // Cesium 只保留地球本体 + 大气辉光 + 晨昏光照。

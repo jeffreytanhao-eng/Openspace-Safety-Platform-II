@@ -33,6 +33,23 @@ function fmt(before: string | null, after: string | null): string {
   return parts.join('　') || '—'
 }
 
+/** R2-4：审计时间本地化（Asia/Shanghai） */
+function fmtTime(v: string | null): string {
+  if (!v) return '—'
+  const d = new Date(v)
+  if (!Number.isFinite(d.getTime())) return v
+  return new Intl.DateTimeFormat('zh-CN', {
+    timeZone: 'Asia/Shanghai',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hour12: false
+  }).format(d)
+}
+
 onMounted(load)
 </script>
 
@@ -58,7 +75,7 @@ onMounted(load)
           <tr v-else-if="!items.length"><td colspan="6" class="empty">暂无记录</td></tr>
           <tr v-for="a in items" :key="a.id">
             <td class="mono">{{ a.id }}</td>
-            <td class="mono">{{ a.created_at }}</td>
+            <td class="mono">{{ fmtTime(a.created_at) }}</td>
             <td>{{ a.actor_email }}</td>
             <td class="mono">{{ a.org_id ?? '—' }}</td>
             <td><span class="chip">{{ a.action }}</span></td>

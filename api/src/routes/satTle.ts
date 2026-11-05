@@ -1,4 +1,4 @@
-/**
+﻿/**
  * Old Openspace-Safety-Platform public sat_tle routes
  * (reconstructed from frontend sat_public.ts + server.jsc string/SQL hints).
  * Mounted at /cgi/sat_tle/* — no bytenode runtime.
@@ -15,7 +15,7 @@ import {
   listTleLines,
   clearConstellationCache
 } from '../services/constellationSnapshot.js'
-import { optionalAuth } from './auth.js'
+import { requireAuth } from './auth.js'
 import { PLAN_FORBIDDEN } from '../middleware/plan.js'
 import { getVisibleNorads, poolBadge, resolvePoolPolicy, type PoolPolicy } from '../services/systemPool.js'
 
@@ -28,7 +28,7 @@ async function visibleSet(policy: PoolPolicy): Promise<Set<number> | 'all'> {
   return new Set(vis ?? [])
 }
 
-router.get('/constellation', optionalAuth, async (req, res) => {
+router.get('/constellation', requireAuth, async (req, res) => {
   const up = await pingDb()
   if (!up) {
     res.status(503).json({ code: 503, msg: 'database down', data: null })
@@ -57,7 +57,7 @@ router.get('/constellation', optionalAuth, async (req, res) => {
   }
 })
 
-router.get('/tle_lines', optionalAuth, async (req, res) => {
+router.get('/tle_lines', requireAuth, async (req, res) => {
   const up = await pingDb()
   if (!up) {
     res.status(503).json({ code: 503, msg: 'database down', data: null })
@@ -82,7 +82,7 @@ router.get('/tle_lines', optionalAuth, async (req, res) => {
   }
 })
 
-router.get('/detail/:noradId', optionalAuth, async (req, res) => {
+router.get('/detail/:noradId', requireAuth, async (req, res) => {
   const up = await pingDb()
   if (!up) {
     res.status(503).json({ code: 503, msg: 'database down', data: null })

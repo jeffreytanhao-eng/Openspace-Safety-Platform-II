@@ -1,4 +1,4 @@
-/** 时间工具：所有 DATETIME 均按 UTC 存取（与旧平台口径一致） */
+/** 时间工具：Space-Track 报文按 UTC 解析；入库 DATETIME 沿用数据库会话本地时间（生产 +08） */
 
 const MS_PER_DAY = 86_400_000
 
@@ -6,6 +6,19 @@ const MS_PER_DAY = 86_400_000
 export function fmtUtcMs(d: Date | null | undefined): string | null {
   if (!d || Number.isNaN(d.getTime())) return null
   return d.toISOString().slice(0, 23).replace('T', ' ')
+}
+
+/**
+ * Date → 'YYYY-MM-DD HH:mm:ss'（数据库会话本地时间）。
+ * 与 pool 默认时区（不设 timezone）写入 DATETIME 的口径一致，可直接写 datetime 列。
+ */
+export function fmtLocalDateTime(d: Date | null | undefined): string | null {
+  if (!d || Number.isNaN(d.getTime())) return null
+  const p = (n: number) => String(n).padStart(2, '0')
+  return (
+    `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ` +
+    `${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`
+  )
 }
 
 /**

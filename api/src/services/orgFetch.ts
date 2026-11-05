@@ -1,9 +1,9 @@
 /**
- * 组织队列拉取（Epic C2）：用客户自配凭证拉取**本组织托管目标范围**的数据，
+ * 组织队列拉取（Epic C2）：用客户自配凭证拉取**本组织目标范围**的数据，
  * 写 org_snapshots（组织私有 + append 版本化），绝不写 system_pool 的
  * orbital_snapshots / sat_tle / sat_tle_history / sat_cdm / sat_aoe。
  *  - GP：Space-Track GP 按 NORAD_CAT_ID 多值查询（谓词多值用 '--' 连接）；
- *  - CDM：公开 CDM（TCA > now-1d）拉回后本地按双方 NORAD ∈ 托管目标过滤；
+ *  - CDM：公开 CDM（TCA > now-1d）拉回后本地按双方 NORAD ∈ 目标过滤；
  *  - AOE：channel list 拉回后按目标 NORAD 过滤。
  * 计数口径：total=源返回条数；inserted=新内容条数；skipped=重复内容/缺关键字段。
  */
@@ -124,7 +124,7 @@ export async function runOrgCdmFetch(orgId: number, norads: number[], creds: Spa
       skipped++
       continue
     }
-    // 组织可见范围：交会任一方属于本组织托管目标
+    // 组织可见范围：交会任一方属于本组织目标
     if (!scoped.has(Math.trunc(a)) && !scoped.has(Math.trunc(b))) {
       skipped++
       continue

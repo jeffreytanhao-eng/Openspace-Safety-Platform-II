@@ -5,6 +5,8 @@ import {
   listObjects,
   lookupObject,
   claimObject,
+  batchClaimObjects,
+  getOrgQuota,
   getObject,
   updateObject,
   releaseObject,
@@ -12,8 +14,10 @@ import {
   unbindEphem,
   type ManagedObject,
   type ObjectDetail,
-  type LookupResult
+  type LookupResult,
+  type ClaimType
 } from '@/api/objects'
+import { searchCatalogLite, type CatalogLiteRow } from '@/api/objects'
 import { listLocalEphemerides } from '@/api/ephemerides'
 import {
   listManeuvers,
@@ -67,13 +71,19 @@ async function load() {
     loading.value = false
   }
 }
-onMounted(load)
+onMounted(() => {
+  void load()
+  void loadQuota()
+})
 
 /* ---- 认领对话框 ---- */
 const claimOpen = ref(false)
 const claimNorad = ref('')
+const claimType = ref<ClaimType>('normal')
 const claimForm = ref({ massKg: '', crossSectionM2: '', propulsion: '' })
 const preview = ref<LookupResult | null>(null)
+/** 该目标已有授权认领（卫星业主）时，授权选项不可选 */
+const ownerLocked = computed(() => !!preview.value?.owner_claim)
 const previewLoading = ref(false)
 const claimError = ref('')
 const claimQuota = ref(false)
@@ -85,10 +95,86 @@ function openClaim() {
   claimError.value = ''
   claimQuota.value = false
   claimNorad.value = ''
+  claimType.value = 'normal'
   claimForm.value = { massKg: '', crossSectionM2: '', propulsion: '' }
 }
 function closeClaim() {
   claimOpen.value = false
+}
+
+/* ---------- R2-2 通用编目发现 + 批量认领；R2-3 配额 usage/limit ---------- */
+
+const quotaChip = ref('')
+const discQ = ref('')
+const discRows = ref<CatalogLiteRow[]>([])
+const discPicked = ref<number[]>([])
+const discLoading = ref(false)
+const discBusy = ref(false)
+const discMsg = ref('')
+
+async function loadQuota() {
+  try {
+    const data = await getOrgQuota()
+    const item = data.items.find((x) => x.key === 'objects_max')
+    quotaChip.value = item && item.unit === 'count' && item.limit != null ? `${item.usage} / ${item.limit}` : ''
+  } catch {
+    quotaChip.value = ''
+  }
+}
+
+async function searchCatalog() {
+  const k = discQ.value.trim()
+  if (!k) {
+    discRows.value = []
+    discPicked.value = []
+    return
+  }
+  discLoading.value = true
+  discMsg.value = ''
+  try {
+    const data = await searchCatalogLite(k, 50)
+    discRows.value = data.items
+    discPicked.value = []
+    if (!data.items.length) discMsg.value = t('obj.discNoMatch')
+  } catch (e) {
+    discMsg.value = e instanceof Error ? e.message : String(e)
+  } finally {
+    discLoading.value = false
+  }
+}
+
+function toggleDisc(norad: number) {
+  const i = discPicked.value.indexOf(norad)
+  if (i >= 0) discPicked.value.splice(i, 1)
+  else discPicked.value.push(norad)
+}
+
+function toggleDiscAll() {
+  discPicked.value =
+    discPicked.value.length === discRows.value.length ? [] : discRows.value.map((r) => r.norad_id)
+}
+
+async function claimPicked() {
+  if (!discPicked.value.length) return
+  discBusy.value = true
+  discMsg.value = ''
+  try {
+    const r = await batchClaimObjects(discPicked.value)
+    const parts: string[] = [t('obj.discDone', { n: r.created.length })]
+    const counts: Record<string, number> = {}
+    for (const s of r.skipped) counts[s.reason] = (counts[s.reason] ?? 0) + 1
+    for (const [k, n] of Object.entries(counts)) {
+      parts.push(`${t(`obj.discSkip.${k}` as 'obj.discSkip.not_found')} ${n}`)
+    }
+    discMsg.value = parts.join(' · ')
+    discPicked.value = []
+    await load()
+    await loadQuota()
+  } catch (e) {
+    discMsg.value = e instanceof Error ? e.message : String(e)
+  } finally {
+    discBusy.value = false
+  }
 }
 
 async function doLookup() {
@@ -103,6 +189,8 @@ async function doLookup() {
   previewLoading.value = true
   try {
     preview.value = await lookupObject(n)
+    // 已有授权认领（卫星业主）时，本组织只能做普通认领
+    if (preview.value.owner_claim) claimType.value = 'normal'
   } catch (e) {
     claimError.value = e instanceof Error ? e.message : String(e)
   } finally {
@@ -118,9 +206,14 @@ async function doClaim() {
   try {
     await claimObject({
       noradId: preview.value.sat.norad_id,
-      massKg: claimForm.value.massKg === '' ? null : Number(claimForm.value.massKg),
-      crossSectionM2: claimForm.value.crossSectionM2 === '' ? null : Number(claimForm.value.crossSectionM2),
-      propulsion: claimForm.value.propulsion.trim() || undefined
+      claimType: claimType.value,
+      // 普通认领不允许维护参数：仅授权认领提交档案字段
+      massKg: claimType.value === 'owner' && claimForm.value.massKg !== '' ? Number(claimForm.value.massKg) : null,
+      crossSectionM2:
+        claimType.value === 'owner' && claimForm.value.crossSectionM2 !== ''
+          ? Number(claimForm.value.crossSectionM2)
+          : null,
+      propulsion: claimType.value === 'owner' ? claimForm.value.propulsion.trim() || undefined : undefined
     })
     claimOpen.value = false
     await load()
@@ -134,6 +227,8 @@ async function doClaim() {
 
 /* ---- 档案抽屉 ---- */
 const selected = ref<ObjectDetail | null>(null)
+/** 仅授权认领（卫星业主）可维护参数与星历绑定 */
+const isOwnerClaim = computed(() => selected.value?.claim_type === 'owner')
 const detailLoading = ref(false)
 const editForm = ref<Record<string, string | number>>({ name: '', massKg: '', crossSectionM2: '', propulsion: '', acceptedPc: '', acceptedMissKm: '' })
 const saving = ref(false)
@@ -440,6 +535,7 @@ function fmtWorstLevel(v: 'red' | 'orange' | 'yellow' | null): string {
       </div>
       <div class="head-right">
         <span class="count">{{ filtered.length }} / {{ objects.length }}</span>
+        <span v-if="quotaChip" class="count quota" :title="t('obj.quotaChip')">{{ quotaChip }}</span>
         <button type="button" class="btn primary" @click="openClaim">{{ t('obj.claim') }}</button>
       </div>
     </header>
@@ -459,6 +555,7 @@ function fmtWorstLevel(v: 'red' | 'orange' | 'yellow' | null): string {
           <tr>
             <th>{{ t('obj.col.name') }}</th>
             <th>{{ t('obj.col.norad') }}</th>
+            <th>{{ t('obj.col.claimType') }}</th>
             <th>{{ t('obj.col.mass') }}</th>
             <th>{{ t('obj.col.cs') }}</th>
             <th>{{ t('obj.col.prop') }}</th>
@@ -472,6 +569,11 @@ function fmtWorstLevel(v: 'red' | 'orange' | 'yellow' | null): string {
           <tr v-for="o in filtered" :key="o.id" @click="openDetail(o)">
             <td class="name">{{ o.name }}</td>
             <td class="mono">{{ o.norad_id }}</td>
+            <td>
+              <span class="pill" :class="o.claim_type === 'owner' ? 'fresh' : 'missing'">
+                {{ o.claim_type === 'owner' ? t('obj.claimTypeOwner') : t('obj.claimTypeNormal') }}
+              </span>
+            </td>
             <td class="mono">{{ fmtNum(o.mass_kg) }}</td>
             <td class="mono">{{ fmtNum(o.cross_section_m2) }}</td>
             <td>{{ o.propulsion || '—' }}</td>
@@ -510,17 +612,72 @@ function fmtWorstLevel(v: 'red' | 'orange' | 'yellow' | null): string {
             <div><dt>{{ t('obj.perigee') }}</dt><dd class="mono">{{ preview.sat.perigee ?? '—' }}</dd></div>
             <div><dt>{{ t('obj.epoch') }}</dt><dd class="mono">{{ preview.sat.epoch || '—' }}</dd></div>
           </div>
-          <div v-if="preview.claimed_by" class="hint warn">{{ t('obj.claimedByOther') }}</div>
-          <template v-else>
-            <div class="form">
+          <div v-if="preview.owner_claim" class="hint warn">
+            {{ preview.owner_claim.isMine ? t('obj.ownerMine') : t('obj.ownerTaken') }}
+          </div>
+          <div v-if="preview.my_claim" class="hint warn">
+            {{
+              t('obj.claimMine', {
+                type: preview.my_claim.claimType === 'owner' ? t('obj.claimTypeOwner') : t('obj.claimTypeNormal')
+              })
+            }}
+          </div>
+          <template v-if="!preview.my_claim">
+            <div class="claim-type">
+              <label>
+                <input v-model="claimType" type="radio" value="normal" />
+                <span>{{ t('obj.claimNormal') }}</span>
+              </label>
+              <label :class="{ disabled: ownerLocked }">
+                <input v-model="claimType" type="radio" value="owner" :disabled="ownerLocked" />
+                <span>{{ t('obj.claimOwner') }}</span>
+              </label>
+            </div>
+            <div v-if="claimType === 'owner'" class="form">
               <label><span>{{ t('obj.mass') }}</span><input v-model="claimForm.massKg" type="number" min="0" step="any" /></label>
               <label><span>{{ t('obj.crossSection') }}</span><input v-model="claimForm.crossSectionM2" type="number" min="0" step="any" /></label>
               <label><span>{{ t('obj.propulsion') }}</span><input v-model="claimForm.propulsion" type="text" maxlength="60" /></label>
+              <p class="type-hint">{{ t('obj.ownerHint') }}</p>
             </div>
-            <button type="button" class="btn primary wide" :disabled="submitting || !!preview.claimed_by" @click="doClaim">
+            <p v-else class="type-hint">{{ t('obj.normalHint') }}</p>
+            <button type="button" class="btn primary wide" :disabled="submitting" @click="doClaim">
               {{ submitting ? t('obj.saving') : t('obj.claimSubmit') }}
             </button>
           </template>
+        </div>
+
+        <!-- R2-2：通用编目发现 + 批量认领（任意名称 / NORAD / 星座标签批次） -->
+        <div class="block">
+          <div class="bt">{{ t('obj.discover') }}</div>
+          <div class="claim-row">
+            <input v-model="discQ" type="search" :placeholder="t('obj.discSearch')" @keyup.enter="searchCatalog" />
+            <button type="button" class="btn" :disabled="discLoading" @click="searchCatalog">
+              {{ discLoading ? t('obj.claiming') : t('obj.discSearchBtn') }}
+            </button>
+          </div>
+          <div v-if="discMsg" class="hint">{{ discMsg }}</div>
+          <div v-if="discRows.length" class="disc-head">
+            <label class="disc-all">
+              <input type="checkbox" :checked="discPicked.length === discRows.length" @change="toggleDiscAll" />
+              {{ t('obj.discAll') }}
+            </label>
+            <button type="button" class="btn primary" :disabled="!discPicked.length || discBusy" @click="claimPicked">
+              {{ discBusy ? t('obj.saving') : t('obj.discClaim', { n: discPicked.length }) }}
+            </button>
+          </div>
+          <ul v-if="discRows.length" class="disc-list">
+            <li
+              v-for="r in discRows"
+              :key="r.norad_id"
+              :class="{ on: discPicked.includes(r.norad_id) }"
+              @click="toggleDisc(r.norad_id)"
+            >
+              <input type="checkbox" :checked="discPicked.includes(r.norad_id)" @click.stop="toggleDisc(r.norad_id)" />
+              <span class="disc-name">{{ r.object_name }}</span>
+              <span class="mono dim">{{ r.norad_id }}</span>
+              <span class="dim">{{ r.regime || r.object_type || '' }}</span>
+            </li>
+          </ul>
         </div>
       </div>
     </aside>
@@ -530,7 +687,12 @@ function fmtWorstLevel(v: 'red' | 'orange' | 'yellow' | null): string {
       <div class="drawer-panel">
         <header class="dh">
           <div>
-            <div class="d-title">{{ selected.name }}</div>
+            <div class="d-title">
+              {{ selected.name }}
+              <span class="pill" :class="isOwnerClaim ? 'fresh' : 'missing'">
+                {{ isOwnerClaim ? t('obj.claimTypeOwner') : t('obj.claimTypeNormal') }}
+              </span>
+            </div>
             <div class="d-sub">NORAD {{ selected.norad_id }}<span v-if="selected.sat"> · {{ selected.sat.regime }}</span></div>
           </div>
           <button type="button" class="x" @click="closeDetail">×</button>
@@ -549,16 +711,17 @@ function fmtWorstLevel(v: 'red' | 'orange' | 'yellow' | null): string {
 
           <div class="block">
             <div class="bt">{{ t('obj.archive') }}</div>
+            <div v-if="!isOwnerClaim" class="hint warn">{{ t('obj.ownerOnly') }}</div>
             <div class="form">
-              <label><span>{{ t('obj.col.name') }}</span><input v-model="editForm.name" type="text" maxlength="100" /></label>
-              <label><span>{{ t('obj.mass') }}</span><input v-model="editForm.massKg" type="number" min="0" step="any" /></label>
-              <label><span>{{ t('obj.crossSection') }}</span><input v-model="editForm.crossSectionM2" type="number" min="0" step="any" /></label>
-              <label><span>{{ t('obj.propulsion') }}</span><input v-model="editForm.propulsion" type="text" maxlength="60" /></label>
-              <label><span>{{ t('obj.acceptedPc') }}</span><input v-model="editForm.acceptedPc" type="number" min="0" step="any" /></label>
-              <label><span>{{ t('obj.acceptedMissKm') }}</span><input v-model="editForm.acceptedMissKm" type="number" min="0" step="any" /></label>
+              <label><span>{{ t('obj.col.name') }}</span><input v-model="editForm.name" type="text" maxlength="100" :disabled="!isOwnerClaim" /></label>
+              <label><span>{{ t('obj.mass') }}</span><input v-model="editForm.massKg" type="number" min="0" step="any" :disabled="!isOwnerClaim" /></label>
+              <label><span>{{ t('obj.crossSection') }}</span><input v-model="editForm.crossSectionM2" type="number" min="0" step="any" :disabled="!isOwnerClaim" /></label>
+              <label><span>{{ t('obj.propulsion') }}</span><input v-model="editForm.propulsion" type="text" maxlength="60" :disabled="!isOwnerClaim" /></label>
+              <label><span>{{ t('obj.acceptedPc') }}</span><input v-model="editForm.acceptedPc" type="number" min="0" step="any" :disabled="!isOwnerClaim" /></label>
+              <label><span>{{ t('obj.acceptedMissKm') }}</span><input v-model="editForm.acceptedMissKm" type="number" min="0" step="any" :disabled="!isOwnerClaim" /></label>
             </div>
             <div class="row-actions">
-              <button type="button" class="btn primary" :disabled="saving" @click="saveDetail">
+              <button type="button" class="btn primary" :disabled="saving || !isOwnerClaim" @click="saveDetail">
                 {{ saving ? t('obj.saving') : t('obj.save') }}
               </button>
               <span v-if="saved" class="ok-text">{{ t('obj.saved') }}</span>
@@ -567,17 +730,18 @@ function fmtWorstLevel(v: 'red' | 'orange' | 'yellow' | null): string {
 
           <div class="block">
             <div class="bt">{{ t('obj.boundEphem') }}</div>
+            <div v-if="!isOwnerClaim" class="hint warn">{{ t('obj.ownerOnlyBind') }}</div>
             <ul v-if="selected.ephemerides.length">
               <li v-for="e in selected.ephemerides" :key="e.id">
                 <div class="li-top">
                   <span class="li-name">{{ e.name }}</span>
-                  <button type="button" class="mini" @click="doUnbind(e.id)">{{ t('obj.unbind') }}</button>
+                  <button v-if="isOwnerClaim" type="button" class="mini" @click="doUnbind(e.id)">{{ t('obj.unbind') }}</button>
                 </div>
                 <span class="meta">{{ e.format }} · {{ e.points }} pts · {{ e.status }}</span>
               </li>
             </ul>
             <p v-else class="empty">{{ t('obj.noBound') }}</p>
-            <div class="bind-row">
+            <div v-if="isOwnerClaim" class="bind-row">
               <select v-model="bindPick">
                 <option value="" disabled>{{ bindLoading ? t('obj.loading') : t('obj.bindSelect') }}</option>
                 <option v-for="b in bindList" :key="b.id" :value="b.id">{{ b.format }} · {{ b.name }} · {{ b.points }} pts</option>
@@ -708,6 +872,7 @@ h1 { margin: 0; font-size: 16px; font-weight: 650; }
 .head p { margin: 4px 0 0; font-size: 11px; color: var(--text-dim); }
 .head-right { display: flex; align-items: center; gap: 10px; }
 .count { font-size: 12px; color: var(--text-muted); font-variant-numeric: tabular-nums; }
+.count.quota { color: var(--accent); border: 1px solid var(--border); border-radius: 10px; padding: 1px 8px; }
 .filters {
   display: flex;
   flex-wrap: wrap;
@@ -770,6 +935,30 @@ tbody tr:hover { background: var(--bg-hover); }
   color: var(--text-muted); width: 28px; height: 28px; border-radius: 4px; cursor: pointer; font-size: 16px;
 }
 .claim-row { display: flex; gap: 8px; margin-bottom: 10px; }
+.disc-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin: 6px 0; }
+.disc-all { display: flex; align-items: center; gap: 6px; font-size: 11px; color: var(--text-muted); cursor: pointer; }
+.disc-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  max-height: 260px;
+  overflow: auto;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+}
+.disc-list li {
+  display: grid;
+  grid-template-columns: 16px 1fr auto auto;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  font-size: 11px;
+  border-bottom: 1px solid var(--border);
+  cursor: pointer;
+}
+.disc-list li:last-child { border-bottom: 0; }
+.disc-list li.on { background: var(--bg-panel-2); }
+.disc-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .claim-row .num {
   flex: 1; appearance: none; border: 1px solid var(--border); background: var(--bg-deep);
   color: var(--text); border-radius: 4px; padding: 7px 9px; font-size: 13px; font-family: var(--mono); outline: none;
@@ -789,6 +978,14 @@ tbody tr:hover { background: var(--bg-hover); }
 .form { display: flex; flex-direction: column; gap: 8px; margin-bottom: 12px; }
 .form label { display: flex; flex-direction: column; gap: 3px; }
 .form label span { font-size: 11px; color: var(--text-dim); }
+.claim-type { display: flex; flex-direction: column; gap: 6px; margin-bottom: 10px; }
+.claim-type label {
+  display: flex; align-items: center; gap: 6px;
+  font-size: 12px; color: var(--text-muted); cursor: pointer;
+}
+.claim-type label.disabled { opacity: 0.5; cursor: not-allowed; }
+.type-hint { margin: 0 0 8px; font-size: 10px; line-height: 1.5; color: var(--text-dim); }
+.form input:disabled { opacity: 0.6; cursor: not-allowed; }
 .form input, .bind-row select {
   appearance: none; border: 1px solid var(--border); background: var(--bg-deep);
   color: var(--text); border-radius: 4px; padding: 7px 9px; font-size: 12px; outline: none;

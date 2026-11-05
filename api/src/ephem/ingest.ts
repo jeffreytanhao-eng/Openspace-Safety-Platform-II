@@ -31,6 +31,7 @@ import {
 } from './ephemDb.js'
 import { gunzipText, parseMetaAuto, parseItcMeta, parseOcmMeta, rangeLabel, formatSize } from './parseMeta.js'
 import type { EphemManeuverEpoch } from './parseMeta.js'
+import { fmtLocalDateTime } from '../utils/time.js'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 
@@ -64,7 +65,15 @@ export interface ScanResult {
 
 function updatedAtOf(created: number | null): string {
   const ms = created && Number.isFinite(created) ? created : Date.now()
-  return new Date(ms).toISOString().slice(0, 16).replace('T', ' ')
+  // 与数据库 DATETIME 口径一致（会话本地时间）；旧表为 varchar，新 schema 为 datetime(3)
+  return fmtLocalDateTime(new Date(ms)) || ''
+}
+
+/** 列表展示串（UTC，'YYYY-MM-DD HH:mm[:ss]'）→ 数据库本地时间 'YYYY-MM-DD HH:mm:ss' */
+function displayToLocalDb(v: string | null | undefined): string | null {
+  if (!v) return null
+  const d = new Date(`${v.replace(' ', 'T').slice(0, 19)}Z`)
+  return Number.isNaN(d.getTime()) ? null : fmtLocalDateTime(d)
 }
 
 function buildRow(args: {
@@ -264,7 +273,8 @@ export async function importFromIndexJson(): Promise<{ imported: number }> {
       maneuverSummary: it.maneuverSummary || '无',
       maneuverEpochs: it.maneuverEpochs || [],
       status: it.status || 'local',
-      updatedAt: it.updatedAt || updatedAtOf(null),
+      // 列表里的 updatedAt 是 UTC 展示串（'YYYY-MM-DD HH:mm'），写回 datetime 列前转本地时间
+      updatedAt: displayToLocalDb(it.updatedAt) || updatedAtOf(null),
       originator: it.originator || ''
     })
     imported++
@@ -413,7 +423,7 @@ export async function appendEphemVersion(v: EphemVersionAppend): Promise<EphemVe
       publishedMs: Math.round(v.publishedMs) || Date.now(),
       uploadedBy: v.uploadedBy,
       deletedAt: null,
-      createdAt: new Date().toISOString()
+      createdAt: fmtLocalDateTime(new Date()) || ''
     }
     const id = await insertEphemerisVersionDb(row)
     return { ...row, id }

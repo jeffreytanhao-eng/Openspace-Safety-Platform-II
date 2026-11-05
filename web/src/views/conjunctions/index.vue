@@ -179,7 +179,15 @@ function fmtTca(iso: string): string {
             :class="e.level"
             @click="$router.push(`/conjunctions/${encodeURIComponent(e.key)}`)"
           >
-            <td><span class="pill" :class="e.level">{{ levelLabel(e.level) }}</span></td>
+            <td>
+              <span
+                class="pill"
+                :class="e.level"
+                :title="e.levelBasis === 'miss' ? t('conj.missBasis') : undefined"
+              >
+                {{ levelLabel(e.level) }}<span v-if="e.levelBasis === 'miss'" class="dim">·{{ t('conj.missBasisTag') }}</span>
+              </span>
+            </td>
             <td>{{ e.nameA || `NORAD ${e.noradA}` }}</td>
             <td>{{ e.nameB || `NORAD ${e.noradB}` }}</td>
             <td class="mono">{{ fmtTca(e.tca) }}</td>

@@ -22,17 +22,19 @@ type NavDef = {
   reserved?: boolean
 }
 
+// R2-1：顺序按作业链重排：总览 → 目标 → 星历 → 交会事件 → 筛查 → 态势 → AI(占位) → 文档 → 设置
+// 空壳「轨迹」页暂不上侧栏（路由保留，后续接入再放出）。
+// AI 侧栏本轮按计划占位保留，不删除入口。
 const navDefs: NavDef[] = [
   { key: 'overview', labelKey: 'nav.overview', hintKey: 'nav.overviewHint', to: '/' },
   { key: 'objects', labelKey: 'nav.objects', hintKey: 'nav.objectsHint', to: '/objects' },
-  { key: 'trajectories', labelKey: 'nav.trajectories', hintKey: 'nav.trajectoriesHint', to: '/trajectories' },
+  { key: 'ephemerides', labelKey: 'nav.ephemerides', hintKey: 'nav.ephemeridesHint', to: '/ephemerides' },
   { key: 'conjunctions', labelKey: 'nav.conjunctions', hintKey: 'nav.conjunctionsHint', to: '/conjunctions' },
   { key: 'screens', labelKey: 'nav.screens', hintKey: 'nav.screensHint', to: '/screens' },
-  { key: 'settings', labelKey: 'nav.settings', hintKey: 'nav.settingsHint', to: '/settings' },
-  { key: 'ephemerides', labelKey: 'nav.ephemerides', hintKey: 'nav.ephemeridesHint', to: '/ephemerides' },
   { key: 'simulation', labelKey: 'nav.situation', hintKey: 'nav.situationHint', to: '/situation' },
   { key: 'ai', labelKey: 'nav.ai', hintKey: 'nav.aiHint', to: '/ai' },
-  { key: 'docs', labelKey: 'nav.docs', hintKey: 'nav.docsHint', to: '/docs' }
+  { key: 'docs', labelKey: 'nav.docs', hintKey: 'nav.docsHint', to: '/docs' },
+  { key: 'settings', labelKey: 'nav.settings', hintKey: 'nav.settingsHint', to: '/settings' }
 ]
 
 const query = ref('')

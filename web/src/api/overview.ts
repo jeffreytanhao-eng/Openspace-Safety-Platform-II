@@ -32,6 +32,9 @@ export interface OverviewSummary {
     next24h: number
     next7d: number
     involvingOwned: number
+    /** R1-4：本组织托管相关的关注事件（无托管时为 0） */
+    orgNext24h: number
+    orgNext7d: number
     ownedCdm: OwnedCdmItem[]
   }
   screensToday: number

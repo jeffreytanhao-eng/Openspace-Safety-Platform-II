@@ -5,6 +5,7 @@ import { pingDb } from './db/pool.js'
 import { ensureEphemSchema, countRowsDb } from './ephem/ephemDb.js'
 import { scanAndIngest, importFromIndexJson } from './ephem/ingest.js'
 import { ensureOrgSchema, ensurePlatformAdmin } from './db/orgDb.js'
+import { ensurePlanSchema } from './db/planDb.js'
 import { ensureFetchSchema } from './db/fetchDb.js'
 import { startDailyFetchScheduler, parseDailyCron } from './jobs/dailyFetch.js'
 import { startDailyReportScheduler } from './jobs/dailyReport.js'
@@ -21,6 +22,9 @@ app.listen(config.port, '0.0.0.0', () => {
     if (!(await ensureEphemSchema())) return
     // 组织/用户库表（Epic A）：幂等建表，失败只提示不阻塞启动
     if (!(await ensureOrgSchema())) console.warn('[org] schema not ready (db down?)')
+    // 档位默认限额：001_init.sql 建表后表内为空，必须启动即 seed，
+    // 否则新组织在访问运营页面前配额为 unlimited（objects_max/screen_day 等失效）
+    if (!(await ensurePlanSchema())) console.warn('[plan] schema not ready (db down?)')
     // 日更批次/版本化快照表（Epic C1）+ 每日调度器
     if (await ensureFetchSchema()) startDailyFetchScheduler()
     else console.warn('[fetch] schema not ready, daily-fetch scheduler not started')

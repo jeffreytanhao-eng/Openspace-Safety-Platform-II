@@ -229,7 +229,7 @@ VITE_BASE=/openspace/
 
 **地球出图但没有影像 / 一直是深色**
 
-Cesium 默认使用 ArcGIS Online 世界影像兜底，需要服务器/浏览器能访问 `services.arcgisonline.com`。若服务器完全离线，请在 `web/src/views/situation/SceneCore.vue` 里调用 `configureEarthBase({ imageryUrl, imageryKind, maximumLevel })` 指向自备离线瓦片包。
+Cesium 优先使用 ArcGIS Online 世界影像兜底，需要服务器/浏览器能访问 `services.arcgisonline.com`。若不可达，会自动叠加 Cesium 自带的离线底图（`public/cesium/Assets/Textures/NaturalEarthII`），不会再出现纯黑地球；需要更清晰的本地影像时，请在 `web/src/views/situation/SceneCore.vue` 里调用 `configureEarthBase({ imageryUrl, imageryKind, maximumLevel })` 指向自备离线瓦片包。
 
 **打开页面提示「三维地球底座初始化失败」**
 

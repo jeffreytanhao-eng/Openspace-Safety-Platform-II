@@ -45,6 +45,9 @@ function signOut() {
         <RouterLink to="/admin/audit" class="side-item" :class="{ on: isActive('/admin/audit') }">
           审计日志
         </RouterLink>
+        <RouterLink to="/admin/data-ops" class="side-item" :class="{ on: isActive('/admin/data-ops') }">
+          数据运维
+        </RouterLink>
       </aside>
       <main class="main">
         <RouterView />

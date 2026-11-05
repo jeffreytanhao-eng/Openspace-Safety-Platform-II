@@ -154,7 +154,12 @@ export async function rebuildEphemerides(): Promise<{
   total: number
   db: 'up' | 'down'
 }> {
-  const res = await fetch('/cgi/ephemerides/rebuild', { method: 'POST' })
+  // 运维级接口：仅平台超管可调用（后端 requireAuth + requireSuperAdmin）
+  const token = localStorage.getItem('osp-token')
+  const res = await fetch('/cgi/ephemerides/rebuild', {
+    method: 'POST',
+    headers: token ? { Authorization: `Bearer ${token}` } : {}
+  })
   if (!res.ok) throw new Error(`HTTP ${res.status}`)
   const body = (await res.json()) as ApiWrap<{
     added: number

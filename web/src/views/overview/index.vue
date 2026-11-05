@@ -2,9 +2,9 @@
 import { computed, onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { useI18n } from '@/composables/useI18n'
-import DataSourceBar from '@/components/DataSourceBar.vue'
 import { getOverviewSummary, type OverviewSummary, type OwnedCdmItem } from '@/api/overview'
 import { listObjects, type ManagedObject } from '@/api/objects'
+import { listEvents } from '@/api/events'
 import { AuthError } from '@/api/auth'
 
 const router = useRouter()
@@ -22,7 +22,8 @@ async function load() {
   loadError.value = ''
   try {
     summary.value = await getOverviewSummary()
-    assets.value = await listObjects()
+    // 平台账号（无组织）不查目标，避免 403 拖垮整个总览；KPI 显示「系统池」口径
+    assets.value = summary.value.org ? await listObjects() : []
   } catch (e) {
     if (e instanceof AuthError && e.httpStatus === 401) needAuth.value = true
     else loadError.value = e instanceof Error ? e.message : String(e)
@@ -36,23 +37,34 @@ onMounted(load)
 
 const kpis = computed(() => {
   const s = summary.value
+  const isOrg = !!s?.org
+  const scope = isOrg ? t('ov.scope.org') : t('ov.scope.pool')
   return [
-    { key: 'owned', label: t('ov.stat.owned'), value: s ? String(s.owned) : '—', unit: t('ov.unit.objs'), tone: '' },
+    { key: 'owned', label: t('ov.stat.owned'), value: s ? String(s.owned) : '—', unit: t('ov.unit.objs'), tone: '', scope },
     {
       key: 'cdm24',
       label: t('ov.stat.high'),
-      value: s ? String(s.cdm.next24h) : '—',
+      value: s ? String(isOrg ? s.cdm.orgNext24h : s.cdm.next24h) : '—',
       unit: 'CDM',
-      tone: s && s.cdm.next24h > 0 ? 'danger' : ''
+      tone: s && (isOrg ? s.cdm.orgNext24h : s.cdm.next24h) > 0 ? 'danger' : '',
+      scope
     },
-    { key: 'cdm7d', label: t('ov.stat.warn'), value: s ? String(s.cdm.next7d) : '—', unit: 'CDM', tone: '' },
-    { key: 'screen', label: t('ov.stat.screen'), value: s ? String(s.screensToday) : '—', unit: t('ov.unit.runs'), tone: '' },
+    {
+      key: 'cdm7d',
+      label: t('ov.stat.warn'),
+      value: s ? String(isOrg ? s.cdm.orgNext7d : s.cdm.next7d) : '—',
+      unit: 'CDM',
+      tone: '',
+      scope
+    },
+    { key: 'screen', label: t('ov.stat.screen'), value: s ? String(s.screensToday) : '—', unit: t('ov.unit.runs'), tone: '', scope },
     {
       key: 'ephem',
       label: t('ov.stat.ephem'),
       value: s ? `${s.ephem.fresh}/${s.ephem.total}` : '—',
       unit: t('ov.unit.fresh'),
-      tone: ''
+      tone: '',
+      scope
     }
   ]
 })
@@ -121,14 +133,108 @@ const STATE_LABEL: Record<string, I18nKey> = {
   failed: 'ov.src.failed',
   idle: 'ov.src.idle'
 }
+
+/* ------------------------------ R2-6 报告选择与下载 ------------------------------ */
+
+type ReportKind = 'summary' | 'events' | 'health'
+const reportKind = ref<ReportKind>('summary')
+const reportWindow = ref<'24h' | '3d' | '7d'>('7d')
+const reportBusy = ref(false)
+const reportMsg = ref('')
+const canExport = computed(() => !!summary.value?.org)
+
+function downloadText(name: string, mime: string, text: string) {
+  const blob = new Blob([text], { type: `${mime};charset=utf-8` })
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url
+  a.download = name
+  document.body.appendChild(a)
+  a.click()
+  a.remove()
+  setTimeout(() => URL.revokeObjectURL(url), 1000)
+}
+
+const csvCell = (v: unknown) => `"${(v == null ? '' : String(v)).replace(/"/g, '""')}"`
+const stamp = () => new Date().toISOString().slice(0, 19).replace(/[:T]/g, '')
+
+async function exportReport() {
+  if (!canExport.value || reportBusy.value) return
+  reportBusy.value = true
+  reportMsg.value = ''
+  try {
+    const s = summary.value
+    if (reportKind.value === 'summary') {
+      const rows: string[][] = [
+        ['KPI', 'value', 'unit'],
+        ['owned_objects', String(s?.owned ?? ''), 'objects'],
+        ['cdm_next_24h', String(s?.cdm.orgNext24h ?? 0), 'CDM'],
+        ['cdm_next_7d', String(s?.cdm.orgNext7d ?? 0), 'CDM'],
+        ['screens_today', String(s?.screensToday ?? 0), 'runs'],
+        ['ephemeris_fresh', `${s?.ephem.fresh ?? 0}/${s?.ephem.total ?? 0}`, 'files']
+      ]
+      downloadText(
+        `osp-org-summary-${stamp()}.csv`,
+        'text/csv',
+        '\uFEFF' + rows.map((r) => r.map(csvCell).join(',')).join('\r\n')
+      )
+      reportMsg.value = t('ov.reportDone')
+    } else if (reportKind.value === 'events') {
+      const { events: list } = await listEvents(reportWindow.value)
+      if (!list.length) {
+        reportMsg.value = t('ov.reportEmpty')
+        return
+      }
+      const rows: string[][] = [
+        ['key', 'level', 'tca', 'norad_a', 'name_a', 'norad_b', 'name_b', 'pc', 'miss_km', 'rel_speed_kms', 'cdm_count'],
+        ...list.map((e) => [
+          e.key,
+          e.level,
+          e.tca,
+          String(e.noradA),
+          e.nameA,
+          String(e.noradB),
+          e.nameB,
+          e.pc == null ? '' : String(e.pc),
+          e.missKm == null ? '' : String(e.missKm),
+          e.relSpeedKmS == null ? '' : String(e.relSpeedKmS),
+          String(e.cdmCount)
+        ])
+      ]
+      downloadText(
+        `osp-events-${reportWindow.value}-${stamp()}.csv`,
+        'text/csv',
+        '\uFEFF' + rows.map((r) => r.map(csvCell).join(',')).join('\r\n')
+      )
+      reportMsg.value = t('ov.reportDone')
+    } else {
+      const lines = [
+        `# ${t('ov.srcHealth')}`,
+        '',
+        `- plan: ${s?.org?.plan ?? '—'}`,
+        `- generated_at: ${new Date().toISOString()}`,
+        '',
+        '| source | state | last_success | duration_ms |',
+        '|---|---|---|---|'
+      ]
+      for (const src of s?.sources ?? []) {
+        lines.push(
+          `| ${t((SRC_LABEL[src.source] ?? src.source) as I18nKey)} | ${src.state} | ${src.last_success ?? '—'} | ${src.duration_ms ?? '—'} |`
+        )
+      }
+      downloadText(`osp-source-health-${stamp()}.md`, 'text/markdown', lines.join('\n'))
+      reportMsg.value = t('ov.reportDone')
+    }
+  } catch (e) {
+    reportMsg.value = e instanceof Error ? e.message : String(e)
+  } finally {
+    reportBusy.value = false
+  }
+}
 </script>
 
 <template>
   <div class="overview">
-    <section class="toolbar">
-      <DataSourceBar />
-    </section>
-
     <!-- 未登录：不显示任何假数据，引导登录 -->
     <section v-if="needAuth" class="panel auth-hint">
       <p>{{ t('ov.needAuth') }}</p>
@@ -143,7 +249,9 @@ const STATE_LABEL: Record<string, I18nKey> = {
     <template v-else>
       <section class="kpi-row">
         <div v-for="k in kpis" :key="k.key" class="kpi" :class="k.tone">
-          <div class="kpi-label">{{ k.label }}</div>
+          <div class="kpi-label">
+            {{ k.label }}<span class="kpi-scope">{{ k.scope }}</span>
+          </div>
           <div class="kpi-value">
             <span class="num">{{ k.value }}</span>
             <span class="unit">{{ k.unit }}</span>
@@ -198,6 +306,33 @@ const STATE_LABEL: Record<string, I18nKey> = {
                 </div>
               </div>
             </div>
+          </div>
+
+          <!-- R2-6：报告选择与下载（无数据灰显，不造假） -->
+          <div class="panel report">
+            <header class="panel-h">
+              <div>
+                <div class="h-title">{{ t('ov.reportTitle') }}</div>
+                <div class="h-sub">{{ t('ov.reportSub') }}</div>
+              </div>
+            </header>
+            <div class="report-body">
+              <select v-model="reportKind">
+                <option value="summary">{{ t('ov.reportSummary') }}</option>
+                <option value="events">{{ t('ov.reportEvents') }}</option>
+                <option value="health">{{ t('ov.reportHealth') }}</option>
+              </select>
+              <select v-if="reportKind === 'events'" v-model="reportWindow">
+                <option value="24h">24h</option>
+                <option value="3d">3d</option>
+                <option value="7d">7d</option>
+              </select>
+              <button type="button" class="ghost" :disabled="!canExport || reportBusy" @click="exportReport">
+                {{ reportBusy ? t('ov.reportBusy') : t('ov.reportDownload') }}
+              </button>
+            </div>
+            <div v-if="!canExport" class="empty">{{ t('ov.reportNoOrg') }}</div>
+            <div v-else-if="reportMsg" class="empty">{{ reportMsg }}</div>
           </div>
         </aside>
 
@@ -275,6 +410,16 @@ const STATE_LABEL: Record<string, I18nKey> = {
 .kpi.soon { border-left-color: var(--border); }
 .kpi.soon .num { color: var(--text-dim); }
 .kpi-label { font-size: 11px; color: var(--text-muted); }
+.kpi-scope {
+  display: inline-block;
+  margin-left: 6px;
+  padding: 0 4px;
+  border: 1px solid var(--border);
+  border-radius: 2px;
+  font-size: 9px;
+  color: var(--text-dim);
+  vertical-align: 1px;
+}
 .kpi-value { margin-top: 4px; display: flex; align-items: baseline; gap: 6px; }
 .kpi-value .num { font-size: 20px; font-weight: 650; font-variant-numeric: tabular-nums; color: var(--text); }
 .kpi-value .unit { font-size: 10px; color: var(--text-dim); }
@@ -294,6 +439,20 @@ const STATE_LABEL: Record<string, I18nKey> = {
 }
 .assets { flex: 1; }
 .sources { flex: 0 0 auto; }
+.report { flex: 0 0 auto; }
+.report-body { display: flex; flex-wrap: wrap; gap: 6px; padding: 8px 10px; }
+.report-body select {
+  flex: 1;
+  min-width: 120px;
+  appearance: none;
+  border: 1px solid var(--border);
+  background: var(--bg-deep);
+  color: var(--text);
+  border-radius: 4px;
+  padding: 4px 8px;
+  font-size: 11px;
+  outline: none;
+}
 .panel {
   background: var(--bg-panel);
   border: 1px solid var(--border);

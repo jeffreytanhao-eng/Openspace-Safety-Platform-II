@@ -2,8 +2,9 @@ import { Router } from 'express'
 import type { RowDataPacket } from 'mysql2/promise'
 import { pool, pingDb } from '../db/pool.js'
 import { ok } from '../utils/response.js'
-import { optionalAuth } from './auth.js'
+import { optionalAuth, requireAuth } from './auth.js'
 import { getVisibleNorads, poolBadge, resolvePoolPolicy, type PoolPolicy } from '../services/systemPool.js'
+import { getDailyFetchStatus } from '../db/fetchDb.js'
 
 const router = Router()
 
@@ -61,6 +62,13 @@ router.get('/catalog/stats', optionalAuth, async (req, res) => {
   )
   const tle = Number(tleRows[0]?.c ?? 0)
   const cdm = Number(cdmRows[0]?.c ?? 0)
+  // R1-3：与 /cgi/health 同口径的日更状态（GP+CDM 为出门标准；AOE 暂不接入）
+  let dailyFetch: unknown = null
+  try {
+    dailyFetch = await getDailyFetchStatus()
+  } catch {
+    dailyFetch = null
+  }
   const policy = await resolvePoolPolicy(req.auth?.org ?? null)
   let tleVisible = tle
   if (policy.mode === 'none') tleVisible = 0
@@ -82,18 +90,19 @@ router.get('/catalog/stats', optionalAuth, async (req, res) => {
       data_source: 'system_pool',
       pool: poolBadge(policy),
       lastGpSync: sync[0] ?? null,
-      lastCdmSync: cdmSync[0] ?? null
+      lastCdmSync: cdmSync[0] ?? null,
+      daily_fetch: dailyFetch
     })
   )
 })
 
 /**
- * Space-Track TLE catalog (sat_tle) — C3 按档裁剪：
- * 匿名/免费=样例窗（最新 500 条），普通=托管 NORAD 相关，VIP=全量；
+ * Space-Track TLE catalog (sat_tle) — R0-1 登录可读 + C3 按档裁剪：
+ * 免费=样例窗（最新 500 条），普通=托管 NORAD 相关，VIP=全量；
  * 响应带 data_source='system_pool' 与 pool 徽标。
  * Query: q (name/norad), type, regime, limit (default 200), offset
  */
-router.get('/catalog/tles', optionalAuth, async (req, res) => {
+router.get('/catalog/tles', requireAuth, async (req, res) => {
   const up = await pingDb()
   if (!up) {
     res.status(503).json({ code: 503, msg: 'database down', data: null })
@@ -163,8 +172,8 @@ router.get('/catalog/tles', optionalAuth, async (req, res) => {
   res.json(ok({ total: Number(cnt[0]?.c ?? 0), items: rows, ...badge }))
 })
 
-/** Recent Space-Track public CDMs（C3：按档限定历史天数窗） */
-router.get('/catalog/cdms', optionalAuth, async (req, res) => {
+/** Recent Space-Track public CDMs（R0-1 登录可读；C3：按档限定历史天数窗） */
+router.get('/catalog/cdms', requireAuth, async (req, res) => {
   const up = await pingDb()
   if (!up) {
     res.status(503).json({ code: 503, msg: 'database down', data: null })

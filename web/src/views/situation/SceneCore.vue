@@ -62,6 +62,7 @@ import {
 import {
   setEventCloud,
   updateEventCloud,
+  updateEventCloudFocus,
   setEventCloudSelected,
   pickEventCloud,
   getEventCloudAnchor,
@@ -128,6 +129,8 @@ let lastFilterTypes: string[] = []
 
 /** Ephem track / reticle — reuse old Openspace-Safety-Platform select UX (TRACK_CAM_DIST + breath ring). */
 const TRACK_CAM_DIST = 0.15
+/** 交会选中近景机位（场景单位；需同时看清双方模型/白圈，又与常规跟星 0.15 拉开层次） */
+const CONJ_CAM_DIST = 0.05
 /** Slower than old 2s pulse — CSS animation uses 3.2s. */
 let trackEphem = false
 /** Catalog selection track (station「位置展示」/ list pick) — same UX as ephem track (t201u). */
@@ -340,10 +343,15 @@ function startEphemTrack(set: EphemSet) {
 
 /** Place camera on geocentric ray through `pos`, distance TRACK_CAM_DIST beyond target. */
 function framePointAtTrackDist(pos: THREE.Vector3) {
+  framePointAtDist(pos, TRACK_CAM_DIST)
+}
+
+/** Place camera on geocentric ray through `pos` at a given scene distance. */
+function framePointAtDist(pos: THREE.Vector3, dist: number) {
   if (!camera) return
   lookAtPt.copy(pos)
   const radial = pos.clone().normalize()
-  const toPos = pos.clone().addScaledVector(radial, TRACK_CAM_DIST)
+  const toPos = pos.clone().addScaledVector(radial, dist)
   beginCamFly(toPos, pos.clone())
 }
 
@@ -683,6 +691,7 @@ function loop(now: number) {
   updateCatalogCloud(simMs, camera)
   updateEphemOrbitMarker(simMs)
   updateEventCloud(simMs)
+  updateEventCloudFocus(now / 1000)
 
   const flying = updateCameraFly(now)
 
@@ -958,7 +967,8 @@ function focusEventCloud(key: string | null, fly = true): boolean {
   setEventCloudSelected(key)
   if (!key || !camera || !fly) return true
   if (!getEventCloudAnchor(key, _trackPos)) return false
-  framePointAtTrackDist(_trackPos)
+  // R2-7：交会选中近景（双方模型 + 双方轨道 + 白圈）
+  framePointAtDist(_trackPos, CONJ_CAM_DIST)
   return true
 }
 

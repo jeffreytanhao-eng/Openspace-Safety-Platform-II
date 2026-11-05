@@ -19,6 +19,7 @@ import {
 import { EPH_ROOT, scanAndIngest, ingestUploadFile } from '../ephem/ingest.js'
 import { compareSources, listAccuracySources } from '../services/accuracyCompare.js'
 import { requireAuth } from './auth.js'
+import { requireSuperAdmin } from './admin.js'
 import { isOrgFlagEnabled } from '../db/planDb.js'
 import { quotaExceeded } from '../middleware/plan.js'
 import { findOrgById } from '../db/orgDb.js'
@@ -273,8 +274,12 @@ router.post(
   }
 )
 
-/** POST /cgi/ephemerides/rebuild?force=1 — 扫描 data/ephemerides 入库并导出 index.json；force 清表全量重解析 */
-router.post('/ephemerides/rebuild', async (req: Request, res: Response) => {
+/**
+ * POST /cgi/ephemerides/rebuild?force=1 — 扫描 data/ephemerides 入库并导出 index.json；
+ * force 清表全量重解析。运维级操作：仅平台超管可调用。
+ */
+// eslint-disable-next-line @typescript-eslint/no-misused-promises
+router.post('/ephemerides/rebuild', requireAuth, requireSuperAdmin, async (req: Request, res: Response) => {
   try {
     const force = req.query.force === '1' || req.query.force === 'true'
     const r = await scanAndIngest({ exportJson: true, force })

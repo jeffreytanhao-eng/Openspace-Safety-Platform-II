@@ -60,7 +60,7 @@ router.use(admin)
 // Epic C1: 日更任务（POST 触发 / GET 状态，均 requireAuth + requireSuperAdmin）
 router.use(jobs)
 
-// Epic D1: 托管目标（内部 requireAuth + requireOrg + checkQuota）
+// Epic D1: 目标（内部 requireAuth + requireOrg + checkQuota）
 router.use(objects)
 router.use(overview)
 router.use(screens)

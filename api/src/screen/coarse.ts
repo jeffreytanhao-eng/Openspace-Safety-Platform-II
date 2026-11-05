@@ -48,7 +48,7 @@ export function propagateJ2000(satrec: satellite.SatRec, tMs: number): { r: Vec3
   return temeToJ2000([pos.x, pos.y, pos.z], [vel.x, vel.y, vel.z], tMs)
 }
 
-export function coarseScan(input: CoarseInput): Candidate[] {
+export function coarseScan(input: CoarseInput, onProgress?: (doneSteps: number) => void): Candidate[] {
   const { primaries, catalog, params, stepFrom, stepTo } = input
   const { missMaxKm, vRelMaxKms, stepMs, windowStartMs, windowEndMs } = params
   const G = missMaxKm + 0.5 * (stepMs / 1000) * vRelMaxKms
@@ -74,6 +74,8 @@ export function coarseScan(input: CoarseInput): Candidate[] {
   const best = new Map<number, Map<number, { step: number; dist: number }>>()
 
   const nSteps = Math.max(0, Math.min(stepTo, Math.floor((windowEndMs - windowStartMs) / stepMs)))
+  // R0-3 进度回调粒度：每 5 步（及最后一步）上报已完成绝对步数，避免小分片永远不回调
+  const reportEvery = 5
   for (let s = Math.max(0, stepFrom); s < nSteps; s++) {
     const t = windowStartMs + s * stepMs
 
@@ -127,6 +129,8 @@ export function coarseScan(input: CoarseInput): Candidate[] {
         }
       }
     }
+
+    if (onProgress && ((s + 1 - stepFrom) % reportEvery === 0 || s + 1 === nSteps)) onProgress(s + 1)
   }
 
   const out: Candidate[] = []

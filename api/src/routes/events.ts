@@ -18,7 +18,7 @@ import { Router, type Request, type Response, type NextFunction } from 'express'
 import type { RowDataPacket } from 'mysql2/promise'
 import { pool } from '../db/pool.js'
 import { ok, fail } from '../utils/response.js'
-import { requireAuth, optionalAuth, type AuthContext } from './auth.js'
+import { requireAuth, type AuthContext } from './auth.js'
 import { quotaExceeded } from '../middleware/plan.js'
 import { parseCdmText } from '../services/cdmParse.js'
 import { resolvePoolPolicy, poolBadge } from '../services/systemPool.js'
@@ -28,6 +28,7 @@ import { encounterPlane, foster2D } from '../screen/pc.js'
 import { alfano1D, chan2D } from '../screen/pcMethods.js'
 import { norm3 } from '../screen/frames.js'
 import type { CatalogObject, Vec3 } from '../screen/types.js'
+import { levelOfEvent, LEVEL_RANK, type EventLevel, type LevelBasis } from '../screen/levels.js'
 import { ensureCaSchema, getCaDefaults, createPcRun, listPcRuns } from '../db/caDb.js'
 
 const router = Router()
@@ -75,18 +76,8 @@ export async function ensureCdmSchema(): Promise<boolean> {
 
 /* ---------------------------- 聚合模型 ------------------------------ */
 
-export type EventLevel = 'red' | 'orange' | 'yellow' | 'low'
-
-/** 单档分级：无 Pc / 低于 1e-7 → low（灰） */
-function levelOfPc(pc: number | null): EventLevel {
-  if (pc === null) return 'low'
-  if (pc >= 1e-4) return 'red'
-  if (pc >= 1e-5) return 'orange'
-  if (pc >= 1e-7) return 'yellow'
-  return 'low'
-}
-
-const LEVEL_RANK: Record<EventLevel, number> = { red: 3, orange: 2, yellow: 1, low: 0 }
+// R1-1：等级口径统一到 screen/levels（与筛查产出/CDM 入站共用），此处仅做聚合
+export type { EventLevel } from '../screen/levels.js'
 
 export interface CdmRow extends RowDataPacket {
   id: number
@@ -116,6 +107,8 @@ export interface ConjunctionEvent {
   tcaSpanH: number // 首→末 TCA 跨度（小时）
   cdmCount: number
   level: EventLevel
+  /** 等级依据：pc = 官方 Pc 分档；miss = 无 Pc 时按脱靶距离兜底；none = 低 */
+  levelBasis: LevelBasis
   pc: number | null // 官方 Pc（成员最大值，原样保留）
   pcSource: string // 命中 Pc 的成员来源（system/customer）
   missKm: number | null // 最小脱靶距离
@@ -175,13 +168,10 @@ export function aggregateEvents(rows: CdmRow[]): ConjunctionEvent[] {
     const pushEvent = (a: number, b: number, items: CdmRow[]): void => {
       const tcaMs = new Date(items[0].tca!).getTime()
       const lastMs = new Date(items[items.length - 1].tca!).getTime()
-      let level: EventLevel = 'low'
       let pc: number | null = null
       let pcSource = ''
       let missKm: number | null = null
       for (const it of items) {
-        const lv = levelOfPc(it.collision_probability)
-        if (LEVEL_RANK[lv] > LEVEL_RANK[level]) level = lv
         if (it.collision_probability !== null && (pc === null || it.collision_probability > pc)) {
           pc = it.collision_probability
           pcSource = it.source
@@ -190,6 +180,8 @@ export function aggregateEvents(rows: CdmRow[]): ConjunctionEvent[] {
           missKm = it.miss_distance_km
         }
       }
+      // R1-1：统一分级（Pc 优先，无 Pc 时按最小脱靶距离兜底）
+      const graded = levelOfEvent(pc, missKm)
       events.push({
         key: `${a}:${b}:${tcaMs}`,
         noradA: a,
@@ -199,7 +191,8 @@ export function aggregateEvents(rows: CdmRow[]): ConjunctionEvent[] {
         tca: toIso(items[0].tca),
         tcaSpanH: Math.round(((lastMs - tcaMs) / 3600e3) * 10) / 10,
         cdmCount: items.length,
-        level,
+        level: graded.level,
+        levelBasis: graded.basis,
         pc,
         pcSource,
         missKm,
@@ -343,13 +336,14 @@ router.post('/events/import', requireAuth, async (req: ScopedRequest, res) => {
   res.json(ok({ parsed: parsed.length, inserted, updated, skipped }))
 })
 
-/** 事件聚合列表（公开只读，C3 按档裁剪）：window=24h|3d|7d|all，level/q 前端过滤即可；
- *  客户上传 CDM（source=customer）仅上传组织可见；all 窗口回看深度按档 system_cdm_days。 */
-router.get('/events', optionalAuth, async (req: ScopedRequest, res) => {
+/** 事件聚合列表（R0-1 登录可读，C3 按档裁剪）：window=24h|3d|7d|all，level/q 前端过滤即可；
+ *  客户上传 CDM（source=customer）仅上传组织可见；all 窗口回看深度按档 system_cdm_days。
+ *  平台超管（无所属组织）仅可见系统池行，不跨组织泄露客户上传。 */
+router.get('/events', requireAuth, async (req: ScopedRequest, res) => {
   const org = req.auth?.org ?? null
   const policy = await resolvePoolPolicy(org)
   const { from, to } = windowRange(String(req.query.window ?? ''), policy.cdmDays)
-  // 客户 CDM 组织隔离：匿名只见系统池；登录组织额外可见自己上传的行
+  // 客户 CDM 组织隔离：登录组织额外可见自己上传的行；超管/无组织只见系统池
   const isoSql = org ? `AND (source <> 'customer' OR org_id = ?)` : `AND source <> 'customer'`
   const params: unknown[] = org ? [from, to, org.id] : [from, to]
   const [rows] = await pool.query<CdmRow[]>(
@@ -370,8 +364,8 @@ router.get('/events', optionalAuth, async (req: ScopedRequest, res) => {
   )
 })
 
-/** 事件详情：成员 CDM（不含 raw）+ 双方 sat_tle 档案（C3：客户 CDM 组织隔离） */
-router.get('/events/:key', optionalAuth, async (req: ScopedRequest, res) => {
+/** 事件详情：成员 CDM（不含 raw）+ 双方 sat_tle 档案（R0-1 登录可读；C3：客户 CDM 组织隔离） */
+router.get('/events/:key', requireAuth, async (req: ScopedRequest, res) => {
   const key = String(req.params.key ?? '')
   const m = /^(\d+):(\d+):(\d+)$/.exec(key)
   if (!m) {
@@ -454,7 +448,7 @@ router.get('/events/:key', optionalAuth, async (req: ScopedRequest, res) => {
 })
 
 /** 单条 CDM 原文（raw_json）—— C3：客户上传的原文仅上传组织可读 */
-router.get('/events/:key/cdm/:cdmId/raw', optionalAuth, async (req: ScopedRequest, res) => {
+router.get('/events/:key/cdm/:cdmId/raw', requireAuth, async (req: ScopedRequest, res) => {
   const key = String(req.params.key ?? '')
   const m = /^(\d+):(\d+):(\d+)$/.exec(key)
   const cdmId = Number(req.params.cdmId)
@@ -533,7 +527,12 @@ async function computePcCompare(input: PcComputeInput): Promise<PcComputeResult>
   const { noradA, noradB, tcaMs, hbrM, methods } = input
   const hbrKm = hbrM / 1000
   const tcaIso = new Date(tcaMs).toISOString()
-  const num = (v: unknown): number | null => (Number.isFinite(Number(v)) ? Number(v) : null)
+  // R1-2：null/undefined/'' 必须保持 null（Number(null)=0 会把「无官方 Pc」显示成 0）
+  const num = (v: unknown): number | null => {
+    if (v === undefined || v === null || v === '') return null
+    const n = Number(v)
+    return Number.isFinite(n) ? n : null
+  }
 
   const rows: PcCompareRow[] = [
     {
@@ -638,7 +637,7 @@ async function computePcCompare(input: PcComputeInput): Promise<PcComputeResult>
 }
 
 /** E3 多算法比对（公开，全方法）：入参校验后走共享计算核 */
-router.post('/events/pc-compare', async (req, res) => {
+router.post('/events/pc-compare', requireAuth, async (req: ScopedRequest, res) => {
   const body = (req.body ?? {}) as {
     noradA?: number
     noradB?: number
@@ -774,10 +773,42 @@ router.post('/events/:key/recompute', requireAuth, async (req: ScopedRequest, re
     return
   }
 
-  // 事件官方口径（聚合 Pc/miss/relSpeed 作对照行）
-  const officialPc = Number.isFinite(Number(body.officialPc)) ? Number(body.officialPc) : null
-  const officialMissKm = Number.isFinite(Number(body.officialMissKm)) ? Number(body.officialMissKm) : null
-  const officialRelSpeedKms = Number.isFinite(Number(body.officialRelSpeedKms)) ? Number(body.officialRelSpeedKms) : null
+  // 事件官方口径（聚合 Pc/miss/relSpeed 作对照行）：null 安全解析，缺省时回查本事件关联 CDM
+  const numOrNull = (v: unknown): number | null => {
+    if (v === undefined || v === null || v === '') return null
+    const n = Number(v)
+    return Number.isFinite(n) ? n : null
+  }
+  let officialPc = numOrNull(body.officialPc)
+  let officialMissKm = numOrNull(body.officialMissKm)
+  let officialRelSpeedKms = numOrNull(body.officialRelSpeedKms)
+  if (officialPc === null) {
+    const tcaFrom = new Date(tcaMs - 10 * 24 * 3600e3)
+    const tcaTo = new Date(tcaMs + 10 * 24 * 3600e3)
+    const [rows] = await pool.query<CdmRow[]>(
+      `SELECT id, cdm_id, creation_date, originator, tca, norad_a, name_a, norad_b, name_b,
+              miss_distance_km, rel_speed_km_per_s, collision_probability, hard_body_radius_m, source, org_id
+         FROM sat_cdm
+        WHERE tca IS NOT NULL AND tca >= ? AND tca <= ?
+          AND (norad_a IN (?, ?)) AND (norad_b IN (?, ?))
+          AND (source <> 'customer' OR org_id = ?)
+        ORDER BY tca ASC
+        LIMIT ${LIST_LIMIT}`,
+      [tcaFrom, tcaTo, a, b, a, b, auth.org.id]
+    )
+    const island = findIsland(rows, a, b, tcaMs)
+    for (const it of island ?? []) {
+      if (it.collision_probability !== null && (officialPc === null || it.collision_probability > officialPc)) {
+        officialPc = it.collision_probability
+      }
+      if (it.miss_distance_km !== null && (officialMissKm === null || it.miss_distance_km < officialMissKm)) {
+        officialMissKm = it.miss_distance_km
+      }
+      if (it.rel_speed_km_per_s !== null && officialRelSpeedKms === null) {
+        officialRelSpeedKms = it.rel_speed_km_per_s
+      }
+    }
+  }
 
   const result = await computePcCompare({
     noradA: a,

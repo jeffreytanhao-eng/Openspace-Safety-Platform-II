@@ -1,6 +1,6 @@
 /**
  * 总览驾驶舱汇总接口（Epic D2）：真实数据聚合，无假随机 KPI。
- * - 组织资产：objects 托管目标数（平台账号为 0）
+ * - 组织资产：objects 目标数（平台账号为 0）
  * - 关注事件口径：系统 CDM 快照按 TCA 时间窗统计（E1 后替换为 conjunction_events）
  * - 星历：本地元数据总数 / 仍有效（stop_ms > now）数
  * - 数据源健康：daily_fetch 三源最近批次状态（GP / CDM / AOE）
@@ -20,8 +20,13 @@ type ScopedRequest = Request & { auth?: AuthContext }
 router.get('/overview/summary', requireAuth, async (req: ScopedRequest, res) => {
   try {
     const orgId = req.auth?.user.orgId ? Number(req.auth.user.orgId) : null
+    // 与 /cgi/objects 等客户业务接口口径一致：平台账号（无组织）不返回「系统池」半成功视图
+    if (!orgId) {
+      res.status(403).json(fail(403, '需要组织账号'))
+      return
+    }
 
-    // 托管目标数 + 托管 NORAD 集合（平台账号无组织 → 0）
+    // 目标数 + 托管 NORAD 集合（平台账号无组织 → 0）
     let owned = 0
     let ownedNorads: number[] = []
     if (orgId) {
@@ -37,18 +42,26 @@ router.get('/overview/summary', requireAuth, async (req: ScopedRequest, res) => 
       ownedNorads = noradRows.map((r) => Number(r.norad_id))
     }
 
-    // 星历统计：总数 / 仍有效（stop_ms > now）
+    // 星历统计：R1-4 组织化——组织账号只看绑定到本组织目标的星历；平台账号看全量
     const nowMs = Date.now()
+    let ephSql = 'SELECT COUNT(*) AS total, SUM(CASE WHEN stop_ms > ? THEN 1 ELSE 0 END) AS fresh FROM ephemeris'
+    const ephParams: unknown[] = [nowMs]
+    if (orgId) {
+      ephSql = `SELECT COUNT(*) AS total, SUM(CASE WHEN e.stop_ms > ? THEN 1 ELSE 0 END) AS fresh
+                  FROM ephemeris e JOIN objects o ON o.id = e.bound_object_id
+                 WHERE o.org_id = ?`
+      ephParams.push(orgId)
+    }
     const [ephRows] = await pool.query<Array<RowDataPacket & { total: number; fresh: number }>>(
-      'SELECT COUNT(*) AS total, SUM(CASE WHEN stop_ms > ? THEN 1 ELSE 0 END) AS fresh FROM ephemeris',
-      [nowMs]
+      ephSql,
+      ephParams
     )
     const ephem = {
       total: Number(ephRows[0]?.total) || 0,
       fresh: Number(ephRows[0]?.fresh) || 0
     }
 
-    // 系统 CDM 快照统计（TCA 时间窗；涉及托管目标）
+    // 系统 CDM 快照统计（TCA 时间窗；涉及目标）
     const [cdmAll] = await pool.query<Array<RowDataPacket & { n: number }>>(
       'SELECT COUNT(*) AS n FROM sat_cdm'
     )
@@ -93,11 +106,32 @@ router.get('/overview/summary', requireAuth, async (req: ScopedRequest, res) => 
         collision_probability: r.collision_probability == null ? null : Number(r.collision_probability)
       }))
     }
+    // R1-4：本组织托管相关的 24h/7d 关注事件（无托管时保持 0，不显示全局数字）
+    let orgNext24h = 0
+    let orgNext7d = 0
+    if (ownedNorads.length) {
+      const [o24] = await pool.query<Array<RowDataPacket & { n: number }>>(
+        `SELECT COUNT(*) AS n FROM sat_cdm
+          WHERE tca >= NOW() AND tca < DATE_ADD(NOW(), INTERVAL 24 HOUR)
+            AND (norad_a IN (?) OR norad_b IN (?))`,
+        [ownedNorads, ownedNorads]
+      )
+      const [o7] = await pool.query<Array<RowDataPacket & { n: number }>>(
+        `SELECT COUNT(*) AS n FROM sat_cdm
+          WHERE tca >= NOW() AND tca < DATE_ADD(NOW(), INTERVAL 7 DAY)
+            AND (norad_a IN (?) OR norad_b IN (?))`,
+        [ownedNorads, ownedNorads]
+      )
+      orgNext24h = Number(o24[0]?.n) || 0
+      orgNext7d = Number(o7[0]?.n) || 0
+    }
     const cdm = {
       total: Number(cdmAll[0]?.n) || 0,
       next24h: Number(cdm24[0]?.n) || 0,
       next7d: Number(cdm7d[0]?.n) || 0,
       involvingOwned,
+      orgNext24h,
+      orgNext7d,
       ownedCdm
     }
 

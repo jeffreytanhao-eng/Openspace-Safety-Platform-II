@@ -151,3 +151,47 @@ export async function isPlatformUser(): Promise<boolean> {
     return false
   }
 }
+
+/* ------------------------- R1-3：日更（GP + CDM）运维 ------------------------- */
+
+export interface FetchBatchRow {
+  id: number
+  source: string
+  status: 'running' | 'success' | 'failed'
+  triggered_by: string
+  started_at: string
+  finished_at: string | null
+  duration_ms: number | null
+  total: number
+  inserted: number
+  updated: number
+  skipped: number
+  error_message: string | null
+}
+
+export interface DailyFetchStatus {
+  last_success: Record<string, string | null>
+  last_batch: Record<string, FetchBatchRow | null>
+  running: boolean
+}
+
+export function adminDailyFetchStatus(): Promise<DailyFetchStatus> {
+  return cgiCall({ method: 'GET', url: '/jobs/daily-fetch/status', headers: headers() })
+}
+
+export interface DailyFetchSourceResult {
+  batchId: number
+  status: 'success' | 'failed'
+  message: string
+  total?: number
+  inserted?: number
+  updated?: number
+  skipped?: number
+}
+
+export function adminTriggerDailyFetch(): Promise<{
+  triggered_by: string
+  results: Record<string, DailyFetchSourceResult>
+}> {
+  return cgiCall({ method: 'POST', url: '/jobs/daily-fetch', headers: headers() })
+}

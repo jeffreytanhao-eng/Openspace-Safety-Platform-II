@@ -13,7 +13,7 @@ function headers(): Record<string, string> {
   }
 }
 
-export type ScreenJobStatus = 'queued' | 'running' | 'done' | 'failed'
+export type ScreenJobStatus = 'queued' | 'running' | 'done' | 'failed' | 'cancelled'
 
 /** 筛查任务行 */
 export interface ScreenJob {
@@ -34,6 +34,15 @@ export interface ScreenJob {
   started_at: string | null
   finished_at: string | null
   duration_ms: number
+  /** R0-3：执行进度（0-100）与阶段文案 */
+  progress_pct: number
+  progress_note: string | null
+  /** R0-3：已请求取消（running 时等待执行侧终止） */
+  cancel_requested: number
+  /** R2-8：主星状态源 tle | ephem */
+  primary_source: string
+  /** R2-8：副星/对照源 catalog | cdm */
+  secondary_source: string
 }
 
 /** 筛查产出的交会事件 */
@@ -74,6 +83,12 @@ export function createScreen(payload: {
   windowH?: number
   missMaxKm?: number
   hbrM?: number
+  /** R0-2：主星子集（本组织托管 NORAD），不传则全部目标 */
+  primaryNorads?: number[]
+  /** R2-8：主星源 tle（系统池/组织快照）| ephem（已绑定精密星历） */
+  primarySource?: 'tle' | 'ephem'
+  /** R2-8：副星/对照源 catalog（编目 GP）| cdm（已入站 CDM 复核） */
+  secondarySource?: 'catalog' | 'cdm'
 }): Promise<ScreenJob> {
   return cgiCall<ScreenJob>({ method: 'POST', url: '/screens', data: payload, headers: headers() })
 }
@@ -86,6 +101,15 @@ export function getScreen(id: number): Promise<{ job: ScreenJob; events: ScreenE
   return cgiCall<{ job: ScreenJob; events: ScreenEvent[] }>({
     method: 'GET',
     url: `/screens/${id}`,
+    headers: headers()
+  })
+}
+
+/** R0-3：取消任务（queued 立即取消；running 置取消请求，执行侧随后终止） */
+export function cancelScreen(id: number): Promise<{ cancel: 'cancelled' | 'requested'; job: ScreenJob }> {
+  return cgiCall<{ cancel: 'cancelled' | 'requested'; job: ScreenJob }>({
+    method: 'POST',
+    url: `/screens/${id}/cancel`,
     headers: headers()
   })
 }

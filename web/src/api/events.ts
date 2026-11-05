@@ -1,5 +1,5 @@
 /**
- * 交会事件 API（Epic E2）：列表 / 详情 / CDM 原文（公开只读）+ CDM 导入（需登录组织）。
+ * 交会事件 API（Epic E2）：列表 / 详情 / CDM 原文（R0-1 需登录）+ CDM 导入（需登录组织）。
  */
 import { cgiCall } from './auth'
 
@@ -25,6 +25,8 @@ export interface ConjunctionEvent {
   tcaSpanH: number
   cdmCount: number
   level: EventLevel
+  /** R1-1：等级依据（pc = Pc 分档；miss = 无 Pc 时按脱靶距离兜底） */
+  levelBasis?: 'pc' | 'miss' | 'none'
   pc: number | null
   pcSource: string
   missKm: number | null
@@ -70,7 +72,8 @@ export interface TleProfile {
 export function listEvents(window: '24h' | '3d' | '7d' | 'all'): Promise<{ events: ConjunctionEvent[] }> {
   return cgiCall<{ events: ConjunctionEvent[] }>({
     method: 'GET',
-    url: `/events?window=${encodeURIComponent(window)}`
+    url: `/events?window=${encodeURIComponent(window)}`,
+    headers: authHeaders()
   })
 }
 
@@ -80,11 +83,15 @@ export function getEvent(key: string): Promise<{
   primary: TleProfile | null
   secondary: TleProfile | null
 }> {
-  return cgiCall({ method: 'GET', url: `/events/${encodeURIComponent(key)}` })
+  return cgiCall({ method: 'GET', url: `/events/${encodeURIComponent(key)}`, headers: authHeaders() })
 }
 
 export function getCdmRaw(key: string, cdmId: number): Promise<{ id: number; cdm_id: string | null; raw: string }> {
-  return cgiCall({ method: 'GET', url: `/events/${encodeURIComponent(key)}/cdm/${cdmId}/raw` })
+  return cgiCall({
+    method: 'GET',
+    url: `/events/${encodeURIComponent(key)}/cdm/${cdmId}/raw`,
+    headers: authHeaders()
+  })
 }
 
 export function importCdm(text: string): Promise<{ parsed: number; inserted: number; updated: number; skipped: number }> {
@@ -130,7 +137,7 @@ export interface PcCompareParams {
   officialRelSpeedKms?: number
 }
 
-/** 多算法 Pc 比对：同源输入由服务端统一 TLE 传播，官方 Pc 仅作对照行 */
+/** 多算法 Pc 比对：同源输入由服务端统一 TLE 传播，官方 Pc 仅作对照行（R0-1 需登录） */
 export function pcCompare(p: PcCompareParams): Promise<PcCompareResult> {
-  return cgiCall({ method: 'POST', url: '/events/pc-compare', data: p })
+  return cgiCall({ method: 'POST', url: '/events/pc-compare', data: p, headers: authHeaders() })
 }

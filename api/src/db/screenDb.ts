@@ -4,9 +4,9 @@
  *  - conjunction_events：筛查产出的交会事件（job_id 关联 run，org 维度隔离）。
  */
 import { pool } from './pool.js'
-import type { RowDataPacket } from 'mysql2'
+import type { RowDataPacket, ResultSetHeader } from 'mysql2'
 
-export type ScreenJobStatus = 'queued' | 'running' | 'done' | 'failed'
+export type ScreenJobStatus = 'queued' | 'running' | 'done' | 'failed' | 'cancelled'
 
 export interface ScreenJobRow {
   id: number
@@ -22,6 +22,18 @@ export interface ScreenJobRow {
   n_candidates: number
   n_events: number
   error_message: string | null
+  /** R0-3 进度：0-100（粗筛阶段按已完成步数推进） */
+  progress_pct: number
+  /** R0-3 进度说明（加载中/粗筛中/精化中/写入中） */
+  progress_note: string | null
+  /** R0-3 心跳：worker 每次推进进度时刷新，超时看门狗据此判僵死 */
+  heartbeat_at: string | null
+  /** R0-3 取消请求标记（1 = 执行侧应尽快终止） */
+  cancel_requested: number
+  /** R2-8 主星状态源：tle（系统池/组织快照）| ephem（已绑定精密星历） */
+  primary_source: string
+  /** R2-8 副星/对照源：catalog（编目 GP）| cdm（已入站 CDM 复核） */
+  secondary_source: string
   queued_at: string
   started_at: string | null
   finished_at: string | null
@@ -66,7 +78,7 @@ CREATE TABLE IF NOT EXISTS \`screening_jobs\` (
   \`id\`            bigint NOT NULL AUTO_INCREMENT,
   \`org_id\`        bigint unsigned NOT NULL,
   \`triggered_by\`  varchar(128) NOT NULL DEFAULT '',
-  \`status\`        varchar(10) NOT NULL DEFAULT 'queued' COMMENT 'queued|running|done|failed',
+  \`status\`        varchar(10) NOT NULL DEFAULT 'queued' COMMENT 'queued|running|done|failed|cancelled',
   \`params_json\`   mediumtext,
   \`window_h\`      int NOT NULL DEFAULT 72,
   \`miss_max_km\`   double NOT NULL DEFAULT 10,
@@ -75,6 +87,12 @@ CREATE TABLE IF NOT EXISTS \`screening_jobs\` (
   \`n_secondary\`   int NOT NULL DEFAULT 0,
   \`n_candidates\`  int NOT NULL DEFAULT 0,
   \`n_events\`      int NOT NULL DEFAULT 0,
+  \`progress_pct\`  tinyint unsigned NOT NULL DEFAULT 0 COMMENT 'R0-3 进度百分比',
+  \`progress_note\` varchar(200) NULL COMMENT 'R0-3 阶段说明',
+  \`heartbeat_at\`  datetime(3) NULL COMMENT 'R0-3 心跳（僵死看门狗）',
+  \`cancel_requested\` tinyint NOT NULL DEFAULT 0 COMMENT 'R0-3 取消请求标记',
+  \`primary_source\` varchar(16) NOT NULL DEFAULT 'tle' COMMENT 'R2-8 主星源 tle|ephem',
+  \`secondary_source\` varchar(16) NOT NULL DEFAULT 'catalog' COMMENT 'R2-8 副星/对照源 catalog|cdm',
   \`error_message\` varchar(1000) NULL,
   \`queued_at\`     datetime(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
   \`started_at\`    datetime(3) NULL,
@@ -133,11 +151,37 @@ CREATE TABLE IF NOT EXISTS \`conjunction_events\` (
 
 let schemaReady: Promise<boolean> | null = null
 
+/**
+ * R0-3：老库补列（MySQL 8 无 ADD COLUMN IF NOT EXISTS），重复列错误忽略。
+ * 幂等：每次启动执行一次，已存在时 ALTER 报 1060 直接跳过。
+ */
+async function ensureJobColumns(): Promise<void> {
+  const cols = [
+    "ADD COLUMN `progress_pct` tinyint unsigned NOT NULL DEFAULT 0 COMMENT 'R0-3 进度百分比'",
+    "ADD COLUMN `progress_note` varchar(200) NULL COMMENT 'R0-3 阶段说明'",
+    "ADD COLUMN `heartbeat_at` datetime(3) NULL COMMENT 'R0-3 心跳（僵死看门狗）'",
+    "ADD COLUMN `cancel_requested` tinyint NOT NULL DEFAULT 0 COMMENT 'R0-3 取消请求标记'",
+    "ADD COLUMN `primary_source` varchar(16) NOT NULL DEFAULT 'tle' COMMENT 'R2-8 主星源 tle|ephem'",
+    "ADD COLUMN `secondary_source` varchar(16) NOT NULL DEFAULT 'catalog' COMMENT 'R2-8 副星/对照源 catalog|cdm'"
+  ]
+  for (const c of cols) {
+    try {
+      await pool.query(`ALTER TABLE \`screening_jobs\` ${c}`)
+    } catch (e) {
+      const code = (e as { code?: string }).code
+      if (code !== 'ER_DUP_FIELDNAME') {
+        console.error('[screen] alter screening_jobs failed:', (e as Error).message)
+      }
+    }
+  }
+}
+
 export function ensureScreenSchema(): Promise<boolean> {
   if (!schemaReady) {
     // mysql2 单次 query 不支持多语句，双表分两条顺序执行
     schemaReady = pool
       .query(SCHEMA_JOBS)
+      .then(() => ensureJobColumns())
       .then(() => pool.query(SCHEMA_EVENTS))
       .then(() => true)
       .catch((e) => {
@@ -155,22 +199,39 @@ export async function createScreenJob(input: {
   windowH: number
   missMaxKm: number
   hbrM: number
-  /** Epic J 再筛查：限定主星 NORAD 白名单（缺省 = 该组织全部托管目标） */
+  /** Epic J 再筛查：限定主星 NORAD 白名单（缺省 = 该组织全部目标） */
   primaryNorads?: number[]
   /** Epic J 再筛查：窗口起点 ms（缺省 = 当前时刻对齐分钟） */
   startMs?: number
+  /** R2-8 主星源：tle | ephem */
+  primarySource?: string
+  /** R2-8 副星/对照源：catalog | cdm */
+  secondarySource?: string
 }): Promise<number> {
+  const primarySource = input.primarySource === 'ephem' ? 'ephem' : 'tle'
+  const secondarySource = input.secondarySource === 'cdm' ? 'cdm' : 'catalog'
   const params = JSON.stringify({
     windowH: input.windowH,
     missMaxKm: input.missMaxKm,
     hbrM: input.hbrM,
     primaryNorads: input.primaryNorads ?? null,
-    startMs: input.startMs ?? null
+    startMs: input.startMs ?? null,
+    primarySource,
+    secondarySource
   })
   const [r] = await pool.query(
-    `INSERT INTO screening_jobs (org_id, triggered_by, status, params_json, window_h, miss_max_km, hbr_m)
-     VALUES (?, ?, 'queued', ?, ?, ?, ?)`,
-    [input.orgId, input.triggeredBy, params, input.windowH, input.missMaxKm, input.hbrM]
+    `INSERT INTO screening_jobs (org_id, triggered_by, status, params_json, window_h, miss_max_km, hbr_m, primary_source, secondary_source)
+     VALUES (?, ?, 'queued', ?, ?, ?, ?, ?, ?)`,
+    [
+      input.orgId,
+      input.triggeredBy,
+      params,
+      input.windowH,
+      input.missMaxKm,
+      input.hbrM,
+      primarySource,
+      secondarySource
+    ]
   )
   return Number((r as { insertId: number }).insertId)
 }
@@ -211,7 +272,8 @@ export async function finishScreenJob(
   await pool.query(
     `UPDATE screening_jobs SET status = ?, finished_at = NOW(3),
        duration_ms = TIMESTAMPDIFF(MICROSECOND, started_at, NOW(3)) DIV 1000,
-       n_primary = ?, n_secondary = ?, n_candidates = ?, n_events = ?, error_message = ?
+       n_primary = ?, n_secondary = ?, n_candidates = ?, n_events = ?, error_message = ?,
+       progress_pct = ?, cancel_requested = 0
      WHERE id = ?`,
     [
       status,
@@ -220,6 +282,7 @@ export async function finishScreenJob(
       fields.nCandidates ?? 0,
       fields.nEvents ?? 0,
       (fields.errorMessage ?? '').slice(0, 1000) || null,
+      status === 'done' ? 100 : 0,
       id
     ]
   )
@@ -229,8 +292,73 @@ export async function finishScreenJob(
 export async function resetStaleRunningJobs(): Promise<void> {
   await pool.query(
     `UPDATE screening_jobs SET status = 'failed', finished_at = NOW(3),
-       error_message = '服务重启中断，请重新发起筛查'
+       progress_note = '服务重启中断', error_message = '服务重启中断，请重新发起筛查'
      WHERE status = 'running'`
+  )
+}
+
+/* ---------------------- R0-3：进度 / 心跳 / 取消 ---------------------- */
+
+/** 任务启动时登记主/副星数（不再等结束时才写入，running 期间即可观测） */
+export async function markJobStarted(id: number, nPrimary: number, nSecondary: number): Promise<void> {
+  await pool.query(
+    `UPDATE screening_jobs SET n_primary = ?, n_secondary = ?, progress_pct = 0,
+       progress_note = '粗筛中', heartbeat_at = NOW(3) WHERE id = ?`,
+    [nPrimary, nSecondary, id]
+  )
+}
+
+/** 进度心跳：粗筛阶段按已完成步数推进；同时刷新 heartbeat_at 供看门狗判活 */
+export async function updateJobProgress(id: number, pct: number, note: string): Promise<void> {
+  await pool.query(
+    `UPDATE screening_jobs SET progress_pct = ?, progress_note = ?, heartbeat_at = NOW(3)
+     WHERE id = ? AND status = 'running'`,
+    [Math.max(0, Math.min(100, Math.round(pct))), note.slice(0, 200), id]
+  )
+}
+
+/**
+ * 取消任务（R0-3）：
+ *  - queued  → 直接置 cancelled（runner 不会再领取）；
+ *  - running → 置 cancel_requested=1（复用 progress_note 标记），由执行侧轮询后终止 worker；
+ *  - 终态    → 返回 false（调用方回 409）。
+ * @returns 'cancelled' 已取消 / 'requested' 已请求取消（等待执行侧终止） / 'gone' 终态或不存在
+ */
+export async function cancelScreenJob(orgId: number, id: number): Promise<'cancelled' | 'requested' | 'gone'> {
+  const [q] = await pool.query<ResultSetHeader>(
+    `UPDATE screening_jobs SET status = 'cancelled', finished_at = NOW(3),
+       progress_note = '已取消', error_message = '任务已取消', cancel_requested = 1,
+       duration_ms = TIMESTAMPDIFF(MICROSECOND, COALESCE(started_at, queued_at), NOW(3)) DIV 1000
+     WHERE id = ? AND org_id = ? AND status = 'queued'`,
+    [id, orgId]
+  )
+  if (q.affectedRows) return 'cancelled'
+  const [r] = await pool.query<ResultSetHeader>(
+    `UPDATE screening_jobs SET cancel_requested = 1, progress_note = '取消中…'
+     WHERE id = ? AND org_id = ? AND status = 'running'`,
+    [id, orgId]
+  )
+  if (r.affectedRows) return 'requested'
+  return 'gone'
+}
+
+/** 执行侧轮询：本任务是否已被请求取消 */
+export async function isCancelRequested(id: number): Promise<boolean> {
+  const [rows] = await pool.query<RawJob[]>(
+    `SELECT cancel_requested FROM screening_jobs WHERE id = ? AND status = 'running'`,
+    [id]
+  )
+  return Number(rows[0]?.cancel_requested) === 1
+}
+
+/** 执行侧终止后落 cancelled 终态 */
+export async function finishCancelledJob(id: number): Promise<void> {
+  await pool.query(
+    `UPDATE screening_jobs SET status = 'cancelled', finished_at = NOW(3),
+       progress_note = '已取消', error_message = '任务已取消',
+       duration_ms = TIMESTAMPDIFF(MICROSECOND, COALESCE(started_at, queued_at), NOW(3)) DIV 1000
+     WHERE id = ? AND status = 'running'`,
+    [id]
   )
 }
 

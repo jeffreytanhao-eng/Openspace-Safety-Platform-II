@@ -1,4 +1,4 @@
-﻿import type { EphemFrame, EphemManSegment, EphemSet, EphemState, ParseResult, Vec3 } from './types'
+import type { EphemFrame, EphemManSegment, EphemSet, EphemState, ParseResult, Vec3 } from './types'
 import { parseIso } from './time'
 import { frameToEci, uvwCovToEci } from './frames'
 
@@ -312,9 +312,11 @@ export function parseOcm(text: string): ParseResult {
 
   const first = states[0]
   const last = states[states.length - 1]
-  const nameMatch = /STARLINK-(\d+)/i.exec(objectName)
+  // NORAD 以 OBJECT_ID/DESIGNATOR 为首选（SpaceX OCM 该字段即编目号）；
+  // 名称后缀（STARLINK-1316 等）是内部序列名，不等于 NORAD，仅作最后兜底
   const noradMatch = /\b(\d{5})\b/.exec(objectId)
-  const norad = nameMatch ? Number(nameMatch[1]) : noradMatch ? Number(noradMatch[1]) : 0
+  const nameMatch = /STARLINK-(\d+)/i.exec(objectName)
+  const norad = noradMatch ? Number(noradMatch[1]) : nameMatch ? Number(nameMatch[1]) : 0
 
   const set: EphemSet = {
     id: `${norad || 'X'}-${first.t}`,

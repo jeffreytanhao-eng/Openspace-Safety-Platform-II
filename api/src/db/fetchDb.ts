@@ -118,7 +118,7 @@ export interface DailyFetchStatus {
   running: boolean
 }
 
-/** 各数据源上次成功时间（health / status 接口用） */
+/** 各数据源上次成功时间（health / status / catalog-stats 统一口径） */
 export async function getDailyFetchStatus(): Promise<DailyFetchStatus> {
   const sources: FetchSource[] = ['spacetrack_gp', 'spacetrack_cdm', 'aoe']
   const lastSuccess: Record<string, string | null> = {}
@@ -129,7 +129,12 @@ export async function getDailyFetchStatus(): Promise<DailyFetchStatus> {
       [s]
     )
     lastBatch[s] = rows[0] ?? null
-    lastSuccess[s] = rows[0]?.status === 'success' ? rows[0].finished_at : null
+    // 上次成功 = 最近一次 success 批次（最新批次失败不应抹掉历史成功时间）
+    const [okRows] = await pool.query<Array<RowDataPacket & { t: string | null }>>(
+      "SELECT MAX(finished_at) AS t FROM orbital_fetch_batches WHERE source=? AND status='success'",
+      [s]
+    )
+    lastSuccess[s] = okRows[0]?.t ?? null
   }
   const [runRows] = await pool.query<RowDataPacket[]>(
     "SELECT COUNT(*) AS n FROM orbital_fetch_batches WHERE status='running' AND started_at > (NOW(3) - INTERVAL 2 HOUR)"

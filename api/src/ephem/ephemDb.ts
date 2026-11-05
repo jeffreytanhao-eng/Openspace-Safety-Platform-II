@@ -160,8 +160,24 @@ interface DbRow extends RowDataPacket {
   maneuver_summary: string
   maneuver_epochs: string | null
   status: string
-  updated_at: string
+  /** 旧表为 varchar（UTC 字符串）；新 schema 为 datetime（会话本地时间，读回 Date） */
+  updated_at: string | Date
   originator: string
+}
+
+/** 旧 varchar（UTC 字符串）保持原样；新 datetime（Date）转 UTC 分钟后展示，接口契约不变 */
+function dbTimeToMinute(v: string | Date): string {
+  if (typeof v === 'string') return v.slice(0, 16).replace('T', ' ')
+  return v.toISOString().slice(0, 16).replace('T', ' ')
+}
+
+/** 旧 varchar 是 UTC 字符串，补 Z 解析；新 datetime 直接取 Date */
+function dbTimeToIso(v: string | Date): string {
+  if (typeof v === 'string') {
+    const d = new Date(`${v.replace(' ', 'T')}Z`)
+    return Number.isNaN(d.getTime()) ? v : d.toISOString()
+  }
+  return v.toISOString()
 }
 
 function rowToEphemRow(r: DbRow): EphemRow {
@@ -192,7 +208,7 @@ function rowToEphemRow(r: DbRow): EphemRow {
     maneuverSummary: r.maneuver_summary,
     maneuverEpochs: epochs,
     status: r.status,
-    updatedAt: r.updated_at,
+    updatedAt: dbTimeToMinute(r.updated_at),
     originator: r.originator,
     sourceName: r.source_name
   }
@@ -368,7 +384,7 @@ interface VerDbRow extends RowDataPacket {
   published_at: number
   uploaded_by: string
   deleted_at: number | null
-  created_at: string
+  created_at: string | Date
 }
 
 function rowToVersion(r: VerDbRow): EphemVersionRow {
@@ -384,7 +400,7 @@ function rowToVersion(r: VerDbRow): EphemVersionRow {
     publishedMs: Number(r.published_at),
     uploadedBy: r.uploaded_by,
     deletedAt: r.deleted_at == null ? null : Number(r.deleted_at),
-    createdAt: r.created_at
+    createdAt: dbTimeToIso(r.created_at)
   }
 }
 

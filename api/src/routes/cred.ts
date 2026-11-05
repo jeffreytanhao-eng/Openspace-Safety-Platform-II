@@ -7,7 +7,7 @@
  *  - POST   /:provider/fetch 组织队列拉取（spacetrack kind=gp|cdm；aoe 固定）→
  *                            org_fetch_batches 审计记条数 + org_snapshots 组织私有落库（不写 system_pool）
  *  - GET    /batches         本组织拉取批次历史（最新在前）
- * 可见范围：拉取按本组织托管目标 NORAD 过滤；凭据/批次/快照均带 org_id 隔离。
+ * 可见范围：拉取按本组织目标 NORAD 过滤；凭据/批次/快照均带 org_id 隔离。
  */
 import { Router, type Request } from 'express'
 import { ok, fail } from '../utils/response.js'
@@ -59,7 +59,7 @@ function isProvider(p: string): p is CredProvider {
 
 const ZERO = { total: 0, inserted: 0, updated: 0, skipped: 0 }
 
-/** 本组织托管目标 NORAD 去重列表（拉取可见范围） */
+/** 本组织目标 NORAD 去重列表（拉取可见范围） */
 async function scopedNorads(orgId: number): Promise<number[]> {
   const objs = await listObjectsByOrg(orgId)
   return [...new Set(objs.map((o) => Number(o.norad_id)).filter((n) => Number.isFinite(n) && n > 0))]
@@ -233,7 +233,7 @@ router.post('/org/credentials/:provider/fetch', requireAuth, async (req: ScopedR
 
   const norads = await scopedNorads(auth.org.id)
   if (!norads.length) {
-    res.status(400).json(fail(400, '请先认领托管目标，再拉取数据'))
+    res.status(400).json(fail(400, '请先认领目标，再拉取数据'))
     return
   }
   const cred = await getCredential(auth.org.id, provider)

@@ -278,8 +278,8 @@ ca_org_defaults             -- 组织默认碰撞参数
 | GET/PATCH | `/cgi/org` | 本组织资料 |
 | CRUD | `/cgi/objects` | 托管目标 |
 | GET/PUT | `/cgi/org/credentials` | 数据凭证（不回明文密钥） |
-| POST | `/cgi/jobs/daily-fetch` | 超管/运维手动触发日更 |
-| POST | `/cgi/screen` | 创建筛查任务 |
+| POST | `/cgi/jobs/daily-fetch` | 超管/运维手动触发日更（GET `/cgi/jobs/daily-fetch/status` 查询状态） |
+| POST | `/cgi/screens` | 创建筛查任务（列表/详情/取消均为 `/cgi/screens/...`） |
 | GET | `/cgi/events` | 交会列表 |
 | GET | `/cgi/events/:id` | 详情含 pcs[] |
 | POST | `/cgi/events/:id/recompute` | 参数重算 |
