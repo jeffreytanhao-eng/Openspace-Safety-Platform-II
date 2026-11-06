@@ -5,8 +5,8 @@
 | **文档编号** | 26 |
 | **对应任务书** | `docs/25-Openspace-Safety-任务书-给TRAE-2026-11-06.md`（v1.0） |
 | **覆盖范围** | 2026-11-06 下午《25》任务书内 R2-21～R2-25 的全部实现 |
-| **代码状态** | 本地实现并完成类型检查、构建与浏览器冒烟；**未推送、未部署**（按项目约束等待用户明确发起） |
-| **线上状态** | 生产 `123.57.41.32` 保持上一版（《24》对应版本），本次未触动 |
+| **代码状态** | 已推送 `origin/main`（commit `17d3cf7`） |
+| **线上状态** | 已部署生产 `123.57.41.32`（备份 `/opt/backup/deploy-20261106-172546`）；三个既有账号 `admin` / `xingwang` / `gaoxiao` 口令均未改动 |
 | **约束遵循** | 只改本仓库；密钥仅存 `.env`；未推倒星历/态势内核；`/ai` 入口与路由保留；未改认证隔离与认领写入路径；交会 A 冰蓝 / B 琥珀未改色；未做支付、未接第三方商业 SSA；未修改文档 21/22/24，未回写 23 |
 
 ---
@@ -116,6 +116,15 @@
 | `npm run build`（api） | 仅 `src/services/constellationSnapshot.ts` 既有 10 条 tsc 错误（非本次改动），`noEmitOnError=false` 下 dist 正常产出；服务启动与健康检查通过 |
 | 浏览器冒烟 | R2-22 详情侧栏高亮 PASS；R2-24 摘要/折叠/类型折行 PASS；R2-23 筛查文案 PASS；R2-21 账号页 PASS；R2-25 徽章 PASS |
 | 回归 | 交会 A/B 双色未改；`/ai` 路由保留；匿名 `/account` → 登录页；`xingwang` / `gaoxiao` 仍无法访问超管接口 |
+
+### 3.1 线上部署校验（2026-11-06 17:25 CST）
+
+- 部署方式：本地构建 → 打包 `api`（排除 `node_modules` / `.env` / `data`）与 `web/dist` → 上传解包 → 服务器 `npm ci` → `systemctl restart openspace-api`。
+- 部署前备份：`/opt/backup/deploy-20261106-172546`（api-dist、web-dist、package.json、package-lock.json）。
+- 服务状态：`openspace-api` active；`/cgi/health` 返回 `db: up`。
+- 账号回归：`admin`（platform_super_admin）、`xingwang`（vip）、`gaoxiao`（normal）以原口令 `a1234` 登录均返回 200，口令未变。
+- 接口回归：匿名 `POST /cgi/auth/password` → 401；超管 `GET /cgi/admin/object-claims?status=claimed` 返回 231 条 org5 历史记录，均带 `reviewed_by=null / reviewed_at=null`，将显示「历史直写 / 未审」徽章。
+- 前端产物：线上主包与账号页 chunk 哈希与本地构建一致，包含「历史直写」「单位默认」等新文案。
 
 ---
 
