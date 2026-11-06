@@ -17,6 +17,7 @@ import {
   cancelScreenJob
 } from '../db/screenDb.js'
 import { pool } from '../db/pool.js'
+import { cdmIsolation } from '../services/systemPool.js'
 import { kickScreeningRunner, abortActiveScreening } from '../jobs/screening.js'
 import type { RowDataPacket } from 'mysql2'
 
@@ -154,11 +155,13 @@ router.post('/screens', requireOrg, async (req: ScopedRequest, res) => {
     }
   }
 
-  // 副星 = CDM 复核：系统池需已有入站 CDM
+  // 副星 = CDM 复核：系统池需已有入站 CDM（C4：本组织上传的也计入，他组织的不可见）
   if (secondarySource === 'cdm') {
     try {
+      const iso = cdmIsolation(org.id)
       const [c] = await pool.query<Array<RowDataPacket & { n: number }>>(
-        'SELECT COUNT(*) AS n FROM sat_cdm'
+        `SELECT COUNT(*) AS n FROM sat_cdm WHERE 1 = 1 ${iso.sql}`,
+        iso.params
       )
       if (!Number(c[0]?.n ?? 0)) {
         res.status(400).json(

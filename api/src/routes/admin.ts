@@ -17,6 +17,7 @@ import { ensureOrgSchema, findUserByEmail, findOrgById, createOrgWithAdmin, type
 import { ensureAdminSchema, writeAudit, listAudit } from '../db/adminDb.js'
 import { ensurePlanSchema, getEffectiveLimits, getOrgQuotaRows, getOrgFlagRows, setOrgQuotaOverride, clearOrgQuotaOverride, setOrgFlagOverride, clearOrgFlagOverride, FEATURE_KEYS, FLAG_CATALOG, TLE_SCOPE, PC_BIT } from '../db/planDb.js'
 import { requireAuth, type AuthContext } from './auth.js'
+import { listClaimScopes, replaceClaimScopes, type ClaimScopeType } from '../db/objectsDb.js'
 import { QUOTA_EXCEEDED } from '../middleware/plan.js'
 
 const router = Router()
@@ -138,7 +139,71 @@ router.get('/admin/orgs/:id', requireAuth, requireSuperAdmin, async (req, res) =
   const limits = await getEffectiveLimits(org.id, org.plan)
   const quotas = await getOrgQuotaRows(org.id, org.plan)
   const flags = await getOrgFlagRows(org.id)
-  res.json(ok({ org, members, limits, quotas, flags }))
+  const claimScopes = await listClaimScopes(org.id)
+  res.json(ok({ org, members, limits, quotas, flags, claim_scopes: claimScopes }))
+})
+
+const SCOPE_TYPES: ClaimScopeType[] = ['norad', 'tag', 'constellation_key']
+
+/** C1：读取业主授权范围 */
+router.get('/admin/orgs/:id/claim-scopes', requireAuth, requireSuperAdmin, async (req, res) => {
+  const orgId = Number(req.params.id)
+  const org = Number.isFinite(orgId) ? await findOrgById(orgId) : null
+  if (!org) {
+    res.status(404).json(fail(404, '组织不存在'))
+    return
+  }
+  res.json(ok({ org_id: org.id, scopes: await listClaimScopes(org.id) }))
+})
+
+/**
+ * C1：全量替换业主授权范围（通用机制，无品牌硬编码）：
+ *  - norad            按 NORAD 白名单
+ *  - constellation_key 按编目星座编码（sat_constellation.code）
+ *  - tag              按目标名/星座名/关键词的通用包含匹配
+ * 空数组 = 收回该组织的全部业主认领权限（安全默认）。
+ */
+router.put('/admin/orgs/:id/claim-scopes', requireAuth, requireSuperAdmin, async (req: ScopedRequest, res) => {
+  const orgId = Number(req.params.id)
+  const org = Number.isFinite(orgId) ? await findOrgById(orgId) : null
+  if (!org) {
+    res.status(404).json(fail(404, '组织不存在'))
+    return
+  }
+  const raw = (req.body || {}).scopes
+  if (!Array.isArray(raw) || raw.length > 200) {
+    res.status(400).json(fail(400, 'scopes 必须为数组且不超过 200 条'))
+    return
+  }
+  const items: Array<{ type: ClaimScopeType; value: string; note?: string }> = []
+  for (const it of raw) {
+    const type = String((it || {}).type ?? '') as ClaimScopeType
+    const value = String((it || {}).value ?? '').trim()
+    if (!SCOPE_TYPES.includes(type)) {
+      res.status(400).json(fail(400, 'scope.type 仅支持 norad / tag / constellation_key'))
+      return
+    }
+    if (!value || value.length > 64) {
+      res.status(400).json(fail(400, 'scope.value 必填且不超过 64 字符'))
+      return
+    }
+    if (type === 'norad' && (!/^\d+$/.test(value) || Number(value) <= 0)) {
+      res.status(400).json(fail(400, 'norad 类型的 scope.value 必须为正整数'))
+      return
+    }
+    items.push({ type, value, note: typeof (it || {}).note === 'string' ? (it || {}).note : '' })
+  }
+  const before = await listClaimScopes(org.id)
+  const after = await replaceClaimScopes(org.id, items)
+  await writeAudit({
+    actorUserId: req.auth!.user.id,
+    actorEmail: req.auth!.user.email,
+    orgId: org.id,
+    action: 'claim_scope.update',
+    before: { scopes: before.map((s) => ({ type: s.scope_type, value: s.scope_value })) },
+    after: { scopes: after.map((s) => ({ type: s.scope_type, value: s.scope_value })) }
+  })
+  res.json(ok({ org_id: org.id, scopes: after }))
 })
 
 /** 功能键取值合法性（scope/bitmap 有语义枚举；count/days 须为非负整数） */
@@ -300,13 +365,21 @@ router.patch('/admin/orgs/:id', requireAuth, requireSuperAdmin, async (req: Scop
     notes,
     orgId
   ])
+  // C5：审计快照含 plan/status/生效限额，便于回溯降档副作用
+  await ensurePlanSchema()
+  const snapLimits = async (p: Plan) => {
+    const rows = await getEffectiveLimits(orgId, p)
+    return Object.fromEntries(rows.map((r) => [r.feature, r.limit]))
+  }
+  const beforeLimits = await snapLimits(org.plan)
+  const afterLimits = await snapLimits(plan as Plan)
   await writeAudit({
     actorUserId: req.auth!.user.id,
     actorEmail: req.auth!.user.email,
     orgId,
     action: 'org.update',
-    before: { plan: org.plan, status: org.status, notes: org.notes },
-    after: { plan, status, notes }
+    before: { plan: org.plan, status: org.status, notes: org.notes, limits: beforeLimits },
+    after: { plan, status, notes, limits: afterLimits }
   })
   const updated = (await findOrgById(orgId)) as OrgRow
   res.json(ok(updated))
@@ -377,6 +450,53 @@ router.post('/admin/orgs/:id/members', requireAuth, requireSuperAdmin, async (re
     console.error('[admin] create member failed:', msg)
     res.status(500).json(fail(500, '创建成员失败'))
   }
+})
+
+/** C6：按 NORAD 查当前业主认领（全局唯一） */
+router.get('/admin/owner/:norad', requireAuth, requireSuperAdmin, async (req, res) => {
+  const norad = Number(req.params.norad)
+  if (!Number.isInteger(norad) || norad <= 0) {
+    res.status(400).json(fail(400, 'NORAD 编号无效'))
+    return
+  }
+  const [rows] = await pool.query<import('mysql2').RowDataPacket[]>(
+    `SELECT o.id, o.org_id, o.norad_id, o.name, o.claim_type, o.created_at, o.updated_at, g.name AS org_name
+       FROM objects o LEFT JOIN organizations g ON g.id = o.org_id
+      WHERE o.norad_id = ? AND o.claim_type = 'owner' LIMIT 1`,
+    [norad]
+  )
+  res.json(ok({ norad, owner: rows[0] ?? null }))
+})
+
+/** C6：强制释放业主认领（超管兜底，写审计；星历绑定一并解除） */
+router.delete('/admin/owner/:norad', requireAuth, requireSuperAdmin, async (req: ScopedRequest, res) => {
+  const norad = Number(req.params.norad)
+  if (!Number.isInteger(norad) || norad <= 0) {
+    res.status(400).json(fail(400, 'NORAD 编号无效'))
+    return
+  }
+  const [rows] = await pool.query<import('mysql2').RowDataPacket[]>(
+    `SELECT o.id, o.org_id, o.norad_id, o.name, o.claim_type, g.name AS org_name
+       FROM objects o LEFT JOIN organizations g ON g.id = o.org_id
+      WHERE o.norad_id = ? AND o.claim_type = 'owner' LIMIT 1`,
+    [norad]
+  )
+  const row = rows[0]
+  if (!row) {
+    res.status(404).json(fail(404, `NORAD ${norad} 当前没有业主认领`))
+    return
+  }
+  await pool.query('UPDATE ephemeris SET bound_object_id = NULL WHERE bound_object_id = ?', [row.id])
+  await pool.query('DELETE FROM objects WHERE id = ?', [row.id])
+  await writeAudit({
+    actorUserId: req.auth!.user.id,
+    actorEmail: req.auth!.user.email,
+    orgId: Number(row.org_id),
+    action: 'owner.force_release',
+    before: { objectId: row.id, orgId: row.org_id, orgName: row.org_name ?? '', norad, name: row.name },
+    after: { released: true, norad }
+  })
+  res.json(ok({ released: row.id, norad, orgId: row.org_id }))
 })
 
 /** 审计只读列表 */

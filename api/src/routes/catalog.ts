@@ -3,7 +3,7 @@ import type { RowDataPacket } from 'mysql2/promise'
 import { pool, pingDb } from '../db/pool.js'
 import { ok } from '../utils/response.js'
 import { optionalAuth, requireAuth } from './auth.js'
-import { getVisibleNorads, poolBadge, resolvePoolPolicy, type PoolPolicy } from '../services/systemPool.js'
+import { cdmIsolation, getVisibleNorads, poolBadge, resolvePoolPolicy, type PoolPolicy } from '../services/systemPool.js'
 import { getDailyFetchStatus } from '../db/fetchDb.js'
 
 const router = Router()
@@ -53,7 +53,9 @@ router.get('/catalog/stats', optionalAuth, async (req, res) => {
     return
   }
   const [tleRows] = await pool.query<RowDataPacket[]>('SELECT COUNT(*) AS c FROM sat_tle')
-  const [cdmRows] = await pool.query<RowDataPacket[]>('SELECT COUNT(*) AS c FROM sat_cdm')
+  const [cdmRows] = await pool.query<RowDataPacket[]>(
+    "SELECT COUNT(*) AS c FROM sat_cdm WHERE source <> 'customer'"
+  )
   const [sync] = await pool.query<RowDataPacket[]>(
     'SELECT id, source, status, message, created_at FROM sat_sync_log ORDER BY id DESC LIMIT 1'
   )
@@ -74,10 +76,12 @@ router.get('/catalog/stats', optionalAuth, async (req, res) => {
   if (policy.mode === 'none') tleVisible = 0
   else if (policy.mode === 'managed') tleVisible = policy.managedNorads?.length ?? 0
   else if (policy.mode === 'sample') tleVisible = Math.min(tle, policy.sampleLimit)
+  const cdmVisIso = cdmIsolation(req.auth?.org?.id ?? null)
   const [cdmVisRows] = policy.cdmDays > 0
     ? await pool.query<RowDataPacket[]>(
-        'SELECT COUNT(*) AS c FROM sat_cdm WHERE tca IS NOT NULL AND tca >= DATE_SUB(NOW(), INTERVAL ? DAY)',
-        [policy.cdmDays]
+        `SELECT COUNT(*) AS c FROM sat_cdm
+          WHERE tca IS NOT NULL AND tca >= DATE_SUB(NOW(), INTERVAL ? DAY) ${cdmVisIso.sql}`,
+        [policy.cdmDays, ...cdmVisIso.params]
       )
     : [{ c: 0 } as RowDataPacket]
   res.json(
@@ -186,13 +190,14 @@ router.get('/catalog/cdms', requireAuth, async (req, res) => {
     res.json(ok({ total: 0, items: [], ...badge }))
     return
   }
+  const iso = cdmIsolation(req.auth?.org?.id ?? null)
   const [rows] = await pool.query<CdmRow[]>(
     `SELECT cdm_id, creation_date, tca, norad_a, name_a, norad_b, name_b,
             miss_distance_km, rel_speed_km_per_s, collision_probability
      FROM sat_cdm
-     WHERE tca IS NOT NULL AND tca >= DATE_SUB(NOW(), INTERVAL ? DAY)
+     WHERE tca IS NOT NULL AND tca >= DATE_SUB(NOW(), INTERVAL ? DAY) ${iso.sql}
      ORDER BY tca ASC LIMIT ?`,
-    [policy.cdmDays, limit]
+    [policy.cdmDays, ...iso.params, limit]
   )
   res.json(ok({ total: rows.length, items: rows, ...badge }))
 })

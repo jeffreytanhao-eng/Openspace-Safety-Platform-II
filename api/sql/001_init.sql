@@ -157,6 +157,23 @@ CREATE TABLE IF NOT EXISTS `objects` (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
   COMMENT='目标（组织认领的 NORAD 档案）';
 
+-- C1（R2-11）：业主认领授权范围（超管配置；空 = 不允许 owner）
+-- 通用机制、无品牌硬编码：
+--   norad             按 NORAD 白名单（scope_value 为正整数）
+--   constellation_key 按编目星座编码（sat_constellation.code，大小写不敏感）
+--   tag               目标名包含 / 星座名称·编码·关键词包含
+CREATE TABLE IF NOT EXISTS `org_claim_scopes` (
+  `id`          bigint NOT NULL AUTO_INCREMENT,
+  `org_id`      bigint unsigned NOT NULL COMMENT '组织',
+  `scope_type`  enum('norad','tag','constellation_key') NOT NULL COMMENT '范围类型',
+  `scope_value` varchar(64) NOT NULL COMMENT '范围值',
+  `note`        varchar(128) NOT NULL DEFAULT '' COMMENT '备注',
+  `created_at`  datetime(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) COMMENT '创建时间（DB 本地时间）',
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `uk_org_scope` (`org_id`, `scope_type`, `scope_value`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+  COMMENT='业主认领授权范围（超管配置；空 = 不允许 owner）';
+
 
 -- =============================================================================
 -- 3. 交会筛查（Epic E1 / R0-3 / R2-8）

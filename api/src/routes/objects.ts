@@ -1,4 +1,4 @@
-/**
+﻿﻿/**
  * 目标路由（Epic D1）：组织认领 NORAD 目标并维护档案。
  * 全部 requireAuth；认领挂 checkQuota('objects_max')（免费档 3 个，超限 403 + 升级提示）。
  */
@@ -20,6 +20,7 @@ import {
   updateObject,
   deleteObject,
   countBoundEphem,
+  checkClaimScope,
   type ClaimType,
   type ObjectRow
 } from '../db/objectsDb.js'
@@ -28,11 +29,17 @@ const router = Router()
 
 type ScopedRequest = Request & { auth?: AuthContext }
 
-/** 写操作守卫：仅业主认领（卫星业主）可维护档案参数与星历绑定 */
-function requireOwnerClaim(row: ObjectRow, res: Response): boolean {
+/** 写操作守卫：仅业主认领（卫星业主）可维护档案参数与星历绑定；C5 降档/暂停后冻结为只读 */
+function requireOwnerClaim(row: ObjectRow, org: AuthContext['org'], res: Response): boolean {
   if (row.claim_type !== 'owner') {
     res.status(403).json(
       fail(403, '关注仅用于学习/教学/模拟科研，档案参数与星历绑定只能由业主认领（卫星业主）维护')
+    )
+    return false
+  }
+  if (!org || org.plan !== 'vip' || org.status !== 'active') {
+    res.status(403).json(
+      fail(403, '组织已降档或暂停，业主认领已冻结为只读（数据保留，恢复 VIP 后可继续维护）')
     )
     return false
   }
@@ -46,6 +53,18 @@ function requireOrg(req: ScopedRequest, res: Response, next: NextFunction): void
     return
   }
   next()
+}
+
+/**
+ * C0 业主认领闸门：仅 plan=vip 且 status=active 的组织可业主认领（卫星业主）；
+ * 免费/普通档一律 403，仅保留关注（watch）。前端隐藏不算数，API 强制。
+ */
+function ownerClaimAllowed(org: AuthContext['org'], res: Response): boolean {
+  if (!org || org.plan !== 'vip' || org.status !== 'active') {
+    res.status(403).json(fail(403, '仅 VIP 组织可进行业主认领（当前档位仅支持关注）'))
+    return false
+  }
+  return true
 }
 
 /** 全部路由先过 requireAuth，进入业务前确保 schema（限定 /objects 前缀，避免拦截挂在后续的公开路由） */
@@ -116,13 +135,17 @@ router.get('/objects/lookup/:noradId', async (req, res) => {
   const orgId = Number(req.auth?.user.orgId || 0)
   const owner = await getOwnerClaim(norad)
   const mine = orgId ? await getObjectByOrgNorad(orgId, norad) : null
+  // C1：VIP 组织预览时回显该目标是否在业主授权范围内（前端据此灰显「业主认领」）
+  const isVip = req.auth?.org?.plan === 'vip' && req.auth?.org?.status === 'active'
+  const scope = orgId && isVip ? await checkClaimScope(orgId, norad) : null
   res.json(
     ok({
       sat: tle,
       owner_claim: owner
         ? { id: owner.id, orgId: owner.org_id, isMine: owner.org_id === orgId }
         : null,
-      my_claim: mine ? { id: mine.id, claimType: mine.claim_type } : null
+      my_claim: mine ? { id: mine.id, claimType: mine.claim_type } : null,
+      owner_scope: scope ? { configured: scope.configured, allowed: scope.allowed, matched: scope.matched } : null
     })
   )
 })
@@ -156,6 +179,7 @@ router.post('/objects', requireOrg, async (req: ScopedRequest, res) => {
     return
   }
   const claimType: ClaimType = body.claimType === 'owner' ? 'owner' : 'normal'
+  if (claimType === 'owner' && !ownerClaimAllowed(req.auth!.org, res)) return
   const tle = await satTleOf(norad)
   if (!tle) {
     res.status(404).json(fail(404, `编目中未找到 NORAD ${norad}，无法认领`))
@@ -172,6 +196,16 @@ router.post('/objects', requireOrg, async (req: ScopedRequest, res) => {
     const owner = await getOwnerClaim(norad)
     if (owner) {
       res.status(409).json(fail(409, `NORAD ${norad} 已有业主认领（卫星业主），每个目标仅允许一个业主认领`))
+      return
+    }
+    // C1 授权范围：未配置范围 = 拒绝全部 owner（安全默认）
+    const scope = await checkClaimScope(orgId, norad)
+    if (!scope.configured) {
+      res.status(403).json(fail(403, '本组织尚未配置业主授权范围，请联系平台管理员开通后再认领'))
+      return
+    }
+    if (!scope.allowed) {
+      res.status(403).json(fail(403, `NORAD ${norad} 不在本组织业主授权范围内，如需扩围请联系平台管理员`))
       return
     }
   }
@@ -375,7 +409,7 @@ router.patch('/objects/:id', requireOrg, async (req: ScopedRequest, res) => {
     res.status(403).json(fail(403, '无权修改其他组织的目标'))
     return
   }
-  if (!requireOwnerClaim(row, res)) return
+  if (!requireOwnerClaim(row, req.auth!.org, res)) return
   const b = req.body as Record<string, unknown>
   const numOrNull = (v: unknown): number | null | undefined => {
     if (v === undefined) return undefined
@@ -423,7 +457,7 @@ router.post('/objects/:id/bind-ephem', requireOrg, async (req: ScopedRequest, re
     res.status(403).json(fail(403, '无权操作其他组织的目标'))
     return
   }
-  if (!requireOwnerClaim(row, res)) return
+  if (!requireOwnerClaim(row, req.auth!.org, res)) return
   const ephemId = String((req.body as { ephemId?: unknown }).ephemId ?? '').trim()
   if (!ephemId) {
     res.status(400).json(fail(400, '缺少 ephemId'))
@@ -453,7 +487,7 @@ router.post('/objects/:id/unbind-ephem', requireOrg, async (req: ScopedRequest, 
     res.status(404).json(fail(404, '目标不存在'))
     return
   }
-  if (!requireOwnerClaim(row, res)) return
+  if (!requireOwnerClaim(row, req.auth!.org, res)) return
   const ephemId = String((req.body as { ephemId?: unknown }).ephemId ?? '').trim()
   if (!ephemId) {
     res.status(400).json(fail(400, '缺少 ephemId'))

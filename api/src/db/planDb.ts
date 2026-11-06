@@ -62,7 +62,7 @@ export const TLE_SAMPLE_LIMIT = 500
 /**
  * 档位默认限额（首次 seed 后可运营在库内调整，代码不再强约束）。
  * bitmap/scope 语义见 FEATURE_KEYS / TLE_SCOPE。
- * C3 口径：免费=样例窗+3 天 CDM 样例；普通=托管相关+30 天；VIP=全量+365 天。
+ * C3 口径：免费=样例窗+3 天 CDM 样例；普通=全库可搜+30 天；VIP=全量+365 天。
  */
 const PLAN_SEED: Record<'free' | 'normal' | 'vip', Record<string, number>> = {
   free: {
@@ -81,7 +81,8 @@ const PLAN_SEED: Record<'free' | 'normal' | 'vip', Record<string, number>> = {
     ephem_upload_day: 100,
     screen_day: 100,
     recompute_day: 500,
-    system_tle_scope: TLE_SCOPE.MANAGED,
+    // C3：普通档编目检索与托管列表解耦，全库可搜；用量仍受 objects_max / screen_day 约束
+    system_tle_scope: TLE_SCOPE.FULL,
     system_cdm_days: 30,
     pc_methods: PC_BIT.Foster | PC_BIT.Chan | PC_BIT.Alfano | PC_BIT.OfficialCDM,
     api_keys_max: 3,
@@ -141,6 +142,11 @@ export function ensurePlanSchema(): Promise<boolean> {
           await seedPlanDefaults()
         } else {
           await migrateScopeSemantics()
+          // C3 一次性：普通档「托管相关(2)」→「全库可搜(3)」；改成 3 后不再命中，不会反复覆盖
+          await pool.query(
+            "UPDATE plan_defaults SET limit_value = ? WHERE plan = 'normal' AND feature_key = 'system_tle_scope' AND limit_value = ?",
+            [TLE_SCOPE.FULL, TLE_SCOPE.MANAGED]
+          )
         }
         return true
       } catch (e) {

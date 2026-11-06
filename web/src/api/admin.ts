@@ -64,8 +64,53 @@ export function adminGetOrg(id: number): Promise<{
   limits: Array<{ feature: string; limit: number; overridden: boolean }>
   quotas: AdminQuotaRow[]
   flags: AdminFlagRow[]
+  claim_scopes: AdminClaimScope[]
 }> {
   return cgiCall({ method: 'GET', url: `/admin/orgs/${id}`, headers: headers() })
+}
+
+/** C1：业主授权范围条目（norad=白名单 / constellation_key=编目星座 / tag=名称关键词包含） */
+export type ClaimScopeType = 'norad' | 'tag' | 'constellation_key'
+
+export interface AdminClaimScope {
+  id: number
+  org_id: number
+  scope_type: ClaimScopeType
+  scope_value: string
+  note: string
+  created_at: string
+}
+
+export function adminGetClaimScopes(id: number): Promise<{ org_id: number; scopes: AdminClaimScope[] }> {
+  return cgiCall({ method: 'GET', url: `/admin/orgs/${id}/claim-scopes`, headers: headers() })
+}
+
+/** 全量替换（空数组 = 收回业主认领权限） */
+export function adminPutClaimScopes(
+  id: number,
+  scopes: Array<{ type: ClaimScopeType; value: string; note?: string }>
+): Promise<{ org_id: number; scopes: AdminClaimScope[] }> {
+  return cgiCall({ method: 'PUT', url: `/admin/orgs/${id}/claim-scopes`, data: { scopes }, headers: headers() })
+}
+
+/** C6：按 NORAD 查当前业主认领 / 强制释放 */
+export interface AdminOwnerRow {
+  id: number
+  org_id: number
+  norad_id: number
+  name: string
+  claim_type: string
+  created_at: string
+  updated_at: string
+  org_name: string | null
+}
+
+export function adminGetOwner(norad: number): Promise<{ norad: number; owner: AdminOwnerRow | null }> {
+  return cgiCall({ method: 'GET', url: `/admin/owner/${norad}`, headers: headers() })
+}
+
+export function adminReleaseOwner(norad: number): Promise<{ released: number; norad: number; orgId: number }> {
+  return cgiCall({ method: 'DELETE', url: `/admin/owner/${norad}`, headers: headers() })
 }
 
 /** Epic I：组织配额行（默认 / 覆盖 / 生效 / 用量） */

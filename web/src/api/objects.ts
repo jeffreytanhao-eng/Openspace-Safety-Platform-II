@@ -69,6 +69,8 @@ export interface LookupResult {
   owner_claim: { id: number; orgId: number; isMine: boolean } | null
   /** 本组织对该 NORAD 的认领（normal/owner，最多一条） */
   my_claim: { id: number; claimType: ClaimType } | null
+  /** C1：VIP 组织的业主授权范围判定（非 VIP 为 null） */
+  owner_scope?: { configured: boolean; allowed: boolean; matched: { scope_type: string; scope_value: string } | null } | null
 }
 
 export function lookupObject(norad: number | string): Promise<LookupResult> {

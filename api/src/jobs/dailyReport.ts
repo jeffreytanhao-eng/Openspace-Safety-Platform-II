@@ -26,6 +26,7 @@ import { listObjectsByOrg } from '../db/objectsDb.js'
 import { aggregateEvents, type ConjunctionEvent, type EventLevel } from '../routes/events.js'
 import { deliverWebhook, deliverEmail, smtpConfigured } from '../services/notify.js'
 import { isOrgFlagEnabled } from '../db/planDb.js'
+import { cdmIsolation } from '../services/systemPool.js'
 
 export type { EventLevel }
 
@@ -85,23 +86,26 @@ async function loadEvents(orgId: number, scope: 'managed' | 'global'): Promise<C
     const norads = [...new Set(objs.map((o) => Number(o.norad_id)).filter((n) => Number.isInteger(n) && n > 0))]
     if (norads.length) {
       const inA = norads.map(() => '?').join(',')
+      const iso = cdmIsolation(orgId)
       const [r] = await pool.query(
         `SELECT ${COLS} FROM sat_cdm
          WHERE tca IS NOT NULL AND tca >= ? AND tca <= ?
-           AND (norad_a IN (${inA}) OR norad_b IN (${inA}) OR (source = 'customer' AND org_id = ?))
+           AND (norad_a IN (${inA}) OR norad_b IN (${inA})) ${iso.sql}
          ORDER BY tca ASC LIMIT 5000`,
-        [from, to, ...norads, ...norads, orgId]
+        [from, to, ...norads, ...norads, ...iso.params]
       )
       rows = r as unknown[]
     } else {
       rows = []
     }
   } else {
+    // C4：无托管组织的「系统池」日报同样不得包含他组织上传的客户 CDM
+    const iso = cdmIsolation(orgId)
     const [r] = await pool.query(
       `SELECT ${COLS} FROM sat_cdm
-       WHERE tca IS NOT NULL AND tca >= ? AND tca <= ?
+       WHERE tca IS NOT NULL AND tca >= ? AND tca <= ? ${iso.sql}
        ORDER BY tca ASC LIMIT 5000`,
-      [from, to]
+      [from, to, ...iso.params]
     )
     rows = r as unknown[]
   }

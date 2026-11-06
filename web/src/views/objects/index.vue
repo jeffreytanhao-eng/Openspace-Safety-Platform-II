@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
 import { useI18n } from '@/composables/useI18n'
+import { useAuthStore } from '@/stores/auth'
 import {
   listObjects,
   lookupObject,
@@ -82,8 +83,15 @@ const claimNorad = ref('')
 const claimType = ref<ClaimType>('normal')
 const claimForm = ref({ massKg: '', crossSectionM2: '', propulsion: '' })
 const preview = ref<LookupResult | null>(null)
-/** 该目标已有授权认领（卫星业主）时，授权选项不可选 */
-const ownerLocked = computed(() => !!preview.value?.owner_claim)
+const auth = useAuthStore()
+/** C0：业主认领仅 VIP（且组织状态正常）可选；其余档位只保留关注 */
+const vipClaim = computed(() => auth.org?.plan === 'vip' && auth.org?.status === 'active')
+/** 该目标已有授权认领、本组织非 VIP、或不在业主授权范围（C1）时，授权选项不可选 */
+const ownerLocked = computed(() => {
+  if (!vipClaim.value || preview.value?.owner_claim) return true
+  const scope = preview.value?.owner_scope
+  return !!scope && !scope.allowed
+})
 const previewLoading = ref(false)
 const claimError = ref('')
 const claimQuota = ref(false)
@@ -189,8 +197,8 @@ async function doLookup() {
   previewLoading.value = true
   try {
     preview.value = await lookupObject(n)
-    // 已有授权认领（卫星业主）时，本组织只能做普通认领
-    if (preview.value.owner_claim) claimType.value = 'normal'
+    // 已有业主认领 / 非 VIP / 不在授权范围（C1）时，本组织只能做关注
+    if (preview.value.owner_claim || ownerLocked.value) claimType.value = 'normal'
   } catch (e) {
     claimError.value = e instanceof Error ? e.message : String(e)
   } finally {
@@ -229,6 +237,9 @@ async function doClaim() {
 const selected = ref<ObjectDetail | null>(null)
 /** 仅授权认领（卫星业主）可维护参数与星历绑定 */
 const isOwnerClaim = computed(() => selected.value?.claim_type === 'owner')
+/** C5：降档/暂停后业主认领冻结为只读（数据保留，不可再维护参数或改绑定） */
+const ownerFrozen = computed(() => isOwnerClaim.value && !vipClaim.value)
+const ownerEditable = computed(() => isOwnerClaim.value && !ownerFrozen.value)
 const detailLoading = ref(false)
 const editForm = ref<Record<string, string | number>>({ name: '', massKg: '', crossSectionM2: '', propulsion: '', acceptedPc: '', acceptedMissKm: '' })
 const saving = ref(false)
@@ -633,6 +644,18 @@ function fmtWorstLevel(v: 'red' | 'orange' | 'yellow' | null): string {
                 <span>{{ t('obj.claimOwner') }}</span>
               </label>
             </div>
+            <div v-if="!vipClaim" class="hint">{{ t('obj.ownerVipOnly') }}</div>
+            <template v-else>
+              <div v-if="preview.owner_scope && !preview.owner_scope.configured && !preview.owner_claim" class="hint warn">
+                {{ t('obj.ownerScopeNone') }}
+              </div>
+              <div
+                v-else-if="preview.owner_scope && preview.owner_scope.configured && !preview.owner_scope.allowed && !preview.owner_claim"
+                class="hint warn"
+              >
+                {{ t('obj.ownerScopeOut') }}
+              </div>
+            </template>
             <div v-if="claimType === 'owner'" class="form">
               <label><span>{{ t('obj.mass') }}</span><input v-model="claimForm.massKg" type="number" min="0" step="any" /></label>
               <label><span>{{ t('obj.crossSection') }}</span><input v-model="claimForm.crossSectionM2" type="number" min="0" step="any" /></label>
@@ -712,16 +735,17 @@ function fmtWorstLevel(v: 'red' | 'orange' | 'yellow' | null): string {
           <div class="block">
             <div class="bt">{{ t('obj.archive') }}</div>
             <div v-if="!isOwnerClaim" class="hint warn">{{ t('obj.ownerOnly') }}</div>
+            <div v-else-if="ownerFrozen" class="hint warn">{{ t('obj.ownerFrozen') }}</div>
             <div class="form">
-              <label><span>{{ t('obj.col.name') }}</span><input v-model="editForm.name" type="text" maxlength="100" :disabled="!isOwnerClaim" /></label>
-              <label><span>{{ t('obj.mass') }}</span><input v-model="editForm.massKg" type="number" min="0" step="any" :disabled="!isOwnerClaim" /></label>
-              <label><span>{{ t('obj.crossSection') }}</span><input v-model="editForm.crossSectionM2" type="number" min="0" step="any" :disabled="!isOwnerClaim" /></label>
-              <label><span>{{ t('obj.propulsion') }}</span><input v-model="editForm.propulsion" type="text" maxlength="60" :disabled="!isOwnerClaim" /></label>
-              <label><span>{{ t('obj.acceptedPc') }}</span><input v-model="editForm.acceptedPc" type="number" min="0" step="any" :disabled="!isOwnerClaim" /></label>
-              <label><span>{{ t('obj.acceptedMissKm') }}</span><input v-model="editForm.acceptedMissKm" type="number" min="0" step="any" :disabled="!isOwnerClaim" /></label>
+              <label><span>{{ t('obj.col.name') }}</span><input v-model="editForm.name" type="text" maxlength="100" :disabled="!ownerEditable" /></label>
+              <label><span>{{ t('obj.mass') }}</span><input v-model="editForm.massKg" type="number" min="0" step="any" :disabled="!ownerEditable" /></label>
+              <label><span>{{ t('obj.crossSection') }}</span><input v-model="editForm.crossSectionM2" type="number" min="0" step="any" :disabled="!ownerEditable" /></label>
+              <label><span>{{ t('obj.propulsion') }}</span><input v-model="editForm.propulsion" type="text" maxlength="60" :disabled="!ownerEditable" /></label>
+              <label><span>{{ t('obj.acceptedPc') }}</span><input v-model="editForm.acceptedPc" type="number" min="0" step="any" :disabled="!ownerEditable" /></label>
+              <label><span>{{ t('obj.acceptedMissKm') }}</span><input v-model="editForm.acceptedMissKm" type="number" min="0" step="any" :disabled="!ownerEditable" /></label>
             </div>
             <div class="row-actions">
-              <button type="button" class="btn primary" :disabled="saving || !isOwnerClaim" @click="saveDetail">
+              <button type="button" class="btn primary" :disabled="saving || !ownerEditable" @click="saveDetail">
                 {{ saving ? t('obj.saving') : t('obj.save') }}
               </button>
               <span v-if="saved" class="ok-text">{{ t('obj.saved') }}</span>
@@ -731,17 +755,18 @@ function fmtWorstLevel(v: 'red' | 'orange' | 'yellow' | null): string {
           <div class="block">
             <div class="bt">{{ t('obj.boundEphem') }}</div>
             <div v-if="!isOwnerClaim" class="hint warn">{{ t('obj.ownerOnlyBind') }}</div>
+            <div v-else-if="ownerFrozen" class="hint warn">{{ t('obj.ownerFrozen') }}</div>
             <ul v-if="selected.ephemerides.length">
               <li v-for="e in selected.ephemerides" :key="e.id">
                 <div class="li-top">
                   <span class="li-name">{{ e.name }}</span>
-                  <button v-if="isOwnerClaim" type="button" class="mini" @click="doUnbind(e.id)">{{ t('obj.unbind') }}</button>
+                  <button v-if="ownerEditable" type="button" class="mini" @click="doUnbind(e.id)">{{ t('obj.unbind') }}</button>
                 </div>
                 <span class="meta">{{ e.format }} · {{ e.points }} pts · {{ e.status }}</span>
               </li>
             </ul>
             <p v-else class="empty">{{ t('obj.noBound') }}</p>
-            <div v-if="isOwnerClaim" class="bind-row">
+            <div v-if="ownerEditable" class="bind-row">
               <select v-model="bindPick">
                 <option value="" disabled>{{ bindLoading ? t('obj.loading') : t('obj.bindSelect') }}</option>
                 <option v-for="b in bindList" :key="b.id" :value="b.id">{{ b.format }} · {{ b.name }} · {{ b.points }} pts</option>

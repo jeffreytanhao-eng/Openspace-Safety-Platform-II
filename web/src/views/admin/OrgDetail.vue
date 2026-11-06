@@ -10,10 +10,16 @@ import {
   adminClearQuotaOverride,
   adminSetFlagOverride,
   adminClearFlagOverride,
+  adminPutClaimScopes,
+  adminGetOwner,
+  adminReleaseOwner,
   type AdminMember,
   type AdminOrg,
   type AdminQuotaRow,
-  type AdminFlagRow
+  type AdminFlagRow,
+  type AdminClaimScope,
+  type AdminOwnerRow,
+  type ClaimScopeType
 } from '@/api/admin'
 
 const route = useRoute()
@@ -40,6 +46,17 @@ const busyQuota = ref('')
 /** 每行开关忙碌态 */
 const busyFlag = ref('')
 
+/** C1：业主授权范围（norad / tag / constellation_key） */
+const scopes = ref<AdminClaimScope[]>([])
+const scopeForm = ref<Array<{ type: ClaimScopeType; value: string; note: string }>>([])
+const busyScope = ref(false)
+
+/** C6：按 NORAD 查业主 / 强制释放 */
+const ownerNorad = ref('')
+const ownerRow = ref<AdminOwnerRow | null>(null)
+const ownerQueried = ref(false)
+const busyOwner = ref(false)
+
 async function load() {
   loading.value = true
   error.value = ''
@@ -49,6 +66,8 @@ async function load() {
     members.value = d.members
     quotas.value = d.quotas || []
     flags.value = d.flags || []
+    scopes.value = d.claim_scopes || []
+    scopeForm.value = scopes.value.map((s) => ({ type: s.scope_type, value: s.scope_value, note: s.note || '' }))
     edit.value = { plan: d.org.plan, status: d.org.status, notes: d.org.notes || '' }
     syncInputs()
   } catch (e) {
@@ -178,6 +197,83 @@ async function resetFlag(f: AdminFlagRow) {
   }
 }
 
+/* ---- C1：业主授权范围编辑（全量替换，空 = 收回） ---- */
+function addScopeRow() {
+  if (scopeForm.value.length >= 200) return
+  scopeForm.value.push({ type: 'norad', value: '', note: '' })
+}
+function removeScopeRow(i: number) {
+  scopeForm.value.splice(i, 1)
+}
+async function saveScopes() {
+  if (busyScope.value) return
+  msg.value = ''
+  error.value = ''
+  const items = scopeForm.value
+    .map((s) => ({ type: s.type, value: s.value.trim(), note: s.note.trim() }))
+    .filter((s) => s.value)
+  for (const s of items) {
+    if (s.type === 'norad' && !/^\d+$/.test(s.value)) {
+      error.value = `NORAD 必须是正整数：${s.value}`
+      return
+    }
+    if (s.value.length > 64) {
+      error.value = `范围值不能超过 64 字符：${s.value}`
+      return
+    }
+  }
+  busyScope.value = true
+  try {
+    const r = await adminPutClaimScopes(orgId, items)
+    scopes.value = r.scopes
+    scopeForm.value = r.scopes.map((s) => ({ type: s.scope_type, value: s.scope_value, note: s.note || '' }))
+    msg.value = items.length
+      ? `业主授权范围已保存（${items.length} 条，写审计），立即生效`
+      : '业主授权范围已清空（该组织不可再业主认领，写审计）'
+  } catch (e) {
+    error.value = e instanceof AuthError ? e.message : String((e as Error).message || e)
+  } finally {
+    busyScope.value = false
+  }
+}
+
+async function queryOwner() {
+  const n = Number(ownerNorad.value.trim())
+  if (!Number.isInteger(n) || n <= 0) {
+    error.value = '请输入有效的 NORAD 编号'
+    return
+  }
+  busyOwner.value = true
+  msg.value = ''
+  error.value = ''
+  try {
+    const r = await adminGetOwner(n)
+    ownerRow.value = r.owner
+    ownerQueried.value = true
+  } catch (e) {
+    error.value = e instanceof AuthError ? e.message : String((e as Error).message || e)
+  } finally {
+    busyOwner.value = false
+  }
+}
+
+async function releaseOwner() {
+  if (!ownerRow.value || busyOwner.value) return
+  if (!confirm(`确认强制释放 NORAD ${ownerRow.value.norad_id} 的业主认领（组织 ${ownerRow.value.org_name || ownerRow.value.org_id}）？`)) return
+  busyOwner.value = true
+  msg.value = ''
+  error.value = ''
+  try {
+    const r = await adminReleaseOwner(ownerRow.value.norad_id)
+    msg.value = `已强制释放 NORAD ${r.norad} 的业主认领（写审计）`
+    await queryOwner()
+  } catch (e) {
+    error.value = e instanceof AuthError ? e.message : String((e as Error).message || e)
+  } finally {
+    busyOwner.value = false
+  }
+}
+
 async function saveOrg() {
   if (busyOrg.value) return
   msg.value = ''
@@ -264,6 +360,9 @@ onMounted(load)
         <label class="notes"><span>备注（平台内部）</span>
           <textarea v-model="edit.notes" rows="2" maxlength="500" />
         </label>
+        <p class="hint">
+          降级到非 VIP 会立即禁止新增业主认领，已有业主认领冻结为只读（数据保留，恢复 VIP 后可继续维护）；暂停后成员无法登录。
+        </p>
         <div class="actions">
           <button type="button" class="btn primary" :disabled="busyOrg" @click="saveOrg">
             {{ busyOrg ? '保存中…' : '保存变更' }}
@@ -380,6 +479,60 @@ onMounted(load)
             </tr>
           </tbody>
         </table>
+      </div>
+
+      <div class="card">
+        <h2>业主认领授权范围（C1）</h2>
+        <p class="hint" style="margin-top: -6px">
+          仅 VIP 组织的业主认领（claim_type=owner）受此范围约束；<b>空范围 = 不允许业主认领</b>（安全默认）。
+          norad = 按 NORAD 白名单；constellation_key = 编目星座编码（sat_constellation.code）；tag = 目标名 / 星座名 / 关键词包含匹配。
+          关注（normal）不受限制。
+        </p>
+        <form @submit.prevent="saveScopes">
+          <table class="tbl">
+            <thead><tr><th style="width: 180px">类型</th><th>范围值</th><th>备注</th><th style="width: 64px">操作</th></tr></thead>
+            <tbody>
+              <tr v-for="(s, i) in scopeForm" :key="i">
+                <td>
+                  <select v-model="s.type">
+                    <option value="norad">norad（NORAD）</option>
+                    <option value="constellation_key">constellation_key（星座编码）</option>
+                    <option value="tag">tag（名称/关键词）</option>
+                  </select>
+                </td>
+                <td><input v-model="s.value" maxlength="64" :placeholder="s.type === 'norad' ? '如 25544' : s.type === 'tag' ? '如 星链' : '如 starlink'" /></td>
+                <td><input v-model="s.note" maxlength="128" placeholder="选填" /></td>
+                <td><button type="button" class="btn small" @click="removeScopeRow(i)">删除</button></td>
+              </tr>
+              <tr v-if="!scopeForm.length"><td colspan="4" class="empty">未配置（该组织当前不可业主认领）</td></tr>
+            </tbody>
+          </table>
+          <div class="actions">
+            <button type="button" class="btn small" :disabled="busyScope" @click="addScopeRow">+ 添加范围</button>
+            <button type="submit" class="btn primary" :disabled="busyScope">
+              {{ busyScope ? '保存中…' : '保存授权范围' }}
+            </button>
+            <span class="dim">当前已存 {{ scopes.length }} 条</span>
+          </div>
+        </form>
+      </div>
+
+      <div class="card">
+        <h2>业主认领查询（按 NORAD，C6）</h2>
+        <form class="claim-row" @submit.prevent="queryOwner">
+          <input v-model="ownerNorad" type="text" inputmode="numeric" placeholder="如 25544" />
+          <button type="submit" class="btn" :disabled="busyOwner">{{ busyOwner ? '查询中…' : '查询业主' }}</button>
+        </form>
+        <div v-if="ownerQueried" style="margin-top: 10px">
+          <template v-if="ownerRow">
+            <p>
+              NORAD <b class="mono">{{ ownerRow.norad_id }}</b> · {{ ownerRow.name }} ·
+              业主组织 <b>{{ ownerRow.org_name || ownerRow.org_id }}</b>（orgId {{ ownerRow.org_id }}）
+            </p>
+            <button type="button" class="btn small" :disabled="busyOwner" @click="releaseOwner">强制释放业主认领</button>
+          </template>
+          <p v-else class="dim">该 NORAD 当前无业主认领</p>
+        </div>
       </div>
 
       <div class="card">

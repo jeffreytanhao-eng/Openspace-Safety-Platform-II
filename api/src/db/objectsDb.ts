@@ -54,11 +54,43 @@ CREATE TABLE IF NOT EXISTS \`objects\` (
 
 let schemaReady: Promise<boolean> | null = null
 
+/**
+ * C1 业主授权范围：VIP 组织仅能对「已授权范围」内的目标做 owner 认领。
+ * - scope_type=norad              按 NORAD 白名单；
+ * - scope_type=constellation_key  按编目星座编码（sat_constellation.code）；
+ * - scope_type=tag                按目标名/星座名/星座关键词的通用包含匹配；
+ * 未配置任何范围的 VIP 组织 = 拒绝全部 owner（安全默认），不做任何品牌硬编码。
+ */
+const SCOPES_SCHEMA = `
+CREATE TABLE IF NOT EXISTS \`org_claim_scopes\` (
+  \`id\`          bigint NOT NULL AUTO_INCREMENT,
+  \`org_id\`      bigint unsigned NOT NULL,
+  \`scope_type\`  enum('norad','tag','constellation_key') NOT NULL,
+  \`scope_value\` varchar(64) NOT NULL,
+  \`note\`        varchar(128) NOT NULL DEFAULT '',
+  \`created_at\`  datetime(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+  PRIMARY KEY (\`id\`),
+  UNIQUE KEY \`uk_org_scope\` (\`org_id\`, \`scope_type\`, \`scope_value\`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+  COMMENT='业主认领授权范围（超管配置；空 = 不允许 owner）'`
+
+export type ClaimScopeType = 'norad' | 'tag' | 'constellation_key'
+
+export interface ClaimScope {
+  id: number
+  org_id: number
+  scope_type: ClaimScopeType
+  scope_value: string
+  note: string
+  created_at: string
+}
+
 export function ensureObjectsSchema(): Promise<boolean> {
   if (!schemaReady) {
     schemaReady = (async () => {
       try {
         await pool.query(SCHEMA)
+        await pool.query(SCOPES_SCHEMA)
         await migrateObjectsSchema()
         return true
       } catch (e) {
@@ -214,4 +246,89 @@ export async function countBoundEphem(objectIds: number[]): Promise<Map<number, 
   )
   for (const r of rows) map.set(Number(r.oid), Number(r.n))
   return map
+}
+
+/* ---------------------------------------------------------------------------
+ * C1 业主授权范围（org_claim_scopes）
+ * ------------------------------------------------------------------------- */
+
+export async function listClaimScopes(orgId: number): Promise<ClaimScope[]> {
+  const [rows] = await pool.query<Array<RowDataPacket & ClaimScope>>(
+    `SELECT id, org_id, scope_type, scope_value, note, created_at
+       FROM org_claim_scopes WHERE org_id = ? ORDER BY scope_type, scope_value`,
+    [orgId]
+  )
+  return rows as ClaimScope[]
+}
+
+/** 全量替换某组织的授权范围（先删后插，去重，最多 200 条） */
+export async function replaceClaimScopes(
+  orgId: number,
+  scopes: Array<{ type: ClaimScopeType; value: string; note?: string }>
+): Promise<ClaimScope[]> {
+  const seen = new Set<string>()
+  const rows = scopes
+    .map((s) => ({ type: s.type, value: String(s.value ?? '').trim(), note: String(s.note ?? '').slice(0, 128) }))
+    .filter((s) => s.value && !seen.has(`${s.type}:${s.value.toLowerCase()}`) && seen.add(`${s.type}:${s.value.toLowerCase()}`))
+    .slice(0, 200)
+  await pool.query('DELETE FROM org_claim_scopes WHERE org_id = ?', [orgId])
+  for (const s of rows) {
+    await pool.query(
+      'INSERT INTO org_claim_scopes (org_id, scope_type, scope_value, note) VALUES (?, ?, ?, ?)',
+      [orgId, s.type, s.value, s.note]
+    )
+  }
+  return listClaimScopes(orgId)
+}
+
+export interface ClaimScopeCheck {
+  /** 是否配置过授权范围（空 = 未配置，安全默认拒绝 owner） */
+  configured: boolean
+  allowed: boolean
+  /** 命中的范围（便于返回原因/审计） */
+  matched: { scope_type: ClaimScopeType; scope_value: string } | null
+}
+
+/**
+ * 判断某 NORAD 是否落在组织授权范围内。
+ * tag 命中口径：目标名包含关键词，或所属星座的名称/编码/关键词包含该词（通用匹配，无品牌硬编码）。
+ */
+export async function checkClaimScope(orgId: number, noradId: number): Promise<ClaimScopeCheck> {
+  const [cnt] = await pool.query<RowDataPacket[]>(
+    'SELECT COUNT(*) AS n FROM org_claim_scopes WHERE org_id = ?',
+    [orgId]
+  )
+  if (!Number((cnt[0] as { n: number }).n)) return { configured: false, allowed: false, matched: null }
+  const [hit] = await pool.query<RowDataPacket[]>(
+    `SELECT s.scope_type, s.scope_value
+       FROM org_claim_scopes s
+      WHERE s.org_id = ?
+        AND (
+          (s.scope_type = 'norad' AND s.scope_value = ?)
+          OR (s.scope_type = 'constellation_key' AND EXISTS (
+                SELECT 1 FROM sat_constellation_sat cs
+                  JOIN sat_constellation c ON c.id = cs.constellation_id
+                 WHERE cs.norad_id = ? AND LOWER(c.code) = LOWER(s.scope_value)))
+          OR (s.scope_type = 'tag' AND (
+                EXISTS (SELECT 1 FROM sat_tle t
+                         WHERE t.norad_id = ?
+                           AND LOWER(t.object_name) LIKE CONCAT('%', LOWER(s.scope_value), '%'))
+             OR EXISTS (SELECT 1 FROM sat_constellation_sat cs
+                          JOIN sat_constellation c ON c.id = cs.constellation_id
+                         WHERE cs.norad_id = ?
+                           AND (LOWER(c.name) = LOWER(s.scope_value)
+                             OR LOWER(IFNULL(c.name_en, '')) = LOWER(s.scope_value)
+                             OR LOWER(IFNULL(c.code, '')) = LOWER(s.scope_value)
+                             OR LOWER(IFNULL(c.keywords, '')) LIKE CONCAT('%', LOWER(s.scope_value), '%'))))
+          )
+        )
+      LIMIT 1`,
+    [orgId, String(noradId), noradId, noradId, noradId]
+  )
+  if (!hit.length) return { configured: true, allowed: false, matched: null }
+  return {
+    configured: true,
+    allowed: true,
+    matched: { scope_type: hit[0].scope_type as ClaimScopeType, scope_value: String(hit[0].scope_value) }
+  }
 }

@@ -30,16 +30,21 @@ export interface EventCloudItem {
   cdmCount: number
 }
 
-/** 分级视觉：基础半径（场景单位）+ 颜色 */
+/** 分级视觉：基础半径（场景单位）+ 颜色（R2-10：黄/橙最小半径上调，远距离也看得见） */
 const LEVEL_STYLE: Record<EventCloudItem['level'], { r: number; color: number }> = {
   red: { r: 0.016, color: 0xff4545 },
-  orange: { r: 0.012, color: 0xff9430 },
-  yellow: { r: 0.009, color: 0xffd23c }
+  orange: { r: 0.014, color: 0xff9430 },
+  yellow: { r: 0.012, color: 0xffd23c }
 }
-/** 透明度：|dt| ≤ NEAR 全亮，线性衰减到 FAR 外的 DIM */
+/** 透明度：|dt| ≤ NEAR 全亮，线性衰减到 FAR 外的分级下限（R2-10：黄/橙不低于 0.55/0.45） */
 const NEAR_MS = 3600_000
 const FAR_MS = 86_400_000 * 3
 const DIM_OPACITY = 0.3
+const LEVEL_OPACITY_FLOOR: Record<EventCloudItem['level'], number> = {
+  red: 0.35,
+  orange: 0.45,
+  yellow: 0.55
+}
 /** 选中环 */
 const RING_SIZE = 0.05
 /** 交会放大态白圈（近景尺度，避免铺满屏幕） */
@@ -55,9 +60,9 @@ let ringBaseSize = RING_SIZE
 let focus: THREE.Group | null = null
 let focusToken = 0
 const CONJ_ORBIT_SAMPLES = 180
-/** 模型视觉最小/最大间距（场景单位；1 单位 = 6371 km，真实脱靶距离在此尺度下不可见） */
-const CONJ_MIN_SEP = 0.007
-const CONJ_MAX_SEP = 0.03
+/** R2-10：交会放大态双方用高对比双色（A 冰蓝 / B 琥珀），避免同色难以分辨 */
+const CONJ_MODEL_COLOR_A = 0x3b82f6
+const CONJ_MODEL_COLOR_B = 0xffa63d
 let lastOpacitySimMs = Number.NaN
 let attachedScene: THREE.Scene | null = null
 
@@ -133,9 +138,9 @@ function propagateByTle(norad: number, tcaMs: number): [number, number, number] 
   }
 }
 
-/** 目标在 TCA 的位置：优先编目快照两体推进，缺失时用 TLE/SGP4 兜底 */
+/** 目标在 TCA 的位置：优先新鲜 TLE/SGP4（编目快照两体推进受龄期与 J2 漂移影响，长 TCA 会显著偏移） */
 function positionOf(norad: number, tcaMs: number): [number, number, number] | null {
-  return propagateNorad(norad, tcaMs) ?? propagateByTle(norad, tcaMs)
+  return propagateByTle(norad, tcaMs) ?? propagateNorad(norad, tcaMs)
 }
 
 /**
@@ -146,17 +151,13 @@ function positionOf(norad: number, tcaMs: number): [number, number, number] | nu
 export async function buildEventCloudItems(
   raw: EventCloudItem[]
 ): Promise<{ items: (EventCloudItem & { pos: THREE.Vector3 })[]; skipped: number }> {
-  const hasAnchor = (ev: EventCloudItem) =>
-    !!propagateNorad(ev.noradA, ev.tcaMs) ||
-    (ev.noradB !== ev.noradA && !!propagateNorad(ev.noradB, ev.tcaMs))
-  if (raw.some((ev) => !hasAnchor(ev))) {
-    const { tleLineMap, loadTleLines } = useCatalog()
-    if (!tleLineMap.value.size) {
-      try {
-        await loadTleLines()
-      } catch (e) {
-        console.warn('[situation] tle_lines load failed, keep snapshot anchors only', e)
-      }
+  // R2-10：锚点与放大态模型统一按新鲜 TLE 计算，避免快照龄期导致锚点/模型错位
+  const { tleLineMap, loadTleLines } = useCatalog()
+  if (!tleLineMap.value.size) {
+    try {
+      await loadTleLines()
+    } catch (e) {
+      console.warn('[situation] tle_lines load failed, keep snapshot anchors only', e)
     }
   }
 
@@ -230,7 +231,8 @@ export function updateEventCloud(simMs: number): void {
   lastOpacitySimMs = simMs
   for (let i = 0; i < items.length; i++) {
     const dt = Math.abs(simMs - items[i].tcaMs)
-    const k = dt <= NEAR_MS ? 1 : Math.max(DIM_OPACITY, 1 - ((dt - NEAR_MS) / (FAR_MS - NEAR_MS)) * 0.7)
+    const floor = LEVEL_OPACITY_FLOOR[items[i].level] ?? DIM_OPACITY
+    const k = dt <= NEAR_MS ? 1 : Math.max(floor, 1 - ((dt - NEAR_MS) / (FAR_MS - NEAR_MS)) * 0.7)
     const mat = sprites[i].material as THREE.SpriteMaterial
     mat.opacity = k
   }
@@ -319,7 +321,10 @@ function orbitByState(norad: number, tcaMs: number): THREE.Vector3[] | null {
   return pts
 }
 
-/** 交会双方在 TCA 的场景位置；真实间距过小/过大时做视觉归一（方向保持真实） */
+/**
+ * 交会双方在 TCA 的真实场景位置（R2-10：不再做视觉归一分离）。
+ * 真实脱靶距离在 1 单位 = 6371 km 尺度下极小，但近景放大后模型应回到各自 TCA 真位置。
+ */
 function conjPairPositions(
   ev: EventCloudItem & { pos: THREE.Vector3 },
   outA: THREE.Vector3,
@@ -330,23 +335,27 @@ function conjPairPositions(
   const va = pa ? eciToScene(pa[0], pa[1], pa[2]) : null
   const vb = pb ? eciToScene(pb[0], pb[1], pb[2]) : null
   if (!va && !vb) return { a: false, b: false }
-  if (!va || !vb) {
-    outA.copy(va ?? ev.pos)
-    outB.copy(vb ?? ev.pos)
-    return { a: !!va, b: !!vb }
+  if (va && vb && va.distanceTo(vb) > 0.05) {
+    // 交会事件双方不可能相距 300+ km：数据不一致时退回事件锚点，避免模型/标签被甩出视口
+    outA.copy(ev.pos)
+    outB.copy(ev.pos)
+    return { a: true, b: true }
   }
-  const dir = new THREE.Vector3().subVectors(vb, va)
-  if (dir.lengthSq() < 1e-12) {
-    // 位置重合：用「径向 × 天向」构造稳定分离方向（仅视觉，不改锚点）
-    const radial = ev.pos.clone().normalize()
-    dir.crossVectors(radial, new THREE.Vector3(0, 1, 0))
-    if (dir.lengthSq() < 1e-9) dir.set(1, 0, 0)
-  }
-  dir.normalize()
-  const half = Math.min(CONJ_MAX_SEP / 2, Math.max(CONJ_MIN_SEP / 2, va.distanceTo(vb) / 2))
-  outA.copy(ev.pos).addScaledVector(dir, -half)
-  outB.copy(ev.pos).addScaledVector(dir, half)
-  return { a: true, b: true }
+  outA.copy(va ?? ev.pos)
+  outB.copy(vb ?? ev.pos)
+  return { a: !!va, b: !!vb }
+}
+
+/** R2-10：交会放大态名称标签锚点（每帧由 SceneCore 投影成 DOM 标签） */
+export interface ConjFocusLabel {
+  name: string
+  pos: THREE.Vector3
+  color: number
+}
+let focusLabels: ConjFocusLabel[] = []
+
+export function getEventCloudFocusLabels(): ConjFocusLabel[] {
+  return focusLabels
 }
 
 /** 构建交会放大态（异步：轨道同步入组，模型解析完成后按 token 校验补挂） */
@@ -382,21 +391,51 @@ async function buildFocus(token: number, ev: EventCloudItem & { pos: THREE.Vecto
   const posA = new THREE.Vector3()
   const posB = new THREE.Vector3()
   const pair = conjPairPositions(ev, posA, posB)
+  // R2-10：名称标签锚点（SceneCore 每帧投影；模型加载失败也保留标签）
+  focusLabels = []
+  if (pair.a) focusLabels.push({ name: ev.nameA, pos: posA.clone(), color: CONJ_MODEL_COLOR_A })
+  if (pair.b && ev.noradB !== ev.noradA) focusLabels.push({ name: ev.nameB, pos: posB.clone(), color: CONJ_MODEL_COLOR_B })
 
-  const addModel = async (norad: number, name: string, pos: THREE.Vector3) => {
+  const addModel = async (norad: number, name: string, pos: THREE.Vector3, color: number) => {
     const gm = await loadSharedModelGeom(resolveCatalogModelKey(name, norad), 'med')
     if (!gm || token !== focusToken || focus !== g) return
-    const mat = (gm.mat as THREE.Material).clone()
+    const mat = (gm.mat as THREE.MeshStandardMaterial).clone()
     mat.userData.cloned = true
+    // R2-10：双方各用独立高对比色（A 冰蓝 / B 琥珀），便于区分两个目标
+    mat.color = new THREE.Color(color)
+    mat.emissive = new THREE.Color(color)
+    mat.emissiveIntensity = 0.5
     const mesh = new THREE.Mesh(gm.geom, mat)
     mesh.name = `ospConjModel_${norad}`
     mesh.position.copy(pos)
     // 机头/天顶沿径向（与云模型同一姿态口径）
     mesh.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), pos.clone().normalize())
     g.add(mesh)
+
+    // 白色发光描边：同几何外扩 + 背面渲染（仅轮廓一圈可见），便于区分两个目标的边界
+    const addOutline = (scale: number, opacity: number) => {
+      const shellMat = new THREE.MeshBasicMaterial({
+        color: 0xffffff,
+        side: THREE.BackSide,
+        transparent: true,
+        opacity,
+        blending: THREE.AdditiveBlending,
+        depthWrite: false
+      })
+      shellMat.userData.cloned = true
+      const shell = new THREE.Mesh(gm.geom, shellMat)
+      shell.name = `ospConjOutline_${norad}`
+      shell.position.copy(pos)
+      shell.quaternion.copy(mesh.quaternion)
+      shell.scale.setScalar(scale)
+      shell.renderOrder = 4
+      g.add(shell)
+    }
+    addOutline(1.06, 0.95)
+    addOutline(1.13, 0.4)
   }
-  if (pair.a) void addModel(ev.noradA, ev.nameA, posA)
-  if (pair.b && ev.noradB !== ev.noradA) void addModel(ev.noradB, ev.nameB, posB)
+  if (pair.a) void addModel(ev.noradA, ev.nameA, posA, CONJ_MODEL_COLOR_A)
+  if (pair.b && ev.noradB !== ev.noradA) void addModel(ev.noradB, ev.nameB, posB, CONJ_MODEL_COLOR_B)
 
   scene.add(g)
   focus = g
@@ -404,6 +443,7 @@ async function buildFocus(token: number, ev: EventCloudItem & { pos: THREE.Vecto
 
 /** 销毁交会放大态（几何为共享缓存不 dispose，克隆材质/线资源需释放） */
 function disposeFocus(): void {
+  focusLabels = []
   if (!focus) return
   focus.traverse((o) => {
     const mesh = o as THREE.Mesh

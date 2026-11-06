@@ -96,6 +96,17 @@ export async function getVisibleNorads(policy: PoolPolicy): Promise<number[] | n
   return getSampleNoradIds(policy.sampleLimit)
 }
 
+/**
+ * C4 客户 CDM 组织隔离：追加到 WHERE 的片段（params 需接在调用方现有参数之后）。
+ * - 系统池行（source='system'）对所有登录方可读；
+ * - 客户上传行（source='customer'）仅上传组织可读；
+ * - 平台账号（无 org）只见系统池。
+ */
+export function cdmIsolation(orgId: number | null | undefined): { sql: string; params: unknown[] } {
+  if (!orgId) return { sql: `AND source <> 'customer'`, params: [] }
+  return { sql: `AND (source <> 'customer' OR org_id = ?)`, params: [Number(orgId)] }
+}
+
 /** pool 徽标（响应附带，前端按档位展示数据源与升级提示） */
 export function poolBadge(policy: PoolPolicy): { scope: number; mode: PoolMode; sampleLimit: number; cdmDays: number } {
   return { scope: policy.scope, mode: policy.mode, sampleLimit: policy.sampleLimit, cdmDays: policy.cdmDays }

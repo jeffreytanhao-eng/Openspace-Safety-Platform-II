@@ -63,6 +63,7 @@ import {
   setEventCloud,
   updateEventCloud,
   updateEventCloudFocus,
+  getEventCloudFocusLabels,
   setEventCloudSelected,
   pickEventCloud,
   getEventCloudAnchor,
@@ -74,6 +75,7 @@ const emit = defineEmits<{ (e: 'viewport-ready'): void; (e: 'event-pick', key: s
 import type { EphemSet, EphemState } from './ephem/types'
 import { useCatalog, type CatalogTle } from '@/composables/useCatalog'
 import {
+  EARTH_R,
   EARTH_RADIUS_KM,
   HOME_CAM_DIST,
   error,
@@ -93,6 +95,9 @@ const reticleNameEl = ref<HTMLSpanElement>()
 /** 机动卡片定位标签（琥珀信息卡，随选中 MAN 块逐帧投影） */
 const manLabelEl = ref<HTMLDivElement>()
 const manLabelTextEl = ref<HTMLSpanElement>()
+/** R2-10：交会放大态双方名称标签（冰蓝色，逐帧投影跟随各自 TCA 真位置） */
+const conjLabelAEl = ref<HTMLDivElement>()
+const conjLabelBEl = ref<HTMLDivElement>()
 
 /** 太阳标记距离 / 半径（场景单位，地球半径 = 1） */
 const SUN_MARKER_DIST = 200
@@ -144,6 +149,8 @@ const _trackPrev = new THREE.Vector3()
 const _trackDelta = new THREE.Vector3()
 const _trackPos = new THREE.Vector3()
 const _proj = new THREE.Vector3()
+const _occDir = new THREE.Vector3()
+const _occClosest = new THREE.Vector3()
 const _camUp = new THREE.Vector3(0, 1, 0)
 const _viewDir = new THREE.Vector3()
 /** Look-at point while flying / tracking (scene space). */
@@ -272,6 +279,51 @@ function updateManLabel() {
   }
   if (show) el.style.transform = `translate(${x}px, ${y}px)`
   el.style.display = show ? 'block' : 'none'
+}
+
+/** 相机→锚点线段是否被地球遮挡（地球背面的标签不显示） */
+function occludedByEarth(pos: THREE.Vector3): boolean {
+  if (!camera) return false
+  _occDir.copy(pos).sub(camera.position)
+  const lenSq = _occDir.lengthSq()
+  if (lenSq < 1e-12) return false
+  const t = -camera.position.dot(_occDir) / lenSq
+  if (t <= 0 || t >= 1) return false
+  _occClosest.copy(camera.position).addScaledVector(_occDir, t)
+  return _occClosest.lengthSq() < (EARTH_R * 0.999) * (EARTH_R * 0.999)
+}
+
+/** R2-10：交会放大态双方名称标签逐帧跟随（各自 TCA 真位置投影；地球背面/离屏隐藏） */
+function updateConjLabels() {
+  const labels = getEventCloudFocusLabels()
+  const els = [conjLabelAEl.value, conjLabelBEl.value]
+  const rect = containerEl.value?.getBoundingClientRect()
+  for (let i = 0; i < els.length; i++) {
+    const el = els[i]
+    if (!el) continue
+    const lb = labels[i]
+    if (!lb || !camera || !rect || occludedByEarth(lb.pos)) {
+      el.style.display = 'none'
+      continue
+    }
+    _proj.copy(lb.pos).project(camera)
+    let show = false
+    let x = 0
+    let y = 0
+    if (_proj.z <= 1 && _proj.z >= -1) {
+      x = (_proj.x * 0.5 + 0.5) * rect.width
+      y = (-_proj.y * 0.5 + 0.5) * rect.height
+      const margin = 24
+      show = x >= -margin && x <= rect.width + margin && y >= -margin && y <= rect.height + margin
+    }
+    el.style.display = show ? 'block' : 'none'
+    if (!show) continue
+    el.style.transform = `translate(${x}px, ${y}px)`
+    // 标签描边/文字色与该侧模型一致（A 冰蓝 / B 琥珀）
+    el.style.setProperty('--conj-color', '#' + lb.color.toString(16).padStart(6, '0'))
+    const span = el.firstElementChild as HTMLElement | null
+    if (span && span.textContent !== lb.name) span.textContent = lb.name
+  }
 }
 
 function stopCatalogTrack() {
@@ -692,6 +744,7 @@ function loop(now: number) {
   updateEphemOrbitMarker(simMs)
   updateEventCloud(simMs)
   updateEventCloudFocus(now / 1000)
+  updateConjLabels()
 
   const flying = updateCameraFly(now)
 
@@ -1033,6 +1086,13 @@ defineExpose({
     <div ref="manLabelEl" class="man-label" style="display: none">
       <span ref="manLabelTextEl" class="man-label-box"></span>
     </div>
+    <!-- R2-10：交会放大态双方名称标签（A 在左上、B 在右上，颜色与各自模型一致） -->
+    <div ref="conjLabelAEl" class="man-label conj-label conj-label-a" style="display: none">
+      <span class="man-label-box"></span>
+    </div>
+    <div ref="conjLabelBEl" class="man-label conj-label conj-label-b" style="display: none">
+      <span class="man-label-box"></span>
+    </div>
   </div>
 </template>
 
@@ -1166,5 +1226,29 @@ defineExpose({
   border: 1px solid rgba(255, 180, 84, 0.6);
   border-radius: 5px;
   box-shadow: 0 0 6px rgba(255, 180, 84, 0.25);
+}
+
+/* R2-10：交会放大态双方名称标签（短名，颜色随各自模型；A 左上 / B 右上） */
+.conj-label {
+  --conj-color: #3b82f6;
+}
+.conj-label .man-label-box {
+  max-width: 160px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--conj-color);
+  border-color: var(--conj-color);
+  box-shadow: 0 0 6px var(--conj-color);
+}
+.conj-label-a .man-label-box {
+  left: auto;
+  right: 8px;
+  bottom: 8px;
+}
+.conj-label-b .man-label-box {
+  left: 8px;
+  right: auto;
+  bottom: 8px;
 }
 </style>

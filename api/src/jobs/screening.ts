@@ -39,6 +39,7 @@ import { missRTN, refineCandidate } from '../screen/refine.js'
 import { EPH_ROOT } from '../ephem/ingest.js'
 import { parseOcmPv, pvAt, type PvState } from '../ephem/parsePv.js'
 import { levelOfEvent } from '../screen/levels.js'
+import { cdmIsolation } from '../services/systemPool.js'
 
 let workerBusy = false
 
@@ -126,13 +127,18 @@ interface CdmMatch {
   missKm: number | null
 }
 
-/** 官方 CDM 索引：sat_cdm（日更覆盖快照），Pc 非正/缺失的跳过 */
-async function loadCdmIndex(): Promise<Map<string, CdmMatch[]>> {
+/**
+ * 官方 CDM 索引：sat_cdm（日更覆盖快照），Pc 非正/缺失的跳过。
+ * C4：客户上传 CDM 仅本任务所属组织可见（系统池全可见），禁止跨组织串用。
+ */
+async function loadCdmIndex(orgId: number): Promise<Map<string, CdmMatch[]>> {
   const map = new Map<string, CdmMatch[]>()
+  const iso = cdmIsolation(orgId)
   try {
     const [rows] = await pool.query<CdmRow[]>(
       `SELECT cdm_id, norad_a, norad_b, tca, miss_distance_km, collision_probability
-       FROM sat_cdm WHERE tca IS NOT NULL`
+       FROM sat_cdm WHERE tca IS NOT NULL ${iso.sql}`,
+      iso.params
     )
     for (const r of rows) {
       if (r.norad_a == null || r.norad_b == null) continue
@@ -546,13 +552,14 @@ async function runCdmCompareJob(
   await markJobStarted(job.id, objs.length, 0)
   await updateJobProgress(job.id, 40, 'CDM 复核：按主星匹配已入站 CDM')
 
+  const iso = cdmIsolation(job.org_id)
   const [rows] = await pool.query<CdmReviewRow[]>(
     `SELECT cdm_id, norad_a, norad_b, name_a, name_b, tca, miss_distance_km,
             rel_speed_km_per_s, collision_probability, hard_body_radius_m
        FROM sat_cdm
-      WHERE tca BETWEEN ? AND ? AND (norad_a IN (?) OR norad_b IN (?))
+      WHERE tca BETWEEN ? AND ? AND (norad_a IN (?) OR norad_b IN (?)) ${iso.sql}
       ORDER BY tca ASC`,
-    [new Date(start), new Date(end), norads, norads]
+    [new Date(start), new Date(end), norads, norads, ...iso.params]
   )
   if (await isCancelRequested(job.id)) throw new JobAborted('用户已取消')
 
@@ -849,7 +856,7 @@ async function runJobInner(
   const trackByNorad = new Map<number, EphTrack>()
   for (const t of primaries) if (t.noradId != null) trackByNorad.set(t.noradId, t)
   const satrecCache = new Map<number, ReturnType<typeof buildSatrec>>()
-  const cdmIndex = await loadCdmIndex()
+  const cdmIndex = await loadCdmIndex(orgId)
 
   const rows: unknown[][] = []
   const seen = new Set<string>()

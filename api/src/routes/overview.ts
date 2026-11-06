@@ -12,6 +12,7 @@ import { pool } from '../db/pool.js'
 import { requireAuth, type AuthContext } from './auth.js'
 import { getDailyFetchStatus } from '../db/fetchDb.js'
 import { countScreensToday } from '../db/screenDb.js'
+import { cdmIsolation } from '../services/systemPool.js'
 
 const router = Router()
 
@@ -61,15 +62,17 @@ router.get('/overview/summary', requireAuth, async (req: ScopedRequest, res) => 
       fresh: Number(ephRows[0]?.fresh) || 0
     }
 
-    // 系统 CDM 快照统计（TCA 时间窗；涉及目标）
+    // 系统 CDM 快照统计（TCA 时间窗；涉及目标）。C4：客户上传 CDM 不计入系统池口径，
+    // 仅在「涉及本组织」的明细里按组织隔离并入。
+    const isoC = cdmIsolation(orgId)
     const [cdmAll] = await pool.query<Array<RowDataPacket & { n: number }>>(
-      'SELECT COUNT(*) AS n FROM sat_cdm'
+      "SELECT COUNT(*) AS n FROM sat_cdm WHERE source <> 'customer'"
     )
     const [cdm24] = await pool.query<Array<RowDataPacket & { n: number }>>(
-      'SELECT COUNT(*) AS n FROM sat_cdm WHERE tca >= NOW() AND tca < DATE_ADD(NOW(), INTERVAL 24 HOUR)'
+      "SELECT COUNT(*) AS n FROM sat_cdm WHERE source <> 'customer' AND tca >= NOW() AND tca < DATE_ADD(NOW(), INTERVAL 24 HOUR)"
     )
     const [cdm7d] = await pool.query<Array<RowDataPacket & { n: number }>>(
-      'SELECT COUNT(*) AS n FROM sat_cdm WHERE tca >= NOW() AND tca < DATE_ADD(NOW(), INTERVAL 7 DAY)'
+      "SELECT COUNT(*) AS n FROM sat_cdm WHERE source <> 'customer' AND tca >= NOW() AND tca < DATE_ADD(NOW(), INTERVAL 7 DAY)"
     )
     let involvingOwned = 0
     let ownedCdm: Array<{
@@ -85,15 +88,15 @@ router.get('/overview/summary', requireAuth, async (req: ScopedRequest, res) => 
     if (ownedNorads.length) {
       const [rows] = await pool.query<Array<RowDataPacket & { n: number }>>(
         `SELECT COUNT(*) AS n FROM sat_cdm
-         WHERE norad_a IN (?) OR norad_b IN (?)`,
-        [ownedNorads, ownedNorads]
+         WHERE (norad_a IN (?) OR norad_b IN (?)) ${isoC.sql}`,
+        [ownedNorads, ownedNorads, ...isoC.params]
       )
       involvingOwned = Number(rows[0]?.n) || 0
       const [list] = await pool.query<RowDataPacket[]>(
         `SELECT cdm_id, tca, norad_a, name_a, norad_b, name_b, miss_distance_km, collision_probability
-         FROM sat_cdm WHERE norad_a IN (?) OR norad_b IN (?)
+         FROM sat_cdm WHERE (norad_a IN (?) OR norad_b IN (?)) ${isoC.sql}
          ORDER BY tca ASC LIMIT 8`,
-        [ownedNorads, ownedNorads]
+        [ownedNorads, ownedNorads, ...isoC.params]
       )
       ownedCdm = list.map((r) => ({
         cdm_id: String(r.cdm_id),
@@ -113,14 +116,14 @@ router.get('/overview/summary', requireAuth, async (req: ScopedRequest, res) => 
       const [o24] = await pool.query<Array<RowDataPacket & { n: number }>>(
         `SELECT COUNT(*) AS n FROM sat_cdm
           WHERE tca >= NOW() AND tca < DATE_ADD(NOW(), INTERVAL 24 HOUR)
-            AND (norad_a IN (?) OR norad_b IN (?))`,
-        [ownedNorads, ownedNorads]
+            AND (norad_a IN (?) OR norad_b IN (?)) ${isoC.sql}`,
+        [ownedNorads, ownedNorads, ...isoC.params]
       )
       const [o7] = await pool.query<Array<RowDataPacket & { n: number }>>(
         `SELECT COUNT(*) AS n FROM sat_cdm
           WHERE tca >= NOW() AND tca < DATE_ADD(NOW(), INTERVAL 7 DAY)
-            AND (norad_a IN (?) OR norad_b IN (?))`,
-        [ownedNorads, ownedNorads]
+            AND (norad_a IN (?) OR norad_b IN (?)) ${isoC.sql}`,
+        [ownedNorads, ownedNorads, ...isoC.params]
       )
       orgNext24h = Number(o24[0]?.n) || 0
       orgNext7d = Number(o7[0]?.n) || 0
