@@ -171,16 +171,18 @@ router.post('/auth/login', async (req, res) => {
     return
   }
   const body = req.body || {}
-  const email = String(body.email || '').trim().toLowerCase()
+  const rawId = String(body.email || '').trim().toLowerCase()
+  // 固定测试账号允许直接用用户名登录（无 @ 时补默认域）
+  const email = rawId && !rawId.includes('@') ? `${rawId}@openspace.local` : rawId
   const password = String(body.password || '')
   if (!email || !password) {
-    res.status(400).json(fail(400, '请输入邮箱和密码'))
+    res.status(400).json(fail(400, '请输入账号和密码'))
     return
   }
   try {
     const user = await findUserByEmail(email)
     if (!user || !(await bcrypt.compare(password, user.password_hash))) {
-      res.status(401).json(fail(401, '邮箱或密码错误'))
+      res.status(401).json(fail(401, '账号或密码错误'))
       return
     }
     if (user.status !== 'active') {

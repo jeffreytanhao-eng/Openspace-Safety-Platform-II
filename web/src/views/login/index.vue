@@ -100,14 +100,14 @@ async function submit() {
           />
         </label>
         <label class="field">
-          <span>{{ t('auth.email') }}</span>
+          <span>{{ mode === 'login' ? t('auth.loginId') : t('auth.email') }}</span>
           <input
             v-model="email"
-            type="email"
+            :type="mode === 'login' ? 'text' : 'email'"
             name="email"
-            autocomplete="email"
+            autocomplete="username"
             required
-            :placeholder="t('auth.emailPh')"
+            :placeholder="mode === 'login' ? t('auth.loginIdPh') : t('auth.emailPh')"
           />
         </label>
         <label class="field">

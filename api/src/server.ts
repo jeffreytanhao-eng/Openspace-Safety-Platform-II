@@ -5,6 +5,7 @@ import { pingDb } from './db/pool.js'
 import { ensureEphemSchema, countRowsDb } from './ephem/ephemDb.js'
 import { scanAndIngest, importFromIndexJson } from './ephem/ingest.js'
 import { ensureOrgSchema, ensurePlatformAdmin } from './db/orgDb.js'
+import { ensureFixedAccounts } from './db/fixedAccounts.js'
 import { ensurePlanSchema } from './db/planDb.js'
 import { ensureFetchSchema } from './db/fetchDb.js'
 import { startDailyFetchScheduler, parseDailyCron } from './jobs/dailyFetch.js'
@@ -43,6 +44,12 @@ app.listen(config.port, '0.0.0.0', () => {
       }
     } catch (e) {
       console.error('[admin] platform admin bootstrap failed:', (e as Error).message)
+    }
+    // 固定测试账号（xingwang / gaoxiao / admin）：每次启动幂等对齐，不随版本与部署变化
+    try {
+      await ensureFixedAccounts()
+    } catch (e) {
+      console.error('[test-account] bootstrap failed:', (e as Error).message)
     }
     void (async () => {
       try {
