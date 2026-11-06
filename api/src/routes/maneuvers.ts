@@ -82,10 +82,24 @@ function maneuverView(m: ManeuverRow | null): Record<string, unknown> | null {
 
 /* ------------------------------ 列表与登记 ------------------------------ */
 
-/** 机动候选列表（校验目标归属） */
-router.get('/objects/:id/maneuvers', requireOrg, async (req: ScopedRequest, res) => {
-  const org = req.auth!.org!
+/** 机动候选列表（校验目标归属；平台账号可只读查看任意组织目标） */
+router.get('/objects/:id/maneuvers', async (req: ScopedRequest, res) => {
   const obj = await getObjectById(Number(req.params.id))
+  const platform = !!req.auth?.user.role?.startsWith('platform_')
+  if (!req.auth?.org || !req.auth.user.orgId) {
+    if (!platform) {
+      res.status(403).json(fail(403, '需要组织账号'))
+      return
+    }
+    if (!obj) {
+      res.status(404).json(fail(404, '目标不存在'))
+      return
+    }
+    const items = await listManeuversByObject(obj.org_id, obj.id)
+    res.json(ok({ items: items.map(maneuverView) }))
+    return
+  }
+  const org = req.auth.org
   if (!obj || obj.org_id !== org.id) {
     res.status(404).json(fail(404, '目标不存在'))
     return

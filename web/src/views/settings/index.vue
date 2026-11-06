@@ -6,7 +6,12 @@ import { AuthError } from '@/api/auth'
 import {
   getCaDefaults,
   putCaDefaults,
+  getCaProfiles,
+  putCaProfile,
+  deleteCaProfile,
   type CaDefaults,
+  type CaParams,
+  type UserCaSlot,
   type CaSuggestion,
   type HbrMode,
   type CovMode,
@@ -69,7 +74,9 @@ const form = reactive({
 /** 已设置值列（组织默认；未设置 → null，显示「未设置（用系统建议值）」） */
 const saved = ref<CaDefaults | null>(null)
 const suggestions = ref<CaSuggestion[]>([])
-const canEdit = computed(() => auth.user?.role === 'org_admin' || auth.user?.role === 'platform_super_admin')
+const canEdit = computed(() => auth.user?.role === 'org_admin')
+/** 平台账号（无组织）：组织级面板只读，仅保留个人参数 */
+const isPlatform = computed(() => !auth.org)
 const dirty = ref(false)
 
 function applyDefaults(d: CaDefaults | null): void {
@@ -101,8 +108,11 @@ async function load(): Promise<void> {
     suggestions.value = resp.suggestions ?? []
     applyDefaults(resp.defaults)
     needOrg.value = false
-    void loadCred() // C2: 凭据区随页面加载（失败不影响 CA 面板）
-    void loadNotify() // H2: 通知区随页面加载
+    void loadProfiles() // 第 4 项：本人 2 组自定义参数
+    if (!isPlatform.value) {
+      void loadCred() // C2: 凭据区随页面加载（失败不影响 CA 面板）
+      void loadNotify() // H2: 通知区随页面加载
+    }
   } catch (e) {
     if (e instanceof AuthError && (e.httpStatus === 401 || e.httpStatus === 403)) needOrg.value = true
     else loadError.value = e instanceof Error ? e.message : String(e)
@@ -157,6 +167,137 @@ async function save(): Promise<void> {
   } finally {
     saving.value = false
   }
+}
+
+/* ------------------------- 我的自定义参数（2 组，仅本人可见可用） ------------------------- */
+
+const mySlots = ref<UserCaSlot[]>([
+  { slot: 1, params: null, updated_at: null },
+  { slot: 2, params: null, updated_at: null }
+])
+const orgDefaultsParams = ref<CaParams | null>(null)
+const editingSlot = ref(0)
+const slotSaving = ref(false)
+const slotMsg = ref('')
+const slotError = ref('')
+const slotForm = reactive({
+  hbr_mode: 'single' as HbrMode,
+  hbr_m: 15,
+  hbr_a_m: 15,
+  hbr_b_m: 5,
+  accepted_pc: 1e-4,
+  accepted_miss_km: 1,
+  screen_distance_km: 10,
+  covariance_mode: 'tle-age' as CovMode,
+  propagator: 'sgp4' as Propagator,
+  window_h: 72,
+  step_s: 30,
+  methods: { foster: true, chan: true, alfano: false } as Record<'foster' | 'chan' | 'alfano', boolean>
+})
+
+async function loadProfiles(): Promise<void> {
+  try {
+    const r = await getCaProfiles()
+    orgDefaultsParams.value = r.org_defaults
+    mySlots.value = r.mine
+  } catch {
+    /* 参数档案加载失败不影响组织默认面板 */
+  }
+}
+
+function mineSlot(slot: number): UserCaSlot | null {
+  return mySlots.value.find((x) => x.slot === slot) ?? null
+}
+
+function paramsToSlotForm(p: CaParams): void {
+  slotForm.hbr_mode = p.hbr_mode
+  slotForm.hbr_m = p.hbr_m
+  slotForm.hbr_a_m = p.hbr_a_m ?? 15
+  slotForm.hbr_b_m = p.hbr_b_m ?? 5
+  slotForm.accepted_pc = p.accepted_pc
+  slotForm.accepted_miss_km = p.accepted_miss_km
+  slotForm.screen_distance_km = p.screen_distance_km
+  slotForm.covariance_mode = p.covariance_mode
+  slotForm.propagator = p.propagator
+  slotForm.window_h = p.window_h
+  slotForm.step_s = p.step_s
+  const list = p.pc_methods.split(',').map((s) => s.trim())
+  slotForm.methods.foster = list.includes('foster')
+  slotForm.methods.chan = list.includes('chan')
+  slotForm.methods.alfano = list.includes('alfano')
+}
+
+function slotMethodsStr(): string {
+  const list: string[] = []
+  if (slotForm.methods.foster) list.push('foster')
+  if (slotForm.methods.chan) list.push('chan')
+  if (slotForm.methods.alfano) list.push('alfano')
+  return list.join(',')
+}
+
+function openSlotEditor(slot: number): void {
+  const base = mineSlot(slot)?.params ?? orgDefaultsParams.value
+  if (base) paramsToSlotForm(base)
+  slotMsg.value = ''
+  slotError.value = ''
+  editingSlot.value = slot
+}
+
+function cancelSlotEditor(): void {
+  editingSlot.value = 0
+}
+
+async function saveSlot(): Promise<void> {
+  const slot = editingSlot.value
+  if (!slot || slotSaving.value) return
+  if (!slotMethodsStr()) {
+    slotError.value = t('ca.err.noMethod')
+    return
+  }
+  slotSaving.value = true
+  slotError.value = ''
+  slotMsg.value = ''
+  try {
+    await putCaProfile(slot, {
+      hbr_mode: slotForm.hbr_mode,
+      hbr_m: slotForm.hbr_m,
+      hbr_a_m: slotForm.hbr_mode === 'both' ? slotForm.hbr_a_m : null,
+      hbr_b_m: slotForm.hbr_mode === 'both' ? slotForm.hbr_b_m : null,
+      accepted_pc: slotForm.accepted_pc,
+      accepted_miss_km: slotForm.accepted_miss_km,
+      screen_distance_km: slotForm.screen_distance_km,
+      covariance_mode: slotForm.covariance_mode,
+      propagator: slotForm.propagator,
+      window_h: slotForm.window_h,
+      step_s: slotForm.step_s,
+      pc_methods: slotMethodsStr()
+    })
+    await loadProfiles()
+    slotMsg.value = `参数组 ${slot} 已保存`
+    editingSlot.value = 0
+  } catch (e) {
+    slotError.value = e instanceof Error ? e.message : String(e)
+  } finally {
+    slotSaving.value = false
+  }
+}
+
+async function resetSlot(slot: number): Promise<void> {
+  slotMsg.value = ''
+  slotError.value = ''
+  try {
+    await deleteCaProfile(slot)
+    await loadProfiles()
+    slotMsg.value = `参数组 ${slot} 已恢复为默认参数`
+  } catch (e) {
+    slotError.value = e instanceof Error ? e.message : String(e)
+  }
+}
+
+function slotSummary(p: CaParams | null): string {
+  if (!p) return '—'
+  const hbr = p.hbr_mode === 'both' ? `${p.hbr_a_m ?? '—'} + ${p.hbr_b_m ?? '—'} m (A/B)` : `${p.hbr_m} m`
+  return `HBR ${hbr} · 筛查 ${p.screen_distance_km} km · 接受 Pc ${p.accepted_pc} · ${p.propagator.toUpperCase()} · ${p.window_h} h / ${p.step_s} s · ${p.pc_methods}`
 }
 
 /* ------------------------- 建议值映射 ------------------------- */
@@ -536,6 +677,7 @@ function srcName(s: string): string {
               {{ t('ca.defaultsSub') }}
               <template v-if="savedUpdated()"> · {{ t('ca.updatedBy') }} {{ savedUpdated() }} ({{ saved?.updated_by }})</template>
             </div>
+            <div v-if="isPlatform" class="h-sub">{{ t('ca.platformDefaults') }}</div>
           </div>
           <button v-if="canEdit" type="button" class="primary" :disabled="saving || loading" @click="save">
             {{ saving ? t('ca.saving') : t('ca.save') }}
@@ -687,8 +829,119 @@ function srcName(s: string): string {
         <p class="note">{{ t('ca.defaultsNote') }}</p>
       </section>
 
-      <!-- 数据凭证（C2）：组织自配 Space-Track / AOE，服务端加密存储 -->
+      <!-- 我的自定义参数（2 组）：仅本人可见可用，不影响组织默认与其它用户 -->
       <section class="panel">
+        <header class="panel-h">
+          <div>
+            <div class="h-title">{{ t('ca.mineTitle') }}</div>
+            <div class="h-sub">{{ t('ca.mineSub') }}</div>
+          </div>
+        </header>
+
+        <div class="cred-cards">
+          <div v-for="s in [1, 2]" :key="s" class="cred-card">
+            <div class="cred-head">
+              <div class="cred-name">
+                <span class="pname">{{ t('ca.mineSlot') }} {{ s }}</span>
+                <span class="badge" :class="mineSlot(s)?.params ? 'on' : 'off'">
+                  {{ mineSlot(s)?.params ? t('ca.mineConfigured') : t('ca.mineUseDefault') }}
+                </span>
+              </div>
+              <div class="cred-ops">
+                <button type="button" class="ghost" @click="openSlotEditor(s)">
+                  {{ mineSlot(s)?.params ? t('ca.mineEdit') : t('ca.mineCreate') }}
+                </button>
+                <button type="button" class="ghost" :disabled="!mineSlot(s)?.params" @click="resetSlot(s)">
+                  {{ t('ca.mineReset') }}
+                </button>
+              </div>
+            </div>
+            <div class="cred-status">
+              <span class="mono">{{ slotSummary(mineSlot(s)?.params ?? orgDefaultsParams) }}</span>
+              <span v-if="mineSlot(s)?.params" class="dim">
+                {{ t('ca.updatedBy') }} {{ mineSlot(s)?.updated_at?.replace('T', ' ').slice(0, 16) }}
+              </span>
+              <span v-else class="dim">{{ t('ca.mineDefaultHint') }}</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- 参数组编辑器 -->
+        <div v-if="editingSlot" class="slot-editor">
+          <div class="slot-editor-h">{{ t('ca.mineEditing') }} {{ editingSlot }}</div>
+          <div class="slot-grid">
+            <label class="slot-row">
+              <span>{{ t('ca.f.hbrMode') }}</span>
+              <span>
+                <label class="radio"><input v-model="slotForm.hbr_mode" type="radio" value="single" /> {{ t('ca.single') }}</label>
+                <label class="radio"><input v-model="slotForm.hbr_mode" type="radio" value="both" /> {{ t('ca.both') }}</label>
+              </span>
+            </label>
+            <label class="slot-row">
+              <span>{{ t('ca.f.hbr') }}</span>
+              <span v-if="slotForm.hbr_mode === 'single'">
+                <input v-model.number="slotForm.hbr_m" type="number" min="1" max="1000" step="1" /> m
+              </span>
+              <span v-else>
+                <input v-model.number="slotForm.hbr_a_m" type="number" min="0.1" max="1000" step="0.1" /> (A) /
+                <input v-model.number="slotForm.hbr_b_m" type="number" min="0.1" max="1000" step="0.1" /> (B) m
+              </span>
+            </label>
+            <label class="slot-row">
+              <span>{{ t('ca.f.acceptedPc') }}</span>
+              <span><input v-model.number="slotForm.accepted_pc" type="number" min="1e-9" max="1" step="1e-5" /></span>
+            </label>
+            <label class="slot-row">
+              <span>{{ t('ca.f.acceptedMiss') }}</span>
+              <span><input v-model.number="slotForm.accepted_miss_km" type="number" min="0.01" max="100" step="0.1" /> km</span>
+            </label>
+            <label class="slot-row">
+              <span>{{ t('ca.f.screenDist') }}</span>
+              <span><input v-model.number="slotForm.screen_distance_km" type="number" min="0.5" max="100" step="0.5" /> km</span>
+            </label>
+            <label class="slot-row">
+              <span>{{ t('ca.f.covMode') }}</span>
+              <select v-model="slotForm.covariance_mode">
+                <option value="tle-age">{{ t('ca.covTleAge') }}</option>
+                <option value="cdm">CDM</option>
+              </select>
+            </label>
+            <label class="slot-row">
+              <span>{{ t('ca.f.propagator') }}</span>
+              <select v-model="slotForm.propagator">
+                <option value="sgp4">SGP4</option>
+                <option value="numeric">{{ t('ca.propNumeric') }}</option>
+              </select>
+            </label>
+            <label class="slot-row">
+              <span>{{ t('ca.f.windowStep') }}</span>
+              <span>
+                <input v-model.number="slotForm.window_h" type="number" min="1" max="168" step="1" /> h /
+                <input v-model.number="slotForm.step_s" type="number" min="1" max="3600" step="1" /> s
+              </span>
+            </label>
+            <label class="slot-row">
+              <span>{{ t('ca.f.methods') }}</span>
+              <span>
+                <label class="radio"><input v-model="slotForm.methods.foster" type="checkbox" /> Foster</label>
+                <label class="radio"><input v-model="slotForm.methods.chan" type="checkbox" /> Chan</label>
+                <label class="radio"><input v-model="slotForm.methods.alfano" type="checkbox" /> Alfano</label>
+              </span>
+            </label>
+          </div>
+          <div class="slot-actions">
+            <button type="button" class="primary" :disabled="slotSaving" @click="saveSlot">
+              {{ slotSaving ? t('ca.saving') : t('ca.mineSave') }}
+            </button>
+            <button type="button" class="ghost" @click="cancelSlotEditor">{{ t('ca.mineCancel') }}</button>
+          </div>
+        </div>
+        <p v-if="slotMsg" class="ok-msg">{{ slotMsg }}</p>
+        <p v-if="slotError" class="err">{{ slotError }}</p>
+      </section>
+
+      <!-- 数据凭证（C2）：组织自配 Space-Track / AOE，服务端加密存储 -->
+      <section v-if="!isPlatform" class="panel">
         <header class="panel-h">
           <div>
             <div class="h-title">{{ t('cred.title') }}</div>
@@ -843,7 +1096,7 @@ function srcName(s: string): string {
       </section>
 
       <!-- 日报与通知（H2）：渠道管理 + 日报预览 + 投递审计 -->
-      <section class="panel">
+      <section v-if="!isPlatform" class="panel">
         <header class="panel-h">
           <div>
             <div class="h-title">{{ t('notify.title') }}</div>
@@ -1201,6 +1454,34 @@ td:first-child { color: var(--text); font-weight: 600; white-space: nowrap; }
   color: var(--text-muted);
 }
 .errline { color: var(--danger); }
+
+/* 我的自定义参数（第 4 项） */
+.slot-editor {
+  margin: 4px 14px 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 10px 12px 12px;
+  background: rgba(255, 255, 255, 0.02);
+}
+.slot-editor-h { font-size: 12px; font-weight: 650; margin-bottom: 8px; }
+.slot-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: 8px 18px;
+}
+.slot-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  font-size: 12px;
+  color: var(--text-muted);
+}
+.slot-row > span:first-child { white-space: nowrap; }
+.slot-row input[type='number'] { width: 76px; }
+.slot-row select { min-width: 120px; }
+.slot-row .radio { display: inline-flex; align-items: center; gap: 4px; margin-right: 8px; font-size: 12px; }
+.slot-actions { display: flex; gap: 8px; margin-top: 12px; }
 .cred-form {
   display: flex;
   gap: 10px;

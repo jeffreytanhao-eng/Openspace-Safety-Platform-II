@@ -33,6 +33,36 @@ export interface AdminMember {
   created_at: string
 }
 
+/* ---------------- 第 5 项：业主认领审核 ---------------- */
+
+export type ObjectClaimStatus = 'pending' | 'claimed' | 'rejected'
+
+export interface AdminObjectClaim {
+  id: number
+  norad_id: number
+  claim_status: ObjectClaimStatus
+  created_at: string
+  review_note: string | null
+  org_id: number
+  org_name: string
+  user_id: number | null
+  user_email: string
+}
+
+export function adminListObjectClaims(
+  status: ObjectClaimStatus | 'all' = 'pending'
+): Promise<{ items: AdminObjectClaim[] }> {
+  return cgiCall({ method: 'GET', url: `/admin/object-claims?status=${status}`, headers: headers() })
+}
+
+export function adminApproveObjectClaim(id: number, note = ''): Promise<{ id: number; norad: number; orgId: number }> {
+  return cgiCall({ method: 'POST', url: `/admin/object-claims/${id}/approve`, data: { note }, headers: headers() })
+}
+
+export function adminRejectObjectClaim(id: number, note = ''): Promise<{ id: number; rejected: boolean }> {
+  return cgiCall({ method: 'POST', url: `/admin/object-claims/${id}/reject`, data: { note }, headers: headers() })
+}
+
 export interface AuditItem {
   id: number
   actor_user_id: number | null

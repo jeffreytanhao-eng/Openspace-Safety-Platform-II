@@ -108,6 +108,58 @@ async function createImageryLayer(): Promise<import('cesium').ImageryLayer | nul
 }
 
 /**
+ * 极区补丁层：ArcGIS World Imagery 是 Web Mercator 切片，覆盖止于 ±85.05°，
+ * 更靠极处会露出下层兜底贴图 / 球体底色，形成圆形缺口。
+ *
+ * 取色依据（实采 World Imagery 极区瓦片）：北极 66.5°–85°N 海面为暗青蓝（均值 #175767，
+ * 靠近极点约 #004052），南极 66.5°–85°S 冰盖为近纯白（均值 #F2F7FF）。
+ * 因此补丁按同一色调生成：北极 #013a4b→#06475a 的暗青蓝，南极 #F2F7FF 的冰盖白，
+ * 与相邻在线影像色差极小，接缝不可见；不用真实极区照片（VIIRS 海冰近乎纯白，
+ * 与暗色北冰洋形成突兀白斑，这正是此前极区"看起来很怪"的原因）。
+ * 覆盖 ±84° 以上，与在线影像有效范围留 1° 重叠；贴图缺失时静默跳过。
+ */
+const POLAR_CAP_LAT = 84
+async function createPolarCapLayers(): Promise<import('cesium').ImageryLayer[]> {
+  const Cs = Cesium as CesiumModule
+  const base = `${import.meta.env.BASE_URL}tiles/polar/`
+  const caps: Array<{ url: string; rectangle: import('cesium').Rectangle }> = [
+    { url: `${base}north.png`, rectangle: Cs.Rectangle.fromDegrees(-180, POLAR_CAP_LAT, 180, 90) },
+    { url: `${base}south.png`, rectangle: Cs.Rectangle.fromDegrees(-180, -90, 180, -POLAR_CAP_LAT) }
+  ]
+  // 两张贴图均为 1024×256；Cesium 1.146 的 SingleTileImageryProvider 要求显式传入 tileWidth/tileHeight
+  const TILE_W = 1024
+  const TILE_H = 256
+  const layers: import('cesium').ImageryLayer[] = []
+  for (const cap of caps) {
+    try {
+      // 用图片解码探测可用性：HEAD 请求在并发初始化时可能被浏览器中止（ERR_ABORTED），
+      // 导致补丁被误判为缺失而跳过，这里改为真实加载一次（命中 HTTP 缓存）。
+      const ok = await new Promise<boolean>((resolve) => {
+        const img = new Image()
+        img.onload = () => resolve(img.naturalWidth > 0)
+        img.onerror = () => resolve(false)
+        img.src = cap.url
+      })
+      if (!ok) continue
+      layers.push(
+        new Cs.ImageryLayer(
+          new Cs.SingleTileImageryProvider({
+            url: cap.url,
+            rectangle: cap.rectangle,
+            tileWidth: TILE_W,
+            tileHeight: TILE_H,
+            credit: ''
+          })
+        )
+      )
+    } catch (e) {
+      console.warn('[cesiumEarth] 极区补丁不可用：', e)
+    }
+  }
+  return layers
+}
+
+/**
  * Cesium 自带离线底图（Assets/Textures/NaturalEarthII，随 public/cesium 分发）。
  * 无外网或在线瓦片不可达时保证地球有可见贴图，避免整颗球呈纯黑。
  */
@@ -263,9 +315,13 @@ export async function initCesium(container: HTMLElement, hooks?: CesiumInitHooks
     Cesium = await import('cesium')
     const Cs = Cesium
 
-    // 内置离线底图垫底（无外网/在线瓦片不可达时仍有贴图），在线/自定义影像叠在其上
-    const offlineBase = await createOfflineBaseLayer()
+    // 在线/自定义影像可用时不再垫内置离线底图：NaturalEarthII 的亮蓝海洋会在
+    // Web Mercator 极区缺口处透出，形成显眼的淡蓝色圆斑（老项目无此垫层，故无此现象）。
+    // 仅当在线影像不可用时才用离线底图兜底，避免整颗球纯黑。
     const baseLayer = await createImageryLayer()
+    const offlineBase = baseLayer ? null : await createOfflineBaseLayer()
+    // 极区补丁（±85° 以上）：盖住 Web Mercator 影像的极区缺口，必须叠在最上层
+    const polarCaps = await createPolarCapLayers()
 
     widget = new Cs.CesiumWidget(container, {
       baseLayer: baseLayer ?? false,
@@ -281,6 +337,11 @@ export async function initCesium(container: HTMLElement, hooks?: CesiumInitHooks
     })
     scene = widget.scene
     if (offlineBase) scene.imageryLayers.add(offlineBase, 0)
+    // 极区补丁追加到最上层（在线影像图层之上），仅作用于 ±84° 以上
+    for (const layer of polarCaps) scene.imageryLayers.add(layer)
+    if (import.meta.env.DEV) {
+      console.info('[cesiumEarth] 极区补丁图层', polarCaps.length, '影像图层总数', scene.imageryLayers.length)
+    }
 
     // 星空 / 太阳 / 月亮由 Three 层负责（ECI 口径，与卫星、星官同一套视觉）；
     // Cesium 只保留地球本体 + 大气辉光 + 晨昏光照。

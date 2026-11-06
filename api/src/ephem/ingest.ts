@@ -117,7 +117,12 @@ function buildRow(args: {
     status: 'local',
     updatedAt: updatedAtOf(meta.created),
     originator: meta.originator,
-    sourceName
+    sourceName,
+    // 归属/可见性由上传路由写入；扫描入库一律视为平台公共星历
+    uploadedBy: '',
+    ownerUserId: null,
+    ownerOrgId: null,
+    visibility: 'public'
   }
 }
 
@@ -275,7 +280,11 @@ export async function importFromIndexJson(): Promise<{ imported: number }> {
       status: it.status || 'local',
       // 列表里的 updatedAt 是 UTC 展示串（'YYYY-MM-DD HH:mm'），写回 datetime 列前转本地时间
       updatedAt: displayToLocalDb(it.updatedAt) || updatedAtOf(null),
-      originator: it.originator || ''
+      originator: it.originator || '',
+      uploadedBy: '',
+      ownerUserId: null,
+      ownerOrgId: null,
+      visibility: 'public'
     })
     imported++
   }
@@ -370,6 +379,20 @@ export async function ingestUploadFile(
     action: existed ? 'updated' : 'added',
     id: row.id, file: rel, name: row.name, norad: row.norad, format,
     range: rangeLabel(row.startMs, row.stopMs), size: formatSize(row.fileSize)
+  }
+}
+
+/** 上传前预解析 NORAD（第 6 项：仅能上传自己认领目标的星历）；解析失败返回 null */
+export function peekUploadNorad(originalName: string, buf: Buffer): string | null {
+  try {
+    const name = sanitizeName(originalName)
+    const isGz = name.toLowerCase().endsWith('.gz')
+    const text = isGz ? gunzipText(buf) : buf.toString('utf8')
+    if (!text.trim()) return null
+    const { meta } = parseMetaAuto(text, name)
+    return /^\d+$/.test(meta.norad) && meta.norad !== '0' ? meta.norad : null
+  } catch {
+    return null
   }
 }
 

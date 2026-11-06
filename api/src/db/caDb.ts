@@ -50,6 +50,25 @@ CREATE TABLE IF NOT EXISTS \`ca_org_defaults\` (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
   COMMENT='组织默认碰撞参数（Epic F1）';
 
+CREATE TABLE IF NOT EXISTS \`ca_user_params\` (
+  \`user_id\`     bigint unsigned NOT NULL,
+  \`slot\`        tinyint unsigned NOT NULL COMMENT '1/2：每个用户两组自有参数',
+  \`params_json\` mediumtext NOT NULL COMMENT '完整参数集（见 CaParams）',
+  \`updated_at\`  datetime(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3),
+  PRIMARY KEY (\`user_id\`, \`slot\`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+  COMMENT='用户自有 CA 参数（两组；仅本人可见可用，不影响组织默认与其它用户）';
+
+CREATE TABLE IF NOT EXISTS \`object_ca_params\` (
+  \`object_id\`   bigint NOT NULL,
+  \`org_id\`      bigint unsigned NOT NULL,
+  \`params_json\` mediumtext NOT NULL COMMENT '完整参数集（见 CaParams）',
+  \`updated_by\`  varchar(190) NOT NULL DEFAULT '',
+  \`updated_at\`  datetime(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3),
+  PRIMARY KEY (\`object_id\`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+  COMMENT='目标级自定义参数（仅授权认领业主生效，不影响关注/检索到该目标的其它用户）';
+
 CREATE TABLE IF NOT EXISTS \`conjunction_pc_runs\` (
   \`id\`           bigint NOT NULL AUTO_INCREMENT,
   \`org_id\`       bigint unsigned NOT NULL,
@@ -135,6 +154,140 @@ export async function upsertCaDefaults(orgId: number, patch: CaDefaultsPatch, up
   const row = await getCaDefaults(orgId)
   if (!row) throw new Error('ca_org_defaults upsert 后读取失败')
   return row
+}
+
+/* ------------------- 用户自有 / 目标级自定义参数（两组 + 目标覆盖） ------------------- */
+
+/** 完整 CA 参数集（不含 org_id 与审计字段），用于用户/目标级 JSON 存储 */
+export interface CaParams {
+  hbr_mode: HbrMode
+  hbr_m: number
+  hbr_a_m: number | null
+  hbr_b_m: number | null
+  accepted_pc: number
+  accepted_miss_km: number
+  screen_distance_km: number
+  covariance_mode: CovMode
+  propagator: Propagator
+  window_h: number
+  step_s: number
+  pc_methods: string
+}
+
+export const CA_SYSTEM_DEFAULTS: CaParams = {
+  hbr_mode: 'single',
+  hbr_m: 15,
+  hbr_a_m: null,
+  hbr_b_m: null,
+  accepted_pc: 1e-4,
+  accepted_miss_km: 1,
+  screen_distance_km: 10,
+  covariance_mode: 'tle-age',
+  propagator: 'sgp4',
+  window_h: 72,
+  step_s: 30,
+  pc_methods: 'foster,chan'
+}
+
+/** 组织默认行 → 完整参数集（未设置过用系统建议值） */
+export function caDefaultsToParams(d: CaDefaults | null): CaParams {
+  if (!d) return { ...CA_SYSTEM_DEFAULTS }
+  return {
+    hbr_mode: d.hbr_mode,
+    hbr_m: Number(d.hbr_m),
+    hbr_a_m: d.hbr_a_m == null ? null : Number(d.hbr_a_m),
+    hbr_b_m: d.hbr_b_m == null ? null : Number(d.hbr_b_m),
+    accepted_pc: Number(d.accepted_pc),
+    accepted_miss_km: Number(d.accepted_miss_km),
+    screen_distance_km: Number(d.screen_distance_km),
+    covariance_mode: d.covariance_mode,
+    propagator: d.propagator,
+    window_h: Number(d.window_h),
+    step_s: Number(d.step_s),
+    pc_methods: String(d.pc_methods || CA_SYSTEM_DEFAULTS.pc_methods)
+  }
+}
+
+/** 在基准参数上应用补丁（未传字段保持不变） */
+export function mergeCaParams(base: CaParams, patch: CaDefaultsPatch): CaParams {
+  const out: CaParams = { ...base }
+  for (const [k, v] of Object.entries(patch)) {
+    if (v === undefined) continue
+    ;(out as unknown as Record<string, unknown>)[k] = v
+  }
+  return out
+}
+
+function parseParamsJson(raw: string | null): CaParams | null {
+  if (!raw) return null
+  try {
+    const o = JSON.parse(raw) as Partial<CaParams>
+    return { ...CA_SYSTEM_DEFAULTS, ...o }
+  } catch {
+    return null
+  }
+}
+
+export interface UserCaSlot {
+  slot: number
+  params: CaParams | null
+  updated_at: string | null
+}
+
+/** 某用户的全部自有参数（固定返回 slot 1/2，未配置为 null） */
+export async function listUserCaParams(userId: number): Promise<UserCaSlot[]> {
+  const [rows] = await pool.query<RowDataPacket[]>(
+    'SELECT slot, params_json, updated_at FROM ca_user_params WHERE user_id = ? ORDER BY slot',
+    [userId]
+  )
+  const map = new Map<number, { params: CaParams; updated_at: string }>()
+  for (const r of rows) {
+    const p = parseParamsJson(r.params_json as string)
+    if (p) map.set(Number(r.slot), { params: p, updated_at: String(r.updated_at) })
+  }
+  return [1, 2].map((slot) => ({
+    slot,
+    params: map.get(slot)?.params ?? null,
+    updated_at: map.get(slot)?.updated_at ?? null
+  }))
+}
+
+export async function saveUserCaParams(userId: number, slot: number, params: CaParams): Promise<void> {
+  await pool.query(
+    `INSERT INTO ca_user_params (user_id, slot, params_json) VALUES (?, ?, ?)
+     ON DUPLICATE KEY UPDATE params_json = VALUES(params_json)`,
+    [userId, slot, JSON.stringify(params)]
+  )
+}
+
+export async function deleteUserCaParams(userId: number, slot: number): Promise<void> {
+  await pool.query('DELETE FROM ca_user_params WHERE user_id = ? AND slot = ?', [userId, slot])
+}
+
+/** 目标级自定义参数（仅业主维护；不存在返回 null） */
+export async function getObjectCaParams(objectId: number): Promise<CaParams | null> {
+  const [rows] = await pool.query<RowDataPacket[]>(
+    'SELECT params_json FROM object_ca_params WHERE object_id = ?',
+    [objectId]
+  )
+  return rows.length ? parseParamsJson(rows[0].params_json as string) : null
+}
+
+export async function saveObjectCaParams(
+  objectId: number,
+  orgId: number,
+  params: CaParams,
+  updatedBy: string
+): Promise<void> {
+  await pool.query(
+    `INSERT INTO object_ca_params (object_id, org_id, params_json, updated_by) VALUES (?, ?, ?, ?)
+     ON DUPLICATE KEY UPDATE params_json = VALUES(params_json), updated_by = VALUES(updated_by)`,
+    [objectId, orgId, JSON.stringify(params), updatedBy]
+  )
+}
+
+export async function deleteObjectCaParams(objectId: number): Promise<void> {
+  await pool.query('DELETE FROM object_ca_params WHERE object_id = ?', [objectId])
 }
 
 /* ------------------------ 重算 run（F1） ------------------------ */

@@ -69,6 +69,51 @@ export function putCaDefaults(patch: CaDefaultsPatch): Promise<{ defaults: CaDef
   return cgiCall({ method: 'PUT', url: '/ca/defaults', data: patch, headers: authHeaders() })
 }
 
+/* ------------------------- 参数档案（第 3/4 项） ------------------------- */
+
+/** 完整 CA 参数集（组织默认 / 用户两组 / 目标自定义 同构） */
+export interface CaParams {
+  hbr_mode: HbrMode
+  hbr_m: number
+  hbr_a_m: number | null
+  hbr_b_m: number | null
+  accepted_pc: number
+  accepted_miss_km: number
+  screen_distance_km: number
+  covariance_mode: CovMode
+  propagator: Propagator
+  window_h: number
+  step_s: number
+  pc_methods: string
+}
+
+export interface UserCaSlot {
+  slot: number
+  params: CaParams | null
+  updated_at: string | null
+}
+
+export interface CaProfiles {
+  org_defaults: CaParams
+  suggestions: CaSuggestion[]
+  mine: UserCaSlot[]
+}
+
+/** 我的参数档案：组织默认 + 系统建议 + 本人 2 组 */
+export function getCaProfiles(): Promise<CaProfiles> {
+  return cgiCall({ method: 'GET', url: '/ca/profiles', headers: authHeaders() })
+}
+
+/** 保存本人第 slot 组参数（在组织默认上覆盖传入字段） */
+export function putCaProfile(slot: number, patch: CaDefaultsPatch): Promise<{ slot: number; params: CaParams }> {
+  return cgiCall({ method: 'PUT', url: `/ca/profiles/${slot}`, data: patch, headers: authHeaders() })
+}
+
+/** 删除本人第 slot 组参数（回到使用默认参数） */
+export function deleteCaProfile(slot: number): Promise<{ slot: number; deleted: boolean }> {
+  return cgiCall({ method: 'DELETE', url: `/ca/profiles/${slot}`, headers: authHeaders() })
+}
+
 /* ------------------------- 参数重算 run ------------------------- */
 
 export interface PcCompareRow {
@@ -113,6 +158,8 @@ export interface RecomputeResult {
 }
 
 export interface RecomputeInput {
+  /** 第 3/4 项：参数来源 default（组织默认）| mine1 | mine2（个人参数组）| target（目标自定义，需业主） */
+  paramsSource?: 'default' | 'mine1' | 'mine2' | 'target'
   hbrMode?: HbrMode
   hbrM?: number
   hbrAM?: number

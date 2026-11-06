@@ -92,8 +92,8 @@ async function submit() {
           <input
             v-model="orgName"
             type="text"
-            name="organization"
-            autocomplete="organization"
+            name="username"
+            autocomplete="username"
             required
             maxlength="128"
             :placeholder="t('auth.orgNamePh')"

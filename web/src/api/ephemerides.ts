@@ -31,6 +31,12 @@ export interface EphListItem {
   updatedAt: string
   originator?: string
   file: string
+  /** 上传者邮箱（审计） */
+  uploadedBy?: string
+  /** 第 6 项：上传者用户 id（null = 平台/同步导入） */
+  ownerUserId?: number | null
+  /** 第 6 项：public=全平台只读可见 / private=仅上传业主可用 */
+  visibility?: 'public' | 'private'
 }
 
 export interface EphListData {
@@ -105,7 +111,11 @@ export async function fetchEphemerisText(filePath: string): Promise<string> {
 }
 
 /** 上传单文件（原始字节流；后端识别格式并入库，返回 added/updated/skipped 与落盘路径） */
-export async function uploadEphemerisFile(file: File | Blob, name: string): Promise<{
+export async function uploadEphemerisFile(
+  file: File | Blob,
+  name: string,
+  visibility?: 'public' | 'private'
+): Promise<{
   action: 'added' | 'updated' | 'skipped'
   id: string
   file: string
@@ -114,12 +124,18 @@ export async function uploadEphemerisFile(file: File | Blob, name: string): Prom
   format: 'ITC' | 'OCM'
   range: string
   size: string
+  visibility?: 'public' | 'private'
 }> {
-  const url = `/cgi/ephemerides/upload?name=${encodeURIComponent(name)}`
+  const auth = localStorage.getItem('osp-token')
+  const vis = visibility ? `&visibility=${visibility}` : ''
+  const url = `/cgi/ephemerides/upload?name=${encodeURIComponent(name)}${vis}`
   const buf = await file.arrayBuffer()
   const res = await fetch(url, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/octet-stream' },
+    headers: {
+      'Content-Type': 'application/octet-stream',
+      ...(auth ? { Authorization: `Bearer ${auth}` } : {})
+    },
     body: new Uint8Array(buf)
   })
   if (!res.ok) {
@@ -140,9 +156,33 @@ export async function uploadEphemerisFile(file: File | Blob, name: string): Prom
     format: 'ITC' | 'OCM'
     range: string
     size: string
+    visibility?: 'public' | 'private'
   }>
   if (body.code !== 0 || !body.data) throw new Error(body.msg || '上传失败')
   return body.data
+}
+
+/** 第 6 项：切换星历可见性（仅上传业主 / 超管） */
+export async function patchEphemerisVisibility(id: string, visibility: 'public' | 'private'): Promise<void> {
+  const auth = localStorage.getItem('osp-token')
+  const res = await fetch(`/cgi/ephemerides/${encodeURIComponent(id)}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json', ...(auth ? { Authorization: `Bearer ${auth}` } : {}) },
+    body: JSON.stringify({ visibility })
+  })
+  const body = (await res.json()) as ApiWrap<never>
+  if (!res.ok || body.code !== 0) throw new Error(body.msg || `HTTP ${res.status}`)
+}
+
+/** 第 6 项：删除星历（元数据 + 物理文件；仅上传业主 / 超管） */
+export async function deleteEphemeris(id: string): Promise<void> {
+  const auth = localStorage.getItem('osp-token')
+  const res = await fetch(`/cgi/ephemerides/${encodeURIComponent(id)}`, {
+    method: 'DELETE',
+    headers: auth ? { Authorization: `Bearer ${auth}` } : {}
+  })
+  const body = (await res.json()) as ApiWrap<never>
+  if (!res.ok || body.code !== 0) throw new Error(body.msg || `HTTP ${res.status}`)
 }
 
 /** 触发后端增量扫描入库（通常在首次部署 / 手动补齐缺失样本时使用） */

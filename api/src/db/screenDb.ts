@@ -367,10 +367,25 @@ export async function getScreenJob(orgId: number, id: number): Promise<ScreenJob
   return rows[0] ?? null
 }
 
+/** 平台账号只读：跨组织任务详情 */
+export async function getScreenJobAny(id: number): Promise<ScreenJobRow | null> {
+  const [rows] = await pool.query<RawJob[]>(`SELECT * FROM screening_jobs WHERE id = ?`, [id])
+  return rows[0] ?? null
+}
+
 export async function listScreenJobs(orgId: number, limit = 50): Promise<ScreenJobRow[]> {
   const [rows] = await pool.query<RawJob[]>(
     `SELECT * FROM screening_jobs WHERE org_id = ? ORDER BY id DESC LIMIT ?`,
     [orgId, Math.min(200, Math.max(1, limit))]
+  )
+  return rows
+}
+
+/** 平台账号只读：跨组织任务列表 */
+export async function listAllScreenJobs(limit = 50): Promise<ScreenJobRow[]> {
+  const [rows] = await pool.query<RawJob[]>(
+    `SELECT * FROM screening_jobs ORDER BY id DESC LIMIT ?`,
+    [Math.min(200, Math.max(1, limit))]
   )
   return rows
 }
@@ -383,8 +398,15 @@ export async function listJobEvents(jobId: number, limit = 200): Promise<ScreenE
   return rows
 }
 
-/** 总览（D2）：今日已完成筛查次数 */
-export async function countScreensToday(orgId: number): Promise<number> {
+/** 总览（D2）：今日已完成筛查次数；orgId=null 表示平台账号口径（全平台） */
+export async function countScreensToday(orgId: number | null): Promise<number> {
+  if (orgId == null) {
+    const [rows] = await pool.query<Array<RowDataPacket & { n: number }>>(
+      `SELECT COUNT(*) AS n FROM screening_jobs
+        WHERE status IN ('done','failed') AND finished_at >= CURDATE()`
+    )
+    return Number(rows[0]?.n) || 0
+  }
   const [rows] = await pool.query<Array<RowDataPacket & { n: number }>>(
     `SELECT COUNT(*) AS n FROM screening_jobs
       WHERE org_id = ? AND status IN ('done','failed') AND finished_at >= CURDATE()`,

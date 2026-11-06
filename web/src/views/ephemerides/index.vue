@@ -2,10 +2,13 @@
 import { computed, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useI18n } from '@/composables/useI18n'
+import { useAuthStore } from '@/stores/auth'
 import {
   listLocalEphemerides,
   fetchEphemerisText,
   uploadEphemerisFile,
+  patchEphemerisVisibility,
+  deleteEphemeris,
   rebuildEphemerides,
   listEphemerisVersions,
   softDeleteEphemerisVersion,
@@ -160,6 +163,61 @@ const upBusy = ref(false)
 const upProgress = ref(0)
 const upName = ref('')
 
+/* ---------------- 第 6 项：星历归属 / 可见性 ---------------- */
+const auth = useAuthStore()
+/** 上传默认可见性（业主默认仅自己可见；超管默认全平台可见） */
+const upVisibility = ref<'public' | 'private'>('private')
+const visBusy = ref(false)
+const visMsg = ref('')
+const delBusy = ref(false)
+
+/** 当前登录用户是否为该星历上传业主 */
+function isMine(it: EphListItem | null | undefined): boolean {
+  return !!it && it.ownerUserId != null && it.ownerUserId === auth.user?.id
+}
+
+/** 仅上传业主本人与超管可改可见性 / 删除 */
+function canManage(it: EphListItem | null | undefined): boolean {
+  if (!it) return false
+  return auth.user?.role === 'platform_super_admin' || isMine(it)
+}
+
+async function setVisibility(v: 'public' | 'private') {
+  const it = selected.value
+  if (!it || !canManage(it) || visBusy.value) return
+  visBusy.value = true
+  visMsg.value = ''
+  try {
+    await patchEphemerisVisibility(it.id, v)
+    it.visibility = v
+    const row = serverRows.value.find((r) => r.id === it.id)
+    if (row) row.visibility = v
+    visMsg.value = v === 'public' ? '已设为全平台可见（只读可用）' : '已设为仅自己可见'
+  } catch (e) {
+    visMsg.value = (e as Error)?.message || '设置失败'
+  } finally {
+    visBusy.value = false
+  }
+}
+
+async function removeSelected() {
+  const it = selected.value
+  if (!it || !canManage(it) || delBusy.value) return
+  if (!window.confirm(`确认删除星历「${it.name}」？\n将同时删除元数据与服务器上的星历文件，操作不可撤销。`)) return
+  delBusy.value = true
+  visMsg.value = ''
+  try {
+    await deleteEphemeris(it.id)
+    selectedId.value = ''
+    await fetchServerPage()
+    importMsg.value = `已删除星历「${it.name}」`
+  } catch (e) {
+    visMsg.value = (e as Error).message || '删除失败'
+  } finally {
+    delBusy.value = false
+  }
+}
+
 /** 逐文件顺序上传到服务端入库（MySQL 元数据 + 分片落盘），完成后刷新列表回第一页 */
 async function onFilesPicked(e: Event) {
   const input = e.target as HTMLInputElement
@@ -184,7 +242,7 @@ async function onFilesPicked(e: Event) {
       upName.value = f.name
       importMsg.value = `正在导入 ${i + 1}/${fresh.length}：${f.name}`
       try {
-        const r = await uploadEphemerisFile(f, f.name)
+        const r = await uploadEphemerisFile(f, f.name, auth.user ? upVisibility.value : undefined)
         stat[r.action]++
         importedNames.add(f.name)
       } catch (err) {
@@ -865,8 +923,16 @@ onMounted(() => {
         <div class="uz-text">
           <div class="uz-title">导入星历文件 / 目录</div>
           <div class="uz-sub">支持 ITC（Starlink MEME）/ CCSDS OEM / OCM · 单文件 ≤ 12 MB · 目录导入自动跳过已导入文件（按文件名）</div>
+          <div class="uz-perm">权限：VIP 组织仅可上传本组织已认领目标的星历；超管可上传任意目标星历。上传后可在右侧切换「全平台可见 / 仅自己可见」。</div>
         </div>
         <div class="uz-actions">
+          <label v-if="auth.user" class="uz-vis">
+            <span>可见性</span>
+            <select v-model="upVisibility">
+              <option value="private">仅自己可见</option>
+              <option value="public">全平台可见</option>
+            </select>
+          </label>
           <button type="button" class="btn" :disabled="upBusy" @click="pickFiles">选择文件</button>
           <button type="button" class="btn" :disabled="upBusy" @click="pickDir">选择目录</button>
         </div>
@@ -912,6 +978,7 @@ onMounted(() => {
               <span class="tg" :class="{ ocm: it.format === 'OCM' }">{{ it.format }}</span>
               <span v-if="it.maneuvers > 0" class="tg man">{{ it.maneuvers }} 处机动</span>
               <span class="tg" :class="{ cov: it.covariance }">{{ it.covariance ? '含协方差' : '无协方差' }}</span>
+              <span v-if="it.visibility === 'private'" class="tg priv">仅自己可见</span>
             </div>
           </button>
         </div>
@@ -947,6 +1014,18 @@ onMounted(() => {
           <div v-if="selected" class="h-sub">{{ selected.name }} · NORAD {{ selected.norad }}</div>
         </header>
         <div v-if="selected" class="prev-body">
+          <div class="vis-bar">
+            <span class="vis-label">可见性</span>
+            <span class="vis-badge" :class="(selected.visibility ?? 'public')">
+              {{ (selected.visibility ?? 'public') === 'private' ? '仅自己可见' : '全平台可见' }}
+            </span>
+            <template v-if="canManage(selected)">
+              <button type="button" :disabled="visBusy || (selected.visibility ?? 'public') === 'public'" @click="setVisibility('public')">全平台可见</button>
+              <button type="button" :disabled="visBusy || (selected.visibility ?? 'public') === 'private'" @click="setVisibility('private')">仅自己可见</button>
+              <button type="button" class="danger" :disabled="delBusy" @click="removeSelected">{{ delBusy ? '删除中…' : '删除星历' }}</button>
+            </template>
+            <span v-if="visMsg" class="vis-msg">{{ visMsg }}</span>
+          </div>
           <dl class="kv">
             <div class="span2"><dt>名称</dt><dd>{{ selected.name }}</dd></div>
             <div class="span2"><dt>NORAD ID</dt><dd class="mono">{{ selected.norad }}</dd></div>
@@ -1115,6 +1194,16 @@ h1 { margin: 0; font-size: 16px; font-weight: 650; }
 .uz-msg { margin: 8px 0 0; font-size: 11px; color: var(--accent-strong); line-height: 1.5; }
 .uz-title { font-size: 13px; font-weight: 600; color: var(--text); }
 .uz-sub { margin-top: 4px; font-size: 11px; color: var(--text-dim); }
+.uz-perm { margin-top: 6px; font-size: 11px; color: var(--text-muted); }
+.uz-vis { display: inline-flex; align-items: center; gap: 6px; font-size: 11px; color: var(--text-dim); }
+.uz-vis select {
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--text-muted);
+  font-size: 11px;
+  padding: 4px 6px;
+}
 .split { flex: 1; min-height: 0; display: grid; grid-template-columns: 340px 1fr; gap: 10px; }
 .list-pane, .preview {
   background: var(--bg-panel); border: 1px solid var(--border); border-radius: 8px;
@@ -1188,10 +1277,30 @@ h1 { margin: 0; font-size: 16px; font-weight: 650; }
 .tg.ocm { color: #ffb46f; background: rgba(255, 150, 50, 0.14); border-color: rgba(255, 160, 60, 0.36); }
 .tg.man { color: #ffc98a; background: rgba(255, 170, 70, 0.12); border-color: rgba(255, 170, 80, 0.3); }
 .tg.cov { color: #6fe0c0; background: rgba(80, 220, 180, 0.12); border-color: rgba(80, 220, 180, 0.28); }
+.tg.priv { color: #c9a8ff; background: rgba(150, 110, 255, 0.14); border-color: rgba(150, 110, 255, 0.34); }
 .prev-h { padding: 12px; border-bottom: 1px solid var(--border); }
 .h-title { font-size: 13px; font-weight: 650; }
 .h-sub { font-size: 11px; color: var(--text-dim); margin-top: 2px; }
 .prev-body { padding: 12px; overflow: auto; }
+/* 第 6 项：可见性与删除 */
+.vis-bar {
+  display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+  padding: 8px 10px; margin-bottom: 10px;
+  border: 1px solid var(--border); border-radius: 6px; background: rgba(255, 255, 255, 0.02);
+  font-size: 11px;
+}
+.vis-label { color: var(--text-dim); }
+.vis-badge { padding: 1px 7px; border-radius: 3px; border: 1px solid var(--border); }
+.vis-badge.public { color: #6fe0c0; border-color: rgba(80, 220, 180, 0.3); }
+.vis-badge.private { color: #c9a8ff; border-color: rgba(150, 110, 255, 0.34); }
+.vis-bar button {
+  background: transparent; border: 1px solid var(--border); border-radius: 4px;
+  color: var(--text-muted); font-size: 11px; padding: 3px 8px; cursor: pointer;
+}
+.vis-bar button:hover:not(:disabled) { color: var(--text); background: var(--bg-hover); }
+.vis-bar button:disabled { opacity: 0.45; cursor: default; }
+.vis-bar button.danger { color: var(--danger); border-color: rgba(220, 90, 90, 0.4); }
+.vis-msg { color: var(--accent-strong); }
 .kv { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; margin: 0 0 14px; }
 .kv div { background: var(--bg-panel-2); border: 1px solid var(--border); border-radius: 6px; padding: 8px 10px; }
 .kv dt { font-size: 10px; color: var(--text-dim); margin: 0; }

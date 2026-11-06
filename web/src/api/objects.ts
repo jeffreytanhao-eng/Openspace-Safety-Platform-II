@@ -3,6 +3,7 @@
  * 全部走 /cgi/objects/*，由后端 requireAuth + requireOrg 把关。
  */
 import { cgiCall } from './auth'
+import type { CaParams } from './ca'
 
 function headers(): Record<string, string> {
   try {
@@ -18,6 +19,8 @@ export interface SatTlePreview {
   norad_id: number
   object_name: string
   object_type: string
+  /** 国际标识（CO SPAR ID），编目缺失时为 null */
+  intl_desig?: string | null
   regime: string
   epoch: string | null
   incl: number | null
@@ -47,9 +50,11 @@ export interface ManagedObject {
   updated_at: string
   /** 绑定的星历数（列表接口附带） */
   bound_ephemerides?: number
+  /** 所属组织名（平台账号全平台只读列表附带） */
+  org_name?: string
 }
 
-/** 目标详情：档案 + 最新轨道要素 + 绑定星历 */
+/** 目标详情：档案 + 最新轨道要素 + 绑定星历 + 业主自定义 CA 参数 */
 export interface ObjectDetail extends ManagedObject {
   sat: SatTlePreview | null
   ephemerides: Array<{
@@ -61,6 +66,8 @@ export interface ObjectDetail extends ManagedObject {
     published_at: number
     status: string
   }>
+  /** 第 3 项：业主自定义参数（仅认领业主可见可用） */
+  ca_params?: CaParams | null
 }
 
 export interface LookupResult {
@@ -68,7 +75,13 @@ export interface LookupResult {
   /** 该 NORAD 的授权认领（卫星业主，全局唯一） */
   owner_claim: { id: number; orgId: number; isMine: boolean } | null
   /** 本组织对该 NORAD 的认领（normal/owner，最多一条） */
-  my_claim: { id: number; claimType: ClaimType } | null
+  my_claim: {
+    id: number
+    claimType: ClaimType
+    /** 第 5 项：业主认领需超管审核（pending/claimed/rejected） */
+    claimStatus?: 'pending' | 'claimed' | 'rejected'
+    reviewNote?: string | null
+  } | null
   /** C1：VIP 组织的业主授权范围判定（非 VIP 为 null） */
   owner_scope?: { configured: boolean; allowed: boolean; matched: { scope_type: string; scope_value: string } | null } | null
 }
@@ -140,8 +153,13 @@ export function claimObject(payload: {
   massKg?: number | null
   crossSectionM2?: number | null
   propulsion?: string
-}): Promise<ObjectDetail> {
-  return cgiCall<ObjectDetail>({ method: 'POST', url: '/objects', data: payload, headers: headers() })
+}): Promise<ObjectDetail & { pending_review?: boolean; hint?: string }> {
+  return cgiCall<ObjectDetail & { pending_review?: boolean; hint?: string }>({
+    method: 'POST',
+    url: '/objects',
+    data: payload,
+    headers: headers()
+  })
 }
 
 export function getObject(id: number): Promise<ObjectDetail> {
@@ -157,6 +175,8 @@ export function updateObject(
     propulsion?: string
     acceptedPc?: number | null
     acceptedMissKm?: number | null
+    /** 第 3 项：业主自定义 CA 参数（仅对认领业主生效） */
+    params?: Partial<CaParams>
   }
 ): Promise<ObjectDetail> {
   return cgiCall<ObjectDetail>({ method: 'PATCH', url: `/objects/${id}`, data: patch, headers: headers() })

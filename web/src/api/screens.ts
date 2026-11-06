@@ -83,6 +83,8 @@ export function createScreen(payload: {
   windowH?: number
   missMaxKm?: number
   hbrM?: number
+  /** 第 3/4 项：参数来源 default（组织默认）| mine1 | mine2（个人参数组）| target（目标自定义，仅单主星业主） */
+  paramsSource?: 'default' | 'mine1' | 'mine2' | 'target'
   /** R0-2：主星子集（本组织托管 NORAD），不传则全部目标 */
   primaryNorads?: number[]
   /** R2-8：主星源 tle（系统池/组织快照）| ephem（已绑定精密星历） */

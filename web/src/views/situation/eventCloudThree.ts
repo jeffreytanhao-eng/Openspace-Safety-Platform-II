@@ -8,7 +8,7 @@
  * - 拾取 raycaster 独立实现，命中后由 SceneCore 转发 Vue 层弹窗。
  */
 import * as THREE from 'three'
-import { twoline2satrec, propagate } from 'satellite.js'
+import { twoline2satrec, propagate, gstime } from 'satellite.js'
 import { eciToScene } from './scene'
 import { twoBodyPropagate } from './ephem/screening'
 import { useCatalog } from '@/composables/useCatalog'
@@ -28,6 +28,10 @@ export interface EventCloudItem {
   missKm: number | null
   relSpeedKmS: number | null
   cdmCount: number
+  /** R2-15：TCA 交会点大地坐标（由事件锚点 ECI 状态换算，纬度/经度 度、高度 km） */
+  latDeg?: number
+  lonDeg?: number
+  altKm?: number
 }
 
 /** 分级视觉：基础半径（场景单位）+ 颜色（R2-10：黄/橙最小半径上调，远距离也看得见） */
@@ -143,6 +147,52 @@ function positionOf(norad: number, tcaMs: number): [number, number, number] | nu
   return propagateByTle(norad, tcaMs) ?? propagateNorad(norad, tcaMs)
 }
 
+/** 编目元信息（object_type 等）：型号解析与标签类型显示共用，取自左栏同一份编目快照 */
+function catalogMetaOf(norad: number): { objectType: string; name: string } {
+  const p = useCatalog().cloudList.value.find((c) => c.norad_id === norad)
+  return { objectType: p?.object_type ?? '', name: p?.object_name ?? '' }
+}
+
+const OBJECT_TYPE_LABEL: Record<string, string> = {
+  PAYLOAD: '卫星',
+  'ROCKET BODY': '火箭残骸',
+  DEBRIS: '碎片',
+  UNKNOWN: '未知'
+}
+
+function objectTypeLabel(t: string): string {
+  return OBJECT_TYPE_LABEL[t] || '未知'
+}
+
+const WGS84_A_KM = 6378.137
+const WGS84_F = 1 / 298.257223563
+const WGS84_E2 = WGS84_F * (2 - WGS84_F)
+
+/** ECI(km) → WGS84 大地坐标：Rz(−GMST) 转 ECEF 后迭代反算（R2-15 事件卡经纬高） */
+function eciToGeodetic(
+  r: [number, number, number],
+  tcaMs: number
+): { latDeg: number; lonDeg: number; altKm: number } {
+  const g = gstime(new Date(tcaMs))
+  const cg = Math.cos(g)
+  const sg = Math.sin(g)
+  const x = r[0] * cg + r[1] * sg
+  const y = -r[0] * sg + r[1] * cg
+  const z = r[2]
+  const p = Math.hypot(x, y)
+  const lon = Math.atan2(y, x)
+  let lat = Math.atan2(z, p * (1 - WGS84_E2))
+  let altKm = 0
+  for (let i = 0; i < 6; i++) {
+    const sinLat = Math.sin(lat)
+    const n = WGS84_A_KM / Math.sqrt(1 - WGS84_E2 * sinLat * sinLat)
+    if (Math.abs(Math.cos(lat)) < 1e-9) break
+    altKm = p / Math.cos(lat) - n
+    lat = Math.atan2(z, p * (1 - (WGS84_E2 * n) / (n + altKm)))
+  }
+  return { latDeg: (lat * 180) / Math.PI, lonDeg: (lon * 180) / Math.PI, altKm }
+}
+
 /**
  * 组装带锚点的事件集：双方位置几何中心（缺一用另一方，全缺丢弃）。
  * 编目快照（约 450 目标）之外的事件用 sat_tle 全量 TLE 兜底锚点，
@@ -173,7 +223,9 @@ export async function buildEventCloudItems(
       skipped++
       continue
     }
-    out.push({ ...ev, pos: eciToScene(r[0], r[1], r[2]) })
+    // R2-15：交会点大地坐标（事件卡显示；换算与锚点同一组 TCA 状态）
+    const geo = eciToGeodetic(r, ev.tcaMs)
+    out.push({ ...ev, pos: eciToScene(r[0], r[1], r[2]), ...geo })
   }
   return { items: out, skipped }
 }
@@ -322,8 +374,9 @@ function orbitByState(norad: number, tcaMs: number): THREE.Vector3[] | null {
 }
 
 /**
- * 交会双方在 TCA 的真实场景位置（R2-10：不再做视觉归一分离）。
- * 真实脱靶距离在 1 单位 = 6371 km 尺度下极小，但近景放大后模型应回到各自 TCA 真位置。
+ * 交会双方在 TCA 的真实场景位置。
+ * 真实脱靶距离在 1 单位 = 6371 km 尺度下极小（常常只有 0.1–1 km），双方模型会完全重叠；
+ * 这里仅对「显示位置」做最小间距分离，真实 miss 仍以事件卡/详情数值为准。
  */
 function conjPairPositions(
   ev: EventCloudItem & { pos: THREE.Vector3 },
@@ -343,12 +396,26 @@ function conjPairPositions(
   }
   outA.copy(va ?? ev.pos)
   outB.copy(vb ?? ev.pos)
+  if (va && vb) {
+    // 最小显示间距：0.008 ≈ 51 km（仅视觉分离，不参与任何计算）
+    const sep = Math.max(va.distanceTo(vb), 0.008) / 2
+    const mid = outA.clone().add(outB).multiplyScalar(0.5)
+    const dir = outB.clone().sub(outA)
+    if (dir.lengthSq() < 1e-12) {
+      dir.crossVectors(mid, new THREE.Vector3(0, 1, 0))
+      if (dir.lengthSq() < 1e-12) dir.set(1, 0, 0)
+    }
+    dir.normalize()
+    outA.copy(mid).addScaledVector(dir, -sep)
+    outB.copy(mid).addScaledVector(dir, sep)
+  }
   return { a: !!va, b: !!vb }
 }
 
-/** R2-10：交会放大态名称标签锚点（每帧由 SceneCore 投影成 DOM 标签） */
+/** R2-10/R2-15：交会放大态目标标签锚点（每帧由 SceneCore 投影成 DOM 标签） */
 export interface ConjFocusLabel {
-  name: string
+  /** 三行显示文本：名称 \n NORAD ID \n 类型 */
+  label: string
   pos: THREE.Vector3
   color: number
 }
@@ -391,13 +458,22 @@ async function buildFocus(token: number, ev: EventCloudItem & { pos: THREE.Vecto
   const posA = new THREE.Vector3()
   const posB = new THREE.Vector3()
   const pair = conjPairPositions(ev, posA, posB)
-  // R2-10：名称标签锚点（SceneCore 每帧投影；模型加载失败也保留标签）
+  // R2-10/R2-15：目标标签锚点（SceneCore 每帧投影；模型加载失败也保留标签）。
+  // 三行文本：名称 / NORAD ID / 类型，便于操作员核对左侧编目是否同一目标。
+  const labelOf = (norad: number, name: string): string => {
+    const meta = catalogMetaOf(norad)
+    const nm = name || meta.name || `NORAD ${norad}`
+    return `${nm}\nNORAD ${norad}\n${objectTypeLabel(meta.objectType)}`
+  }
   focusLabels = []
-  if (pair.a) focusLabels.push({ name: ev.nameA, pos: posA.clone(), color: CONJ_MODEL_COLOR_A })
-  if (pair.b && ev.noradB !== ev.noradA) focusLabels.push({ name: ev.nameB, pos: posB.clone(), color: CONJ_MODEL_COLOR_B })
+  if (pair.a) focusLabels.push({ label: labelOf(ev.noradA, ev.nameA), pos: posA.clone(), color: CONJ_MODEL_COLOR_A })
+  if (pair.b && ev.noradB !== ev.noradA)
+    focusLabels.push({ label: labelOf(ev.noradB, ev.nameB), pos: posB.clone(), color: CONJ_MODEL_COLOR_B })
 
   const addModel = async (norad: number, name: string, pos: THREE.Vector3, color: number) => {
-    const gm = await loadSharedModelGeom(resolveCatalogModelKey(name, norad), 'med')
+    // R2-13：传入编目真实 object_type，保证交会双方外形与左栏一致（卫星/残骸/碎片/未知）
+    const modelKey = resolveCatalogModelKey(name, norad, catalogMetaOf(norad).objectType)
+    const gm = await loadSharedModelGeom(modelKey, 'med')
     if (!gm || token !== focusToken || focus !== g) return
     const mat = (gm.mat as THREE.MeshStandardMaterial).clone()
     mat.userData.cloned = true

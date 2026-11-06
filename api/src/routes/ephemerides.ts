@@ -10,47 +10,51 @@ import {
   listRowsDb,
   listAllRowsDb,
   getRowDb,
+  getRowByFileDb,
   listAllKeysDb,
   toListItem,
   listVersionsDb,
   getEphemerisVersionDb,
-  softDeleteVersionDb
+  softDeleteVersionDb,
+  setEphemerisOwnershipDb,
+  setEphemerisVisibilityDb,
+  deleteRowDb,
+  type EphemViewer
 } from '../ephem/ephemDb.js'
-import { EPH_ROOT, scanAndIngest, ingestUploadFile } from '../ephem/ingest.js'
+import { EPH_ROOT, scanAndIngest, ingestUploadFile, peekUploadNorad } from '../ephem/ingest.js'
 import { compareSources, listAccuracySources } from '../services/accuracyCompare.js'
 import { requireAuth } from './auth.js'
 import { requireSuperAdmin } from './admin.js'
 import { isOrgFlagEnabled } from '../db/planDb.js'
 import { quotaExceeded } from '../middleware/plan.js'
-import { findOrgById } from '../db/orgDb.js'
+import { getOwnerClaim } from '../db/objectsDb.js'
 
 const router = Router()
 
-/** 可选身份：请求带有效 Bearer token 时返回其邮箱（归档 uploaded_by 用），否则 anonymous */
-function tryAuthName(req: Request): string {
-  const header = req.headers.authorization || ''
-  const token = header.startsWith('Bearer ') ? header.slice(7) : ''
-  if (!token) return 'anonymous'
-  try {
-    const payload = jwt.verify(token, config.jwtSecret) as { email?: string }
-    return payload.email || 'anonymous'
-  } catch {
-    return 'anonymous'
-  }
-}
-
-/** 可选身份：有效 token 时返回 orgId（配额计量用），否则 null */
-function tryAuthOrgId(req: Request): number | null {
+/**
+ * 可选身份（第 6 项可见性过滤）：有效 token → { userId, superAdmin }；无 token / 失效 → null（匿名）。
+ * 仅供公开接口按可见性裁剪数据，不拒绝请求。
+ */
+function tryAuthViewer(req: Request): EphemViewer | null {
   const header = req.headers.authorization || ''
   const token = header.startsWith('Bearer ') ? header.slice(7) : ''
   if (!token) return null
   try {
-    const payload = jwt.verify(token, config.jwtSecret) as { orgId?: number | null }
-    const orgId = Number(payload.orgId)
-    return Number.isFinite(orgId) && orgId > 0 ? orgId : null
+    const payload = jwt.verify(token, config.jwtSecret) as { uid?: number; role?: string }
+    const uid = Number(payload.uid)
+    if (!Number.isFinite(uid) || uid <= 0) return null
+    return { userId: uid, superAdmin: payload.role === 'platform_super_admin' }
   } catch {
     return null
   }
+}
+
+/** 逐行可见性判定：private 仅上传业主本人与超管可见 */
+function canSeeRow(row: { visibility: 'public' | 'private'; ownerUserId: number | null }, viewer: EphemViewer | null): boolean {
+  if (row.visibility !== 'private') return true
+  if (!viewer) return false
+  if (viewer.superAdmin) return true
+  return row.ownerUserId != null && row.ownerUserId === viewer.userId
 }
 
 function safeResolve(rel: string): string | null {
@@ -112,11 +116,13 @@ router.get('/ephemerides', async (req: Request, res: Response) => {
   }
   const paged = q.page != null
   const wantKeys = req.query.keys === '1'
+  // 第 6 项：私有星历仅上传业主与超管可见
+  const viewer = tryAuthViewer(req)
 
   if (await ephemDbUp()) {
     try {
       if (paged) {
-        const { total, rows } = await listRowsDb(q)
+        const { total, rows } = await listRowsDb(q, viewer)
         const size = Math.min(Math.max(q.size || 20, 1), 500)
         const data: Record<string, unknown> = {
           root: 'data/ephemerides',
@@ -129,12 +135,12 @@ router.get('/ephemerides', async (req: Request, res: Response) => {
           size,
           totalPages: Math.max(1, Math.ceil(total / size))
         }
-        if (wantKeys) data.allKeys = await listAllKeysDb()
+        if (wantKeys) data.allKeys = await listAllKeysDb(viewer)
         res.json(ok(data))
         return
       }
       // legacy 全量模式（态势页内置样本通道）：上限 5000 防超大响应
-      const rows = await listAllRowsDb(5000)
+      const rows = await listAllRowsDb(5000, viewer)
       res.json(
         ok({
           root: 'data/ephemerides',
@@ -156,8 +162,18 @@ router.get('/ephemerides', async (req: Request, res: Response) => {
     res.status(404).json(fail(404, `星历目录未初始化：${EPH_ROOT}`))
     return
   }
+  // index.json 快照同样按可见性裁剪（私有星历对外不可见）
+  const visibleItems = idx.items.filter((it) =>
+    canSeeRow(
+      {
+        visibility: String(it.visibility || 'public') === 'private' ? 'private' : 'public',
+        ownerUserId: it.ownerUserId == null ? null : Number(it.ownerUserId)
+      },
+      viewer
+    )
+  )
   if (paged) {
-    const p = pagedFromIndex(idx.items, q)
+    const p = pagedFromIndex(visibleItems, q)
     res.json(
       ok({
         root: 'data/ephemerides',
@@ -169,7 +185,7 @@ router.get('/ephemerides', async (req: Request, res: Response) => {
         page: p.page,
         size: p.size,
         totalPages: p.totalPages,
-        ...(wantKeys ? { allKeys: idx.items.map((it) => `${it.norad}|${it.format}`) } : {})
+        ...(wantKeys ? { allKeys: visibleItems.map((it) => `${it.norad}|${it.format}`) } : {})
       })
     )
     return
@@ -180,7 +196,7 @@ router.get('/ephemerides', async (req: Request, res: Response) => {
       resolvedRoot: EPH_ROOT,
       generatedAt: idx.generatedAt,
       source: 'file',
-      items: idx.items
+      items: visibleItems
     })
   )
 })
@@ -190,12 +206,24 @@ router.get('/ephemerides', async (req: Request, res: Response) => {
  * Returns gunzipped text (Content-Type: text/plain) for preview / situation ingest.
  * Optional ?download=1 keeps Content-Disposition attachment of the .gz.
  */
-router.get('/ephemerides/file', (req: Request, res: Response) => {
+router.get('/ephemerides/file', async (req: Request, res: Response) => {
   const rel = String(req.query.path || '')
   const full = safeResolve(rel)
   if (!full || !fs.existsSync(full)) {
     res.status(404).json(fail(404, '文件不存在'))
     return
+  }
+  // 第 6 项：私有星历文件仅上传业主与超管可读
+  if (await ephemDbUp()) {
+    try {
+      const row = await getRowByFileDb(rel.replace(/\\/g, '/'))
+      if (row && !canSeeRow(row, tryAuthViewer(req))) {
+        res.status(403).json(fail(403, '该星历为业主私有，仅上传者本人可用'))
+        return
+      }
+    } catch {
+      /* 元数据查询失败不阻断读取（历史行为优先） */
+    }
   }
   try {
     const buf = fs.readFileSync(full)
@@ -218,10 +246,15 @@ router.get('/ephemerides/file', (req: Request, res: Response) => {
 
 /** GET /cgi/ephemerides/meta/:id — one row by id（DB 优先，回退 index.json） */
 router.get('/ephemerides/meta/:id', async (req: Request, res: Response) => {
+  const viewer = tryAuthViewer(req)
   if (await ephemDbUp()) {
     try {
       const row = await getRowDb(req.params.id)
       if (row) {
+        if (!canSeeRow(row, viewer)) {
+          res.status(403).json(fail(403, '该星历为业主私有，仅上传者本人可用'))
+          return
+        }
         res.json(ok(toListItem(row)))
         return
       }
@@ -235,15 +268,31 @@ router.get('/ephemerides/meta/:id', async (req: Request, res: Response) => {
     res.status(404).json(fail(404, '未找到该星历'))
     return
   }
+  if (
+    !canSeeRow(
+      {
+        visibility: String(hit.visibility || 'public') === 'private' ? 'private' : 'public',
+        ownerUserId: hit.ownerUserId == null ? null : Number(hit.ownerUserId)
+      },
+      viewer
+    )
+  ) {
+    res.status(403).json(fail(403, '该星历为业主私有，仅上传者本人可用'))
+    return
+  }
   res.json(ok(hit))
 })
 
 /**
- * POST /cgi/ephemerides/upload?name=<原始文件名>
+ * POST /cgi/ephemerides/upload?name=<原始文件名>[&visibility=public|private]
  * 单文件原始字节流上传（前端逐文件顺序上传以展示进度），服务端识别格式 → 分片落盘 → 解析入库。
+ *
+ * 第 6 项权限口径：超管可上传任意目标星历（默认 public）；
+ * VIP 组织仅可上传**已生效业主认领**目标的星历（默认 private，可显式改为 public 全平台只读可见）。
  */
 router.post(
   '/ephemerides/upload',
+  requireAuth,
   // eslint-disable-next-line @typescript-eslint/no-misused-promises
   expressRaw12mb,
   async (req: Request, res: Response) => {
@@ -253,26 +302,114 @@ router.post(
       res.status(400).json(fail(400, '缺少文件名或文件内容'))
       return
     }
-    // Epic I 计量全量：登录组织受 ephem_upload_day 生效限额约束（匿名上传不计量，保持历史行为）
-    const authOrgId = tryAuthOrgId(req)
-    if (authOrgId !== null) {
-      const org = await findOrgById(authOrgId)
-      if (org) {
-        const exceeded = await quotaExceeded('ephem_upload_day', org)
-        if (exceeded) {
-          res.status(exceeded.status).json(exceeded.body)
-          return
-        }
+    const user = req.auth!.user
+    const org = req.auth!.org
+    const isSuper = user.role === 'platform_super_admin'
+    const norad = peekUploadNorad(name, buf)
+    if (!norad) {
+      res.status(400).json(fail(400, '无法从文件识别 NORAD 编号，无法校验上传权限'))
+      return
+    }
+    // 非超管：必须是 VIP 组织，且该 NORAD 已被本组织生效业主认领
+    if (!isSuper) {
+      if (!org || org.plan !== 'vip' || org.status !== 'active') {
+        res.status(403).json(fail(403, '仅 VIP 组织可上传星历，且只能上传已认领目标的星历'))
+        return
+      }
+      const claim = await getOwnerClaim(Number(norad))
+      if (!claim || claim.org_id !== org.id) {
+        res.status(403).json(fail(403, `NORAD ${norad} 未被本组织业主认领，无法上传其星历`))
+        return
       }
     }
+    // Epic I 计量全量：登录组织受 ephem_upload_day 生效限额约束
+    if (org) {
+      const exceeded = await quotaExceeded('ephem_upload_day', org)
+      if (exceeded) {
+        res.status(exceeded.status).json(exceeded.body)
+        return
+      }
+    }
+    const rawVis = String(req.query.visibility || '')
+    const visibility: 'public' | 'private' =
+      rawVis === 'public' || rawVis === 'private' ? rawVis : isSuper ? 'public' : 'private'
     try {
-      const r = await ingestUploadFile(name, buf, tryAuthName(req))
-      res.json(ok(r))
+      const r = await ingestUploadFile(name, buf, user.email)
+      await setEphemerisOwnershipDb(r.id, {
+        ownerUserId: isSuper ? null : user.id,
+        ownerOrgId: isSuper ? null : org?.id ?? null,
+        visibility,
+        uploadedBy: user.email
+      })
+      res.json(ok({ ...r, visibility }))
     } catch (e) {
       res.status(400).json(fail(400, (e as Error).message || '上传入库失败'))
     }
   }
 )
+
+/** PATCH /cgi/ephemerides/:id — 切换可见性（仅上传业主本人 / 超管） */
+router.patch('/ephemerides/:id', requireAuth, async (req: Request, res: Response) => {
+  if (!(await ephemDbUp())) {
+    res.status(503).json(fail(503, '数据库不可用：星历可见性需要 MySQL'))
+    return
+  }
+  const visibility = String((req.body as { visibility?: string })?.visibility || '')
+  if (visibility !== 'public' && visibility !== 'private') {
+    res.status(400).json(fail(400, 'visibility 仅支持 public / private'))
+    return
+  }
+  try {
+    const row = await getRowDb(req.params.id)
+    if (!row) {
+      res.status(404).json(fail(404, '未找到该星历'))
+      return
+    }
+    const user = req.auth!.user
+    const isSuper = user.role === 'platform_super_admin'
+    if (!isSuper && row.ownerUserId !== user.id) {
+      res.status(403).json(fail(403, '只能修改自己上传的星历可见性'))
+      return
+    }
+    await setEphemerisVisibilityDb(row.id, visibility)
+    res.json(ok({ id: row.id, visibility }))
+  } catch (e) {
+    res.status(500).json(fail(500, (e as Error).message || '更新星历可见性失败'))
+  }
+})
+
+/** DELETE /cgi/ephemerides/:id — 删除元数据行与物理文件（仅上传业主本人 / 超管） */
+router.delete('/ephemerides/:id', requireAuth, async (req: Request, res: Response) => {
+  if (!(await ephemDbUp())) {
+    res.status(503).json(fail(503, '数据库不可用：删除星历需要 MySQL'))
+    return
+  }
+  try {
+    const row = await getRowDb(req.params.id)
+    if (!row) {
+      res.status(404).json(fail(404, '未找到该星历'))
+      return
+    }
+    const user = req.auth!.user
+    const isSuper = user.role === 'platform_super_admin'
+    if (!isSuper && row.ownerUserId !== user.id) {
+      res.status(403).json(fail(403, '只能删除自己上传的星历'))
+      return
+    }
+    const deleted = await deleteRowDb(row.id)
+    const full = safeResolve(row.file)
+    if (full && fs.existsSync(full)) {
+      try {
+        fs.unlinkSync(full)
+      } catch (e) {
+        console.warn('[ephem] unlink failed:', (e as Error).message)
+      }
+    }
+    res.json(ok({ id: row.id, deleted: !!deleted }))
+  } catch (e) {
+    res.status(500).json(fail(500, (e as Error).message || '删除星历失败'))
+  }
+})
 
 /**
  * POST /cgi/ephemerides/rebuild?force=1 — 扫描 data/ephemerides 入库并导出 index.json；

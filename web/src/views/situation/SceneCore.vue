@@ -322,7 +322,7 @@ function updateConjLabels() {
     // 标签描边/文字色与该侧模型一致（A 冰蓝 / B 琥珀）
     el.style.setProperty('--conj-color', '#' + lb.color.toString(16).padStart(6, '0'))
     const span = el.firstElementChild as HTMLElement | null
-    if (span && span.textContent !== lb.name) span.textContent = lb.name
+    if (span && span.textContent !== lb.label) span.textContent = lb.label
   }
 }
 
@@ -1228,27 +1228,31 @@ defineExpose({
   box-shadow: 0 0 6px rgba(255, 180, 84, 0.25);
 }
 
-/* R2-10：交会放大态双方名称标签（短名，颜色随各自模型；A 左上 / B 右上） */
+/* R2-10/R2-15：交会放大态双方标签（三行：名称 / NORAD ID / 类型；颜色随各自模型）
+   A 左上外移、B 右下外移，避免两个标签压住默认尺寸模型本体 */
 .conj-label {
   --conj-color: #3b82f6;
 }
 .conj-label .man-label-box {
-  max-width: 160px;
+  max-width: 240px;
   overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  /* 三行固定排版：名称 \n NORAD \n 类型（保留换行，不折行） */
+  white-space: pre;
+  line-height: 1.35;
+  text-align: left;
   color: var(--conj-color);
   border-color: var(--conj-color);
   box-shadow: 0 0 6px var(--conj-color);
 }
 .conj-label-a .man-label-box {
   left: auto;
-  right: 8px;
-  bottom: 8px;
+  right: 26px;
+  bottom: 22px;
 }
 .conj-label-b .man-label-box {
-  left: 8px;
+  left: 26px;
   right: auto;
-  bottom: 8px;
+  top: 22px;
+  bottom: auto;
 }
 </style>

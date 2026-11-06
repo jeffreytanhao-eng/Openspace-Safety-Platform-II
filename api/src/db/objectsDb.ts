@@ -12,6 +12,8 @@ import { pool } from './pool.js'
 import type { RowDataPacket } from 'mysql2'
 
 export type ClaimType = 'normal' | 'owner'
+/** 认领状态：授权认领需超管审核；普通认领创建即 claimed */
+export type ClaimStatus = 'pending' | 'claimed' | 'rejected'
 
 export interface ObjectRow {
   id: number
@@ -23,8 +25,13 @@ export interface ObjectRow {
   propulsion: string
   accepted_pc: number | null
   accepted_miss_km: number | null
-  claim_status: 'claimed'
+  claim_status: ClaimStatus
   claim_type: ClaimType
+  /** 发起认领申请的用户（授权认领审核通过后，该用户即唯一业主） */
+  requested_by_user_id: number | null
+  reviewed_by: string | null
+  reviewed_at: string | null
+  review_note: string | null
   created_at: string
   updated_at: string
 }
@@ -40,9 +47,13 @@ CREATE TABLE IF NOT EXISTS \`objects\` (
   \`propulsion\`      varchar(60) NOT NULL DEFAULT '',
   \`accepted_pc\`     double NULL COMMENT '组织验收碰撞概率阈值',
   \`accepted_miss_km\` double NULL COMMENT '组织验收最小距离阈值(km)',
-  \`claim_status\`    varchar(20) NOT NULL DEFAULT 'claimed',
+  \`claim_status\`    varchar(20) NOT NULL DEFAULT 'claimed' COMMENT 'pending=待审核 / claimed=已生效 / rejected=已驳回',
   \`claim_type\`      enum('normal','owner') NOT NULL DEFAULT 'normal' COMMENT '认领类型：normal=普通（可多次）/ owner=授权（卫星业主，全局唯一）',
-  \`owner_norad\`     int GENERATED ALWAYS AS (CASE WHEN \`claim_type\` = 'owner' THEN \`norad_id\` ELSE NULL END) STORED COMMENT '授权认领 NORAD（普通认领为 NULL，唯一键保证全局仅一个授权认领）',
+  \`requested_by_user_id\` bigint unsigned NULL COMMENT '发起认领申请的用户（授权认领通过后即唯一业主）',
+  \`reviewed_by\`     varchar(190) NULL COMMENT '审核人（超管邮箱）',
+  \`reviewed_at\`     datetime(3) NULL COMMENT '审核时间',
+  \`review_note\`     varchar(255) NULL COMMENT '审核备注/驳回原因',
+  \`owner_norad\`     int GENERATED ALWAYS AS (CASE WHEN \`claim_type\` = 'owner' AND \`claim_status\` = 'claimed' THEN \`norad_id\` ELSE NULL END) STORED COMMENT '已生效授权认领 NORAD（待审/普通认领为 NULL，唯一键保证全局仅一个生效授权认领）',
   \`created_at\`      datetime(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
   \`updated_at\`      datetime(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3),
   PRIMARY KEY (\`id\`),
@@ -103,7 +114,7 @@ export function ensureObjectsSchema(): Promise<boolean> {
   return schemaReady
 }
 
-/** 旧库迁移（幂等）：全局唯一 uk_norad → uk_org_norad + 唯一授权认领生成列 */
+/** 旧库迁移（幂等）：认领审核字段 + 全局唯一生成列（仅已生效授权认领占用） */
 async function migrateObjectsSchema(): Promise<void> {
   const [cols] = await pool.query<RowDataPacket[]>(
     `SELECT COLUMN_NAME FROM information_schema.columns
@@ -121,27 +132,56 @@ async function migrateObjectsSchema(): Promise<void> {
         COMMENT '认领类型：normal=普通（可多次）/ owner=授权（卫星业主，全局唯一）' AFTER claim_status`
     )
   }
+  // 认领审核字段（第 5 项：授权认领需超管审核）
+  if (!colNames.has('requested_by_user_id')) {
+    await pool.query(
+      `ALTER TABLE objects ADD COLUMN requested_by_user_id bigint unsigned NULL
+        COMMENT '发起认领申请的用户（授权认领通过后即唯一业主）' AFTER claim_type`
+    )
+  }
+  if (!colNames.has('reviewed_by')) {
+    await pool.query(`ALTER TABLE objects ADD COLUMN reviewed_by varchar(190) NULL COMMENT '审核人（超管邮箱）' AFTER requested_by_user_id`)
+  }
+  if (!colNames.has('reviewed_at')) {
+    await pool.query(`ALTER TABLE objects ADD COLUMN reviewed_at datetime(3) NULL COMMENT '审核时间' AFTER reviewed_by`)
+  }
+  if (!colNames.has('review_note')) {
+    await pool.query(`ALTER TABLE objects ADD COLUMN review_note varchar(255) NULL COMMENT '审核备注/驳回原因' AFTER reviewed_at`)
+  }
   if (idxNames.has('uk_norad')) {
     await pool.query('ALTER TABLE objects DROP INDEX uk_norad')
   }
   if (!idxNames.has('uk_org_norad')) {
     await pool.query('ALTER TABLE objects ADD UNIQUE KEY uk_org_norad (org_id, norad_id)')
   }
+  const OWNER_COL = `ADD COLUMN owner_norad int GENERATED ALWAYS AS
+      (CASE WHEN claim_type = 'owner' AND claim_status = 'claimed' THEN norad_id ELSE NULL END) STORED
+      COMMENT '已生效授权认领 NORAD（待审/普通认领为 NULL，唯一键保证全局仅一个生效授权认领）',
+    ADD UNIQUE KEY uk_owner_norad (owner_norad)`
   if (!colNames.has('owner_norad')) {
-    await pool.query(
-      `ALTER TABLE objects
-         ADD COLUMN owner_norad int GENERATED ALWAYS AS (CASE WHEN claim_type = 'owner' THEN norad_id ELSE NULL END) STORED
-           COMMENT '授权认领 NORAD（普通认领为 NULL，唯一键保证全局仅一个授权认领）',
-         ADD UNIQUE KEY uk_owner_norad (owner_norad)`
+    await pool.query(`ALTER TABLE objects ${OWNER_COL}`)
+  } else {
+    const [g] = await pool.query<RowDataPacket[]>(
+      `SELECT GENERATION_EXPRESSION AS expr FROM information_schema.columns
+        WHERE table_schema = DATABASE() AND table_name = 'objects' AND column_name = 'owner_norad'`
     )
-  } else if (!idxNames.has('uk_owner_norad')) {
-    await pool.query('ALTER TABLE objects ADD UNIQUE KEY uk_owner_norad (owner_norad)')
+    const expr = String((g[0] as { expr?: string } | undefined)?.expr ?? '')
+    if (!expr.includes('claim_status')) {
+      // 旧表达式只判断 claim_type → 待审核申请也会占用唯一键，改为仅「已生效」占用
+      if (idxNames.has('uk_owner_norad')) {
+        await pool.query('ALTER TABLE objects DROP INDEX uk_owner_norad')
+      }
+      await pool.query('ALTER TABLE objects DROP COLUMN owner_norad')
+      await pool.query(`ALTER TABLE objects ${OWNER_COL}`)
+    } else if (!idxNames.has('uk_owner_norad')) {
+      await pool.query('ALTER TABLE objects ADD UNIQUE KEY uk_owner_norad (owner_norad)')
+    }
   }
 }
 
 interface RawObject extends RowDataPacket, ObjectRow {}
 
-const COLS = 'id, org_id, norad_id, name, mass_kg, cross_section_m2, propulsion, accepted_pc, accepted_miss_km, claim_status, claim_type, created_at, updated_at'
+const COLS = 'id, org_id, norad_id, name, mass_kg, cross_section_m2, propulsion, accepted_pc, accepted_miss_km, claim_status, claim_type, requested_by_user_id, reviewed_by, reviewed_at, review_note, created_at, updated_at'
 
 export async function listObjectsByOrg(orgId: number): Promise<ObjectRow[]> {
   const [rows] = await pool.query<RawObject[]>(
@@ -149,6 +189,29 @@ export async function listObjectsByOrg(orgId: number): Promise<ObjectRow[]> {
     [orgId]
   )
   return rows as ObjectRow[]
+}
+
+/** 平台账号只读视图：全平台已生效目标（带所属组织名） */
+export async function listAllObjects(): Promise<Array<ObjectRow & { org_name: string }>> {
+  const [rows] = await pool.query<Array<RawObject & { org_name: string | null }>>(
+    `SELECT o.id, o.org_id, o.norad_id, o.name, o.mass_kg, o.cross_section_m2, o.propulsion,
+            o.accepted_pc, o.accepted_miss_km, o.claim_status, o.claim_type,
+            o.requested_by_user_id, o.reviewed_by, o.reviewed_at, o.review_note,
+            o.created_at, o.updated_at, g.name AS org_name
+       FROM objects o LEFT JOIN organizations g ON g.id = o.org_id
+      WHERE o.claim_status = 'claimed'
+      ORDER BY o.id DESC`
+  )
+  return rows.map((r) => ({ ...(r as ObjectRow), org_name: String(r.org_name ?? '') }))
+}
+
+/** 平台账号只读：目标所属组织名 */
+export async function getObjectOrgName(orgId: number): Promise<string> {
+  const [rows] = await pool.query<RowDataPacket[]>(
+    'SELECT name FROM organizations WHERE id = ? LIMIT 1',
+    [orgId]
+  )
+  return String(rows[0]?.name ?? '')
 }
 
 export async function getObjectById(id: number): Promise<ObjectRow | null> {
@@ -165,11 +228,22 @@ export async function getObjectByOrgNorad(orgId: number, noradId: number): Promi
   return (rows[0] as ObjectRow) ?? null
 }
 
-/** 某 NORAD 的授权认领（卫星业主；全局最多一条） */
+/** 某 NORAD 已生效的授权认领（卫星业主；全局最多一条） */
 export async function getOwnerClaim(noradId: number): Promise<ObjectRow | null> {
   const [rows] = await pool.query<RawObject[]>(
-    `SELECT ${COLS} FROM objects WHERE norad_id = ? AND claim_type = 'owner'`,
+    `SELECT ${COLS} FROM objects
+      WHERE norad_id = ? AND claim_type = 'owner' AND claim_status = 'claimed'`,
     [noradId]
+  )
+  return (rows[0] as ObjectRow) ?? null
+}
+
+/** 某用户在某 NORAD 上已生效的授权认领（星历上传/参数维护的权限依据） */
+export async function getOwnerClaimByUser(userId: number, noradId: number): Promise<ObjectRow | null> {
+  const [rows] = await pool.query<RawObject[]>(
+    `SELECT ${COLS} FROM objects
+      WHERE requested_by_user_id = ? AND norad_id = ? AND claim_type = 'owner' AND claim_status = 'claimed'`,
+    [userId, noradId]
   )
   return (rows[0] as ObjectRow) ?? null
 }
@@ -179,6 +253,8 @@ export interface CreateObjectInput {
   noradId: number
   name: string
   claimType?: ClaimType
+  claimStatus?: ClaimStatus
+  requestedByUserId?: number | null
   massKg?: number | null
   crossSectionM2?: number | null
   propulsion?: string
@@ -186,13 +262,16 @@ export interface CreateObjectInput {
 
 export async function createObject(input: CreateObjectInput): Promise<ObjectRow> {
   const [r] = await pool.query(
-    `INSERT INTO objects (org_id, norad_id, name, claim_type, mass_kg, cross_section_m2, propulsion)
-     VALUES (?, ?, ?, ?, ?, ?, ?)`,
+    `INSERT INTO objects
+       (org_id, norad_id, name, claim_type, claim_status, requested_by_user_id, mass_kg, cross_section_m2, propulsion)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     [
       input.orgId,
       input.noradId,
       input.name,
       input.claimType ?? 'normal',
+      input.claimStatus ?? 'claimed',
+      input.requestedByUserId ?? null,
       input.massKg ?? null,
       input.crossSectionM2 ?? null,
       input.propulsion ?? ''
@@ -200,6 +279,153 @@ export async function createObject(input: CreateObjectInput): Promise<ObjectRow>
   )
   const id = Number((r as { insertId: number }).insertId)
   return (await getObjectById(id)) as ObjectRow
+}
+
+/**
+ * 被驳回后重新申请：仅允许对被驳回的本组织原有记录重置状态（owner → pending / normal → claimed）。
+ * 返回 false 表示该记录不存在或不是 rejected 态。
+ */
+export async function resubmitObjectClaim(
+  id: number,
+  input: {
+    claimType: ClaimType
+    requestedByUserId: number
+    massKg?: number | null
+    crossSectionM2?: number | null
+    propulsion?: string
+  }
+): Promise<boolean> {
+  const [r] = await pool.query(
+    `UPDATE objects
+        SET claim_type = ?, claim_status = ?, requested_by_user_id = ?,
+            review_note = NULL, reviewed_by = '', reviewed_at = NULL,
+            mass_kg = ?, cross_section_m2 = ?, propulsion = ?,
+            created_at = CURRENT_TIMESTAMP(3)
+      WHERE id = ? AND claim_status = 'rejected'`,
+    [
+      input.claimType,
+      input.claimType === 'owner' ? 'pending' : 'claimed',
+      input.requestedByUserId,
+      input.massKg ?? null,
+      input.crossSectionM2 ?? null,
+      input.propulsion ?? '',
+      id
+    ]
+  )
+  return Number((r as { affectedRows?: number }).affectedRows || 0) > 0
+}
+
+export interface OwnerClaimReviewRow {
+  id: number
+  norad_id: number
+  claim_status: ClaimStatus
+  created_at: string
+  review_note: string | null
+  org_id: number
+  org_name: string
+  user_id: number | null
+  user_email: string
+}
+
+/** 超管审核列表：授权认领申请（默认只看待审） */
+export async function listOwnerClaims(
+  status: 'pending' | 'claimed' | 'rejected' | 'all' = 'pending'
+): Promise<OwnerClaimReviewRow[]> {
+  const where = status === 'all' ? '' : 'AND o.claim_status = ?'
+  const args = status === 'all' ? [] : [status]
+  const [rows] = await pool.query<RowDataPacket[]>(
+    `SELECT o.id, o.norad_id, o.claim_status, o.created_at, o.review_note,
+            o.org_id, COALESCE(g.name, '') AS org_name,
+            o.requested_by_user_id AS user_id, COALESCE(u.email, '') AS user_email
+       FROM objects o
+       LEFT JOIN organizations g ON g.id = o.org_id
+       LEFT JOIN users u ON u.id = o.requested_by_user_id
+      WHERE o.claim_type = 'owner' ${where}
+      ORDER BY o.created_at DESC LIMIT 500`,
+    args
+  )
+  return rows as unknown as OwnerClaimReviewRow[]
+}
+
+/**
+ * 审核通过：目标仅归该申请用户所有。
+ * 事务内校验无其它已生效授权认领；同时驳回该目标其余待审申请。
+ */
+export async function approveOwnerClaim(
+  id: number,
+  reviewerEmail: string,
+  note = ''
+): Promise<{ ok: boolean; error?: string; row?: ObjectRow }> {
+  const conn = await pool.getConnection()
+  try {
+    await conn.beginTransaction()
+    const [rows] = await conn.query<RowDataPacket[]>(
+      `SELECT id, norad_id, claim_type, claim_status FROM objects WHERE id = ? FOR UPDATE`,
+      [id]
+    )
+    if (!rows.length) {
+      await conn.rollback()
+      return { ok: false, error: '认领申请不存在' }
+    }
+    const r = rows[0] as { id: number; norad_id: number; claim_type: ClaimType; claim_status: ClaimStatus }
+    if (r.claim_type !== 'owner') {
+      await conn.rollback()
+      return { ok: false, error: '该记录不是授权认领申请' }
+    }
+    if (r.claim_status !== 'pending') {
+      await conn.rollback()
+      return { ok: false, error: '该申请已处理' }
+    }
+    const [dup] = await conn.query<RowDataPacket[]>(
+      `SELECT id FROM objects
+        WHERE norad_id = ? AND claim_type = 'owner' AND claim_status = 'claimed' AND id <> ? LIMIT 1`,
+      [r.norad_id, id]
+    )
+    if (dup.length) {
+      await conn.rollback()
+      return { ok: false, error: '该目标已被其他用户认领' }
+    }
+    await conn.query(
+      `UPDATE objects SET claim_status = 'claimed', reviewed_by = ?, reviewed_at = NOW(3), review_note = ? WHERE id = ?`,
+      [reviewerEmail, note.slice(0, 255), id]
+    )
+    await conn.query(
+      `UPDATE objects SET claim_status = 'rejected', reviewed_by = ?, reviewed_at = NOW(3),
+              review_note = '目标已被其他用户认领'
+        WHERE norad_id = ? AND claim_type = 'owner' AND claim_status = 'pending' AND id <> ?`,
+      [reviewerEmail, r.norad_id, id]
+    )
+    await conn.commit()
+    return { ok: true, row: (await getObjectById(id)) ?? undefined }
+  } catch (e) {
+    try {
+      await conn.rollback()
+    } catch {
+      /* ignore */
+    }
+    const msg = (e as Error).message || ''
+    if (msg.includes('uk_owner_norad') || msg.includes('Duplicate entry')) {
+      return { ok: false, error: '该目标已被其他用户认领' }
+    }
+    return { ok: false, error: msg }
+  } finally {
+    conn.release()
+  }
+}
+
+/** 审核驳回 */
+export async function rejectOwnerClaim(
+  id: number,
+  reviewerEmail: string,
+  note = ''
+): Promise<{ ok: boolean; error?: string }> {
+  const [r] = await pool.query(
+    `UPDATE objects SET claim_status = 'rejected', reviewed_by = ?, reviewed_at = NOW(3), review_note = ?
+      WHERE id = ? AND claim_type = 'owner' AND claim_status = 'pending'`,
+    [reviewerEmail, note.slice(0, 255), id]
+  )
+  const affected = Number((r as { affectedRows?: number }).affectedRows ?? 0)
+  return affected ? { ok: true } : { ok: false, error: '申请不存在或已处理' }
 }
 
 export interface UpdateObjectInput {

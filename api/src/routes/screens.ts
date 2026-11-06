@@ -12,13 +12,21 @@ import {
   ensureScreenSchema,
   createScreenJob,
   listScreenJobs,
+  listAllScreenJobs,
   getScreenJob,
+  getScreenJobAny,
   listJobEvents,
   cancelScreenJob
 } from '../db/screenDb.js'
 import { pool } from '../db/pool.js'
 import { cdmIsolation } from '../services/systemPool.js'
 import { kickScreeningRunner, abortActiveScreening } from '../jobs/screening.js'
+import {
+  ensureCaSchema,
+  listUserCaParams,
+  getObjectCaParams,
+  type CaParams
+} from '../db/caDb.js'
 import type { RowDataPacket } from 'mysql2'
 
 const router = Router()
@@ -34,6 +42,12 @@ function requireOrg(req: ScopedRequest, res: Response, next: NextFunction): void
     return
   }
   next()
+}
+
+/** 平台账号（超管/运维）：业务页走全平台只读视图 */
+function isPlatformAccount(req: ScopedRequest): boolean {
+  const role = req.auth?.user.role
+  return !!role && role.startsWith('platform_')
 }
 
 router.use('/screens', requireAuth, async (req, res, next) => {
@@ -66,9 +80,9 @@ router.post('/screens', requireOrg, async (req: ScopedRequest, res) => {
     const n = Number(v)
     return Number.isFinite(n) ? n : dflt
   }
-  const windowH = Math.min(168, Math.max(1, Math.round(numOr(body.windowH, 72))))
-  const missMaxKm = Math.min(50, Math.max(0.5, numOr(body.missMaxKm, 10)))
-  const hbrM = Math.min(1000, Math.max(1, numOr(body.hbrM, 15)))
+  let windowH = Math.min(168, Math.max(1, Math.round(numOr(body.windowH, 72))))
+  let missMaxKm = Math.min(50, Math.max(0.5, numOr(body.missMaxKm, 10)))
+  let hbrM = Math.min(1000, Math.max(1, numOr(body.hbrM, 15)))
 
   // R0-2：主星可选子集（大星座分批筛查）；不传则默认全部目标
   let primaryNorads: number[] | undefined
@@ -120,6 +134,49 @@ router.post('/screens', requireOrg, async (req: ScopedRequest, res) => {
       )
       return
     }
+  }
+
+  // 第 3/4 项：参数来源 default（组织默认）| mine1 | mine2（个人参数组）| target（目标自定义，仅单主星业主）
+  const paramsSource = String((body as Record<string, unknown>).paramsSource || 'default')
+  if (paramsSource !== 'default') {
+    if (!(await ensureCaSchema())) {
+      res.status(503).json(fail(503, '数据库不可用'))
+      return
+    }
+    let base: CaParams | null = null
+    if (paramsSource === 'mine1' || paramsSource === 'mine2') {
+      const slot = paramsSource === 'mine1' ? 1 : 2
+      base = (await listUserCaParams(req.auth!.user.id)).find((s) => s.slot === slot)?.params ?? null
+      if (!base) {
+        res.status(400).json(fail(400, `自定义参数组 ${slot} 尚未配置，请先在设置页保存`))
+        return
+      }
+    } else if (paramsSource === 'target') {
+      if (!primaryNorads || primaryNorads.length !== 1) {
+        res.status(400).json(fail(400, '目标自定义参数仅适用于单个主星任务，请用 primaryNorads 指定一颗'))
+        return
+      }
+      const [claimRows] = await pool.query<Array<RowDataPacket & { id: number }>>(
+        `SELECT id FROM objects
+          WHERE norad_id = ? AND org_id = ? AND claim_type = 'owner' AND claim_status = 'claimed' LIMIT 1`,
+        [primaryNorads[0], org.id]
+      )
+      if (!claimRows.length) {
+        res.status(403).json(fail(403, '该目标不是本组织业主认领目标，无法使用目标自定义参数'))
+        return
+      }
+      base = await getObjectCaParams(Number(claimRows[0].id))
+      if (!base) {
+        res.status(400).json(fail(400, '该目标尚未保存自定义参数'))
+        return
+      }
+    } else {
+      res.status(400).json(fail(400, 'paramsSource 仅支持 default | mine1 | mine2 | target'))
+      return
+    }
+    if (!Number.isFinite(Number(body.windowH))) windowH = Math.min(168, Math.max(1, Math.round(base.window_h)))
+    if (!Number.isFinite(Number(body.missMaxKm))) missMaxKm = Math.min(50, Math.max(0.5, base.screen_distance_km))
+    if (!Number.isFinite(Number(body.hbrM))) hbrM = Math.min(1000, Math.max(1, base.hbr_m))
   }
 
   // R2-8：数据源枚举（一单一源；AOE / Stargaze 本轮不提供可选项）
@@ -208,21 +265,38 @@ router.post('/screens/:id/cancel', requireOrg, async (req: ScopedRequest, res) =
   res.json(ok({ cancel: r, job }))
 })
 
-/** 任务列表（本组织，最新在前） */
-router.get('/screens', requireOrg, async (req: ScopedRequest, res) => {
-  const jobs = await listScreenJobs(req.auth!.org!.id)
+/** 任务列表（本组织，最新在前）；平台账号返回全平台只读列表 */
+router.get('/screens', async (req: ScopedRequest, res) => {
+  if (!req.auth?.org || !req.auth.user.orgId) {
+    if (!isPlatformAccount(req)) {
+      res.status(403).json(fail(403, '需要组织账号'))
+      return
+    }
+    res.json(ok(await listAllScreenJobs()))
+    return
+  }
+  const jobs = await listScreenJobs(req.auth.org.id)
   res.json(ok(jobs))
 })
 
-/** 任务详情 + 事件列表 */
-router.get('/screens/:id', requireOrg, async (req: ScopedRequest, res) => {
+/** 任务详情 + 事件列表（平台账号可查看任意组织任务） */
+router.get('/screens/:id', async (req: ScopedRequest, res) => {
   const id = Number(req.params.id)
   if (!Number.isInteger(id) || id <= 0) {
     res.status(400).json(fail(400, '任务 ID 无效'))
     return
   }
-  const job = await getScreenJob(req.auth!.org!.id, id)
+  const platform = isPlatformAccount(req)
+  const job = req.auth?.org && req.auth.user.orgId
+    ? await getScreenJob(req.auth.org.id, id)
+    : platform
+      ? await getScreenJobAny(id)
+      : null
   if (!job) {
+    if (!platform && (!req.auth?.org || !req.auth.user.orgId)) {
+      res.status(403).json(fail(403, '需要组织账号'))
+      return
+    }
     res.status(404).json(fail(404, '筛查任务不存在'))
     return
   }

@@ -26,10 +26,20 @@ import { buildSatrec, propagateJ2000 } from '../screen/coarse.js'
 import { tleCovariance } from '../screen/covariance.js'
 import { encounterPlane, foster2D } from '../screen/pc.js'
 import { alfano1D, chan2D } from '../screen/pcMethods.js'
-import { norm3 } from '../screen/frames.js'
+import { norm3, uvwBasis, dot } from '../screen/frames.js'
 import type { CatalogObject, Vec3 } from '../screen/types.js'
 import { levelOfEvent, LEVEL_RANK, type EventLevel, type LevelBasis } from '../screen/levels.js'
-import { ensureCaSchema, getCaDefaults, createPcRun, listPcRuns } from '../db/caDb.js'
+import {
+  ensureCaSchema,
+  getCaDefaults,
+  caDefaultsToParams,
+  listUserCaParams,
+  getObjectCaParams,
+  CA_SYSTEM_DEFAULTS,
+  type CaParams,
+  createPcRun,
+  listPcRuns
+} from '../db/caDb.js'
 
 const router = Router()
 
@@ -670,21 +680,7 @@ router.post('/events/pc-compare', requireAuth, async (req: ScopedRequest, res) =
 
 /* ----------------------- 参数重算（F1）：run 化 + 配额 + 对比 ----------------------- */
 
-/** 系统级缺省 CA 参数（与 ca.ts CA_SUGGESTIONS 的数值保持一致） */
-const CA_SYSTEM_DEFAULTS = {
-  hbr_mode: 'single',
-  hbr_m: 15,
-  hbr_a_m: null as number | null,
-  hbr_b_m: null as number | null,
-  accepted_pc: 1e-4,
-  accepted_miss_km: 1,
-  screen_distance_km: 10,
-  covariance_mode: 'tle-age',
-  propagator: 'sgp4',
-  window_h: 72,
-  step_s: 30,
-  methods: ['foster', 'chan'] as Array<'foster' | 'chan' | 'alfano'>
-}
+/** 系统级缺省 CA 参数统一取自 caDb.CA_SYSTEM_DEFAULTS（与设置页建议值同源） */
 
 function parseEventKey(raw: string): { a: number; b: number; tcaMs: number } | null {
   const m = /^(\d+):(\d+):(\d+)$/.exec(raw)
@@ -725,6 +721,35 @@ router.post('/events/:key/recompute', requireAuth, async (req: ScopedRequest, re
 
   const orgDefaults = await getCaDefaults(auth.org.id)
   const body = (req.body ?? {}) as Record<string, unknown>
+  // 第 3/4 项：参数来源 default（组织默认）| mine1 | mine2（个人参数组）| target（目标自定义，仅业主）
+  const paramsSource = String(body.paramsSource || 'default')
+  let base: CaParams = caDefaultsToParams(orgDefaults)
+  if (paramsSource === 'mine1' || paramsSource === 'mine2') {
+    const slot = paramsSource === 'mine1' ? 1 : 2
+    const slotParams = (await listUserCaParams(auth.user.id)).find((s) => s.slot === slot)?.params
+    if (!slotParams) {
+      res.status(400).json(fail(400, `自定义参数组 ${slot} 尚未配置，请先在设置页保存`))
+      return
+    }
+    base = slotParams
+  } else if (paramsSource === 'target') {
+    const [claimRows] = await pool.query<Array<RowDataPacket & { id: number }>>(
+      `SELECT id FROM objects
+        WHERE norad_id IN (?, ?) AND org_id = ? AND claim_type = 'owner' AND claim_status = 'claimed'
+        LIMIT 1`,
+      [a, b, auth.org.id]
+    )
+    if (!claimRows.length) {
+      res.status(403).json(fail(403, '交会双方均非本组织业主认领目标，无法使用目标自定义参数'))
+      return
+    }
+    const targetParams = await getObjectCaParams(Number(claimRows[0].id))
+    if (!targetParams) {
+      res.status(400).json(fail(400, '该目标尚未保存自定义参数'))
+      return
+    }
+    base = targetParams
+  }
   const numOr = (reqVal: unknown, orgVal: number | null | undefined, sys: number, lo: number, hi: number): number => {
     if (Number.isFinite(Number(reqVal))) return Math.min(hi, Math.max(lo, Number(reqVal)))
     if (Number.isFinite(Number(orgVal))) return Math.min(hi, Math.max(lo, Number(orgVal)))
@@ -735,35 +760,35 @@ router.post('/events/:key/recompute', requireAuth, async (req: ScopedRequest, re
   const hbrMode: string =
     body.hbrMode === 'both' || body.hbrMode === 'single'
       ? String(body.hbrMode)
-      : (orgDefaults?.hbr_mode ?? CA_SYSTEM_DEFAULTS.hbr_mode)
+      : base.hbr_mode
   let hbrM: number
   let hbrA: number | null = null
   let hbrB: number | null = null
   if (hbrMode === 'both') {
-    hbrA = numOr(body.hbrAM, orgDefaults?.hbr_a_m, CA_SYSTEM_DEFAULTS.hbr_m, 0.1, 1000)
-    hbrB = numOr(body.hbrBM, orgDefaults?.hbr_b_m, CA_SYSTEM_DEFAULTS.hbr_m, 0.1, 1000)
+    hbrA = numOr(body.hbrAM, base.hbr_a_m, CA_SYSTEM_DEFAULTS.hbr_m, 0.1, 1000)
+    hbrB = numOr(body.hbrBM, base.hbr_b_m, CA_SYSTEM_DEFAULTS.hbr_m, 0.1, 1000)
     hbrM = Math.round(Math.sqrt(hbrA * hbrA + hbrB * hbrB) * 100) / 100
   } else {
-    hbrM = numOr(body.hbrM, orgDefaults?.hbr_m, CA_SYSTEM_DEFAULTS.hbr_m, 1, 1000)
+    hbrM = numOr(body.hbrM, base.hbr_m, CA_SYSTEM_DEFAULTS.hbr_m, 1, 1000)
   }
 
-  const acceptedPc = numOr(body.acceptedPc, orgDefaults?.accepted_pc, CA_SYSTEM_DEFAULTS.accepted_pc, 1e-9, 1)
-  const acceptedMissKm = numOr(body.acceptedMissKm, orgDefaults?.accepted_miss_km, CA_SYSTEM_DEFAULTS.accepted_miss_km, 0.01, 100)
-  const screenDistanceKm = numOr(body.screenDistanceKm, orgDefaults?.screen_distance_km, CA_SYSTEM_DEFAULTS.screen_distance_km, 0.5, 100)
+  const acceptedPc = numOr(body.acceptedPc, base.accepted_pc, CA_SYSTEM_DEFAULTS.accepted_pc, 1e-9, 1)
+  const acceptedMissKm = numOr(body.acceptedMissKm, base.accepted_miss_km, CA_SYSTEM_DEFAULTS.accepted_miss_km, 0.01, 100)
+  const screenDistanceKm = numOr(body.screenDistanceKm, base.screen_distance_km, CA_SYSTEM_DEFAULTS.screen_distance_km, 0.5, 100)
   const covarianceMode = body.covarianceMode === 'cdm' || body.covarianceMode === 'tle-age'
     ? String(body.covarianceMode)
-    : (orgDefaults?.covariance_mode ?? CA_SYSTEM_DEFAULTS.covariance_mode)
+    : base.covariance_mode
   const propagator = body.propagator === 'numeric' || body.propagator === 'sgp4'
     ? String(body.propagator)
-    : (orgDefaults?.propagator ?? CA_SYSTEM_DEFAULTS.propagator)
-  const windowH = Math.round(numOr(body.windowH, orgDefaults?.window_h, CA_SYSTEM_DEFAULTS.window_h, 1, 168))
-  const stepS = Math.round(numOr(body.stepS, orgDefaults?.step_s, CA_SYSTEM_DEFAULTS.step_s, 1, 3600))
+    : base.propagator
+  const windowH = Math.round(numOr(body.windowH, base.window_h, CA_SYSTEM_DEFAULTS.window_h, 1, 168))
+  const stepS = Math.round(numOr(body.stepS, base.step_s, CA_SYSTEM_DEFAULTS.step_s, 1, 3600))
 
-  // 方法集：请求体 > 组织默认 > 系统缺省
+  // 方法集：请求体 > 参数来源 > 系统缺省
   const allowed = new Set(['foster', 'chan', 'alfano'])
   let methods = Array.isArray(body.methods)
     ? (body.methods.map((s) => String(s).toLowerCase()).filter((s) => allowed.has(s)) as Array<'foster' | 'chan' | 'alfano'>)
-    : (orgDefaults?.pc_methods ?? CA_SYSTEM_DEFAULTS.methods.join(','))
+    : base.pc_methods
         .split(',')
         .map((s) => s.trim().toLowerCase())
         .filter((s) => allowed.has(s)) as Array<'foster' | 'chan' | 'alfano'>
@@ -839,7 +864,8 @@ router.post('/events/:key/recompute', requireAuth, async (req: ScopedRequest, re
     window_h: windowH,
     step_s: stepS,
     methods,
-    engine_notes: engineNotes
+    engine_notes: engineNotes,
+    params_source: paramsSource
   }
 
   const runId = await createPcRun({
@@ -874,6 +900,11 @@ router.post('/events/:key/recompute', requireAuth, async (req: ScopedRequest, re
 router.get('/events/:key/recompute', requireAuth, async (req: ScopedRequest, res) => {
   const auth = req.auth
   if (!auth?.org || !auth.user.orgId) {
+    // 平台账号只读：重算 run 按组织隔离，平台视图不展示具体组织的计算记录
+    if (auth?.user.role?.startsWith('platform_')) {
+      res.json(ok({ runs: [], platform: true }))
+      return
+    }
     res.status(403).json(fail(403, '需要组织账号'))
     return
   }
@@ -910,5 +941,86 @@ function safeParse<T = Record<string, unknown>>(s: string | null): T | null {
     return null
   }
 }
+
+/**
+ * GET /cgi/events/:key/relative-motion?minutes=30&stepS=30  （R2-16）
+ * TCA 附近相对运动时间序列：双方 sat_tle 经 SGP4 传播到同一惯性系（J2000），
+ * d = r_B − r_A 再投到该时刻主星 A 的 UVW(=RIC) 基：
+ *   dR 径向（远离地球为正）、dI 迹向（沿轨道前进为正）、dC 法向（轨道面法向）。
+ * 数据来源固定为 TLE/SGP4，前端必须原样标注，不得暗示精密定轨。
+ */
+router.get('/events/:key/relative-motion', requireAuth, async (req, res) => {
+  const parsed = parseEventKey(String(req.params.key ?? ''))
+  if (!parsed) {
+    res.status(400).json(fail(400, '事件 key 无效'))
+    return
+  }
+  const { a, b, tcaMs } = parsed
+  const clamp = (v: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, v))
+  const minutes = clamp(Math.round(Number(req.query.minutes) || 30), 1, 240)
+  const stepS = clamp(Math.round(Number(req.query.stepS) || 30), 5, 600)
+
+  interface TlePick extends RowDataPacket {
+    norad_id: number
+    object_name: string
+    tle_line1: string
+    tle_line2: string
+  }
+  try {
+    const [rows] = await pool.query<TlePick[]>(
+      `SELECT norad_id, object_name, tle_line1, tle_line2 FROM sat_tle WHERE norad_id IN (?, ?)`,
+      [a, b]
+    )
+    const ta = rows.find((t) => Number(t.norad_id) === a) ?? null
+    const tb = rows.find((t) => Number(t.norad_id) === b) ?? null
+    if (!ta || !tb) {
+      res.status(404).json(fail(404, '缺少双方 TLE，无法计算相对运动'))
+      return
+    }
+    const recA = buildSatrec({ line1: ta.tle_line1, line2: ta.tle_line2 } as unknown as CatalogObject)
+    const recB = buildSatrec({ line1: tb.tle_line1, line2: tb.tle_line2 } as unknown as CatalogObject)
+    if (!recA || !recB) {
+      res.status(422).json(fail(422, 'TLE 解析失败，无法计算相对运动'))
+      return
+    }
+
+    const halfMs = minutes * 60 * 1000
+    const stepMs = stepS * 1000
+    const samples: Array<{ tMs: number; dR: number; dI: number; dC: number; dist: number }> = []
+    for (let off = -halfMs; off <= halfMs; off += stepMs) {
+      const t = tcaMs + off
+      const pa = propagateJ2000(recA, t)
+      const pb = propagateJ2000(recB, t)
+      if (!pa || !pb) continue
+      const d: Vec3 = [pb.r[0] - pa.r[0], pb.r[1] - pa.r[1], pb.r[2] - pa.r[2]]
+      const m = uvwBasis(pa.r, pa.v)
+      const dR = dot(m[0], d)
+      const dI = dot(m[1], d)
+      const dC = dot(m[2], d)
+      samples.push({
+        tMs: t,
+        dR: Math.round(dR * 1000) / 1000,
+        dI: Math.round(dI * 1000) / 1000,
+        dC: Math.round(dC * 1000) / 1000,
+        dist: Math.round(Math.hypot(dR, dI, dC) * 1000) / 1000
+      })
+    }
+    res.json(
+      ok({
+        noradA: a,
+        noradB: b,
+        tcaMs,
+        minutes,
+        stepS,
+        source: 'tle-sgp4',
+        names: { a: ta.object_name, b: tb.object_name },
+        samples
+      })
+    )
+  } catch (e) {
+    console.error('[events] relative-motion failed:', (e as Error).message)
+    res.status(500).json(fail(500, '相对运动计算失败'))
+  }
+})
 
 export default router

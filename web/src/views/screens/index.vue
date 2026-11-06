@@ -12,9 +12,14 @@ import {
   type ScreenJobStatus
 } from '@/api/screens'
 import { listObjects, syncTle, type ManagedObject, type SyncTleResult } from '@/api/objects'
+import { getCaDefaults, getCaProfiles } from '@/api/ca'
 import { AuthError } from '@/api/auth'
+import { useAuthStore } from '@/stores/auth'
 
 const { t } = useI18n()
+const auth = useAuthStore()
+/** 平台账号（无组织）：全平台只读视图 */
+const isPlatform = computed(() => !auth.org)
 
 /** 与后端 SCREEN_MAX_PRIMARY 默认值保持一致；后端为准，超限时以其报错文案提示 */
 const MAX_PRIMARY = 50
@@ -150,14 +155,15 @@ async function submit() {
   }
   submitting.value = true
   try {
-    const job = await createScreen({
-      windowH: w,
-      missMaxKm: m,
-      hbrM: h,
+    const payloadBase = {
+      ...(paramsSource.value === 'default'
+        ? { windowH: w, missMaxKm: m, hbrM: h }
+        : { paramsSource: paramsSource.value }),
       primaryNorads: subset,
       primarySource: primarySource.value,
       secondarySource: secondarySource.value
-    })
+    }
+    const job = await createScreen(payloadBase)
     await loadJobs()
     selectJob(job.id)
   } catch (e) {
@@ -221,9 +227,41 @@ async function loadAll() {
   loading.value = true
   try {
     await Promise.all([loadJobs(), loadManaged()])
+    void prefillFromOrgDefaults()
     if (!selectedId.value && jobs.value.length) await selectJob(jobs.value[0].id)
   } finally {
     loading.value = false
+  }
+}
+
+/**
+ * R2-14：用组织 CA 默认预填筛查参数（窗长 / HBR），与设置页保持同一口径。
+ * 本次任务仍可手动覆盖；组织未设默认或无组织权限时保留系统建议值。
+ */
+async function prefillFromOrgDefaults() {
+  try {
+    const { defaults } = await getCaDefaults()
+    if (!defaults) return
+    windowH.value = defaults.window_h
+    if (Number(defaults.hbr_m) > 0) hbrM.value = Number(defaults.hbr_m)
+  } catch {
+    // 未登录 / 平台账号无组织：保持系统建议值
+  }
+}
+
+/* 第 4 项：个人参数组可用性（未配置的组禁用选项） */
+const paramsSource = ref<'default' | 'mine1' | 'mine2' | 'target'>('default')
+const slotReady = ref<Record<number, boolean>>({ 1: false, 2: false })
+
+async function loadProfiles() {
+  try {
+    const r = await getCaProfiles()
+    slotReady.value = {
+      1: !!r.mine.find((x) => x.slot === 1)?.params,
+      2: !!r.mine.find((x) => x.slot === 2)?.params
+    }
+  } catch {
+    /* 未登录 / 无组织时只保留默认参数 */
   }
 }
 
@@ -239,6 +277,7 @@ function tickPoll() {
 
 onMounted(() => {
   void loadAll()
+  void loadProfiles()
   pollTimer = window.setInterval(tickPoll, 3000)
 })
 onUnmounted(() => {
@@ -314,20 +353,37 @@ function pcSourceLabel(e: ScreenEvent): string {
               <div>
                 <div class="h-title">{{ t('scr.newTitle') }}</div>
                 <div class="h-sub">{{ t('scr.newSub') }}</div>
+                <div v-if="isPlatform" class="pick-hint">{{ t('scr.platformReadonly') }}</div>
               </div>
             </header>
             <div class="form">
               <label class="field">
+                <span class="lbl">参数来源</span>
+                <select v-model="paramsSource">
+                  <option value="default">默认参数（组织）</option>
+                  <option value="mine1" :disabled="!slotReady[1]">我的参数组 1{{ slotReady[1] ? '' : '（未配置）' }}</option>
+                  <option value="mine2" :disabled="!slotReady[2]">我的参数组 2{{ slotReady[2] ? '' : '（未配置）' }}</option>
+                  <option value="target">目标自定义参数（业主）</option>
+                </select>
+              </label>
+              <div v-if="paramsSource !== 'default'" class="pick-hint">
+                {{
+                  paramsSource === 'target'
+                    ? '使用业主为该目标保存的自定义参数；仅支持单一主星任务。'
+                    : '使用你在设置页保存的自定义参数组，本页窗长/筛查距离/HBR 输入将不再生效。'
+                }}
+              </div>
+              <label class="field">
                 <span class="lbl">{{ t('scr.window') }}</span>
-                <input v-model.number="windowH" type="number" min="1" max="168" step="1" />
+                <input v-model.number="windowH" type="number" min="1" max="168" step="1" :disabled="paramsSource !== 'default'" />
               </label>
               <label class="field">
                 <span class="lbl">{{ t('scr.missMax') }}</span>
-                <input v-model.number="missMaxKm" type="number" min="0.5" max="50" step="0.5" />
+                <input v-model.number="missMaxKm" type="number" min="0.5" max="50" step="0.5" :disabled="paramsSource !== 'default'" />
               </label>
               <label class="field">
                 <span class="lbl">{{ t('scr.hbr') }}</span>
-                <input v-model.number="hbrM" type="number" min="1" max="1000" step="1" />
+                <input v-model.number="hbrM" type="number" min="1" max="1000" step="1" :disabled="paramsSource !== 'default'" />
               </label>
 
               <!-- R2-8：数据源（一单一源；AOE / Stargaze 本轮不提供） -->
@@ -396,7 +452,7 @@ function pcSourceLabel(e: ScreenEvent): string {
                 <div v-else-if="managedLoaded" class="pick-hint">{{ t('scr.noManaged') }}</div>
               </div>
 
-              <button type="button" class="primary" :disabled="submitting" @click="submit">
+              <button type="button" class="primary" :disabled="submitting || isPlatform" @click="submit">
                 {{ submitting ? t('scr.submitting') : t('scr.submit') }}
               </button>
               <div v-if="submitError" class="err">{{ submitError }}</div>
@@ -456,7 +512,7 @@ function pcSourceLabel(e: ScreenEvent): string {
                   <span class="state" :class="STATUS_CLASS[j.status]">{{ t(statusLabel(j.status)) }}</span>
                   <span class="when">{{ fmtWhen(j.queued_at) }}</span>
                   <button
-                    v-if="canCancel(j)"
+                    v-if="canCancel(j) && !isPlatform"
                     type="button"
                     class="cancel"
                     :disabled="cancellingId === j.id"

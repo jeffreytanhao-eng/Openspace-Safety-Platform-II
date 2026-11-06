@@ -13,10 +13,13 @@ import { getEffectiveLimits, getUsage } from '../db/planDb.js'
 import {
   ensureObjectsSchema,
   listObjectsByOrg,
+  listAllObjects,
   getObjectById,
+  getObjectOrgName,
   getObjectByOrgNorad,
   getOwnerClaim,
   createObject,
+  resubmitObjectClaim,
   updateObject,
   deleteObject,
   countBoundEphem,
@@ -24,6 +27,16 @@ import {
   type ClaimType,
   type ObjectRow
 } from '../db/objectsDb.js'
+import {
+  ensureCaSchema,
+  getCaDefaults,
+  getObjectCaParams,
+  saveObjectCaParams,
+  deleteObjectCaParams,
+  caDefaultsToParams,
+  mergeCaParams
+} from '../db/caDb.js'
+import { sanitizeCaPatch } from './ca.js'
 
 const router = Router()
 
@@ -35,6 +48,10 @@ function requireOwnerClaim(row: ObjectRow, org: AuthContext['org'], res: Respons
     res.status(403).json(
       fail(403, '关注仅用于学习/教学/模拟科研，档案参数与星历绑定只能由业主认领（卫星业主）维护')
     )
+    return false
+  }
+  if (row.claim_status !== 'claimed') {
+    res.status(403).json(fail(403, '业主认领申请尚未通过超管审核，审核通过后才能维护参数与星历'))
     return false
   }
   if (!org || org.plan !== 'vip' || org.status !== 'active') {
@@ -55,6 +72,12 @@ function requireOrg(req: ScopedRequest, res: Response, next: NextFunction): void
   next()
 }
 
+/** 平台账号（超管/运维）：业务页走全平台只读视图 */
+function isPlatformAccount(req: ScopedRequest): boolean {
+  const role = req.auth?.user.role
+  return !!role && role.startsWith('platform_')
+}
+
 /**
  * C0 业主认领闸门：仅 plan=vip 且 status=active 的组织可业主认领（卫星业主）；
  * 免费/普通档一律 403，仅保留关注（watch）。前端隐藏不算数，API 强制。
@@ -69,7 +92,7 @@ function ownerClaimAllowed(org: AuthContext['org'], res: Response): boolean {
 
 /** 全部路由先过 requireAuth，进入业务前确保 schema（限定 /objects 前缀，避免拦截挂在后续的公开路由） */
 router.use('/objects', requireAuth, async (req, res, next) => {
-  if (!(await ensureObjectsSchema())) {
+  if (!(await ensureObjectsSchema()) || !(await ensureCaSchema())) {
     res.status(503).json(fail(503, '数据库不可用'))
     return
   }
@@ -80,6 +103,7 @@ interface SatTleInfo extends RowDataPacket {
   norad_id: number
   object_name: string
   object_type: string
+  intl_desig: string | null
   regime: string
   epoch: string | null
   incl: number | null
@@ -91,7 +115,8 @@ interface SatTleInfo extends RowDataPacket {
 
 async function satTleOf(noradId: number): Promise<SatTleInfo | null> {
   const [rows] = await pool.query<SatTleInfo[]>(
-    `SELECT norad_id, object_name, object_type, regime, epoch, incl, apogee, perigee, tle_line1, tle_line2
+    `SELECT norad_id, object_name, object_type, intl_desig, regime, epoch, incl, apogee, perigee,
+            tle_line1, tle_line2
      FROM sat_tle WHERE norad_id = ? LIMIT 1`,
     [noradId]
   )
@@ -102,9 +127,10 @@ async function satTleOf(noradId: number): Promise<SatTleInfo | null> {
     try {
       const rec = twoline2satrec(row.tle_line1, row.tle_line2)
       const mu = 398600.4418
-      const nRadMin = Number(rec.no)
-      if (Number.isFinite(nRadMin) && nRadMin > 0) {
-        const aKm = Math.cbrt(mu / Math.pow((nRadMin * 2 * Math.PI) / 86400, 2))
+      // rec.no 为 rad/min，先换算成 rad/s（与 jobs/screening 的 apsisFromTle 同口径）
+      const nRadS = Number(rec.no) / 60
+      if (Number.isFinite(nRadS) && nRadS > 0) {
+        const aKm = Math.cbrt(mu / (nRadS * nRadS))
         const e = Number(rec.ecco)
         if (Number.isFinite(aKm) && Number.isFinite(e)) {
           const RE = 6378.137
@@ -144,15 +170,32 @@ router.get('/objects/lookup/:noradId', async (req, res) => {
       owner_claim: owner
         ? { id: owner.id, orgId: owner.org_id, isMine: owner.org_id === orgId }
         : null,
-      my_claim: mine ? { id: mine.id, claimType: mine.claim_type } : null,
+      my_claim: mine
+        ? {
+            id: mine.id,
+            claimType: mine.claim_type,
+            claimStatus: mine.claim_status,
+            reviewNote: mine.review_note
+          }
+        : null,
       owner_scope: scope ? { configured: scope.configured, allowed: scope.allowed, matched: scope.matched } : null
     })
   )
 })
 
-/** 本组织目标列表 */
-router.get('/objects', requireOrg, async (req: ScopedRequest, res) => {
-  const orgId = Number(req.auth!.user.orgId)
+/** 本组织目标列表；平台账号返回全平台只读列表（带所属组织名） */
+router.get('/objects', async (req: ScopedRequest, res) => {
+  if (!req.auth?.org || !req.auth.user.orgId) {
+    if (!isPlatformAccount(req)) {
+      res.status(403).json(fail(403, '需要组织账号'))
+      return
+    }
+    const all = await listAllObjects()
+    const bound = await countBoundEphem(all.map((o) => o.id))
+    res.json(ok(all.map((o) => ({ ...o, bound_ephemerides: bound.get(o.id) ?? 0 }))))
+    return
+  }
+  const orgId = Number(req.auth.user.orgId)
   const list = await listObjectsByOrg(orgId)
   const bound = await countBoundEphem(list.map((o) => o.id))
   res.json(ok(list.map((o) => ({ ...o, bound_ephemerides: bound.get(o.id) ?? 0 }))))
@@ -186,7 +229,7 @@ router.post('/objects', requireOrg, async (req: ScopedRequest, res) => {
     return
   }
   const mine = await getObjectByOrgNorad(orgId, norad)
-  if (mine) {
+  if (mine && mine.claim_status !== 'rejected') {
     res.status(409).json(
       fail(409, `本组织已认领该目标（${mine.claim_type === 'owner' ? '业主认领' : '关注'}）`)
     )
@@ -217,15 +260,57 @@ router.post('/objects', requireOrg, async (req: ScopedRequest, res) => {
   const mass = body.massKg === undefined || body.massKg === null || body.massKg === '' ? null : Number(body.massKg)
   const cs = body.crossSectionM2 === undefined || body.crossSectionM2 === null || body.crossSectionM2 === '' ? null : Number(body.crossSectionM2)
   try {
+    // 曾经被驳回的本组织记录：重置后重新进入审核流（避免唯一键冲突）
+    if (mine) {
+      const okResubmit = await resubmitObjectClaim(mine.id, {
+        claimType,
+        requestedByUserId: req.auth!.user.id,
+        massKg: mass !== null && Number.isFinite(mass) ? mass : null,
+        crossSectionM2: cs !== null && Number.isFinite(cs) ? cs : null,
+        propulsion: typeof body.propulsion === 'string' ? body.propulsion.slice(0, 60) : ''
+      })
+      if (!okResubmit) {
+        res.status(409).json(fail(409, '认领冲突：该目标状态已变化，请刷新后重试'))
+        return
+      }
+      const row = await getObjectById(mine.id)
+      if (claimType === 'owner') {
+        res.json(
+          ok({
+            ...row,
+            sat: tle,
+            pending_review: true,
+            message: '认领申请已重新提交，等待平台超管审核'
+          })
+        )
+        return
+      }
+      res.json(ok({ ...row, sat: tle }))
+      return
+    }
     const row = await createObject({
       orgId,
       noradId: norad,
       name: tle.object_name || `NORAD ${norad}`,
       claimType,
+      // 授权认领（卫星业主）需超管审核：先落 pending，审核通过后才占用全局唯一业主位
+      claimStatus: claimType === 'owner' ? 'pending' : 'claimed',
+      requestedByUserId: req.auth!.user.id,
       massKg: mass !== null && Number.isFinite(mass) ? mass : null,
       crossSectionM2: cs !== null && Number.isFinite(cs) ? cs : null,
       propulsion: typeof body.propulsion === 'string' ? body.propulsion.slice(0, 60) : ''
     })
+    if (claimType === 'owner') {
+      res.json(
+        ok({
+          ...row,
+          sat: tle,
+          pending_review: true,
+          message: '认领申请已提交，等待平台超管审核；审核通过后目标才归本用户所有'
+        })
+      )
+      return
+    }
     res.json(ok({ ...row, sat: tle }))
   } catch (e) {
     if ((e as { code?: string }).code === 'ER_DUP_ENTRY') {
@@ -376,15 +461,16 @@ router.post('/objects/batch-claim', requireOrg, async (req: ScopedRequest, res) 
   )
 })
 
-/** 目标详情：档案 + 最新轨道要素 + 绑定星历 */
-router.get('/objects/:id', requireOrg, async (req: ScopedRequest, res) => {
+/** 目标详情：档案 + 最新轨道要素 + 绑定星历（平台账号只读任意组织目标） */
+router.get('/objects/:id', async (req: ScopedRequest, res) => {
   const id = Number(req.params.id)
   const row = Number.isInteger(id) ? await getObjectById(id) : null
   if (!row) {
     res.status(404).json(fail(404, '目标不存在'))
     return
   }
-  if (row.org_id !== Number(req.auth!.user.orgId)) {
+  const platform = isPlatformAccount(req)
+  if (!platform && row.org_id !== Number(req.auth?.user.orgId)) {
     res.status(403).json(fail(403, '无权查看其他组织的目标'))
     return
   }
@@ -394,7 +480,10 @@ router.get('/objects/:id', requireOrg, async (req: ScopedRequest, res) => {
      WHERE bound_object_id = ? ORDER BY published_at DESC LIMIT 50`,
     [id]
   )
-  res.json(ok({ ...row, sat, ephemerides: ephems }))
+  // 目标级自定义参数（仅业主维护；随详情返回给本组织界面展示）
+  const caParams = await getObjectCaParams(id)
+  const orgName = platform ? await getObjectOrgName(row.org_id) : ''
+  res.json(ok({ ...row, sat, ephemerides: ephems, ca_params: caParams, org_name: orgName }))
 })
 
 /** 档案编辑 */
@@ -425,7 +514,20 @@ router.patch('/objects/:id', requireOrg, async (req: ScopedRequest, res) => {
     acceptedPc: numOrNull(b.acceptedPc),
     acceptedMissKm: numOrNull(b.acceptedMissKm)
   })
-  res.json(ok(await getObjectById(id)))
+  // 目标级自定义参数：仅授权认领业主可保存，且只对该业主生效（按 object_id 存储，不影响其它用户）
+  const rawParams = b.params
+  if (rawParams && typeof rawParams === 'object') {
+    const { patch: caPatch, error } = sanitizeCaPatch(rawParams as Record<string, unknown>)
+    if (error) {
+      res.status(400).json(fail(400, error))
+      return
+    }
+    const defaults = await getCaDefaults(row.org_id)
+    const existing = await getObjectCaParams(id)
+    const params = mergeCaParams(existing ?? caDefaultsToParams(defaults), caPatch)
+    await saveObjectCaParams(id, row.org_id, params, req.auth!.user.email)
+  }
+  res.json(ok({ ...(await getObjectById(id)), ca_params: await getObjectCaParams(id) }))
 })
 
 /** 释放认领 */
@@ -441,6 +543,7 @@ router.delete('/objects/:id', requireOrg, async (req: ScopedRequest, res) => {
     return
   }
   await pool.query('UPDATE ephemeris SET bound_object_id = NULL WHERE bound_object_id = ?', [id])
+  await deleteObjectCaParams(id)
   await deleteObject(id)
   res.json(ok({ released: id }))
 })

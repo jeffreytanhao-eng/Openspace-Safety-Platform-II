@@ -40,6 +40,18 @@ export interface EphemRow {
   updatedAt: string
   originator: string
   sourceName: string
+  uploadedBy: string
+  /** 上传者用户 id（NULL = 平台/同步导入，非业主私有） */
+  ownerUserId: number | null
+  ownerOrgId: number | null
+  /** public=全平台只读可用 / private=仅上传业主可用 */
+  visibility: 'public' | 'private'
+}
+
+/** 列表可见性过滤：未登录只看 public；登录用户额外看自己的 private */
+export interface EphemViewer {
+  userId: number | null
+  superAdmin: boolean
 }
 
 const SCHEMA = `
@@ -67,12 +79,18 @@ CREATE TABLE IF NOT EXISTS \`ephemeris\` (
   \`status\`          varchar(16)  NOT NULL DEFAULT 'local',
   \`updated_at\`      varchar(32)  NOT NULL DEFAULT '',
   \`originator\`      varchar(128) NOT NULL DEFAULT '',
+  \`uploaded_by\`     varchar(190) NOT NULL DEFAULT '' COMMENT '上传者邮箱（审计）',
+  \`owner_user_id\`   bigint unsigned NULL COMMENT '上传者用户；非 NULL 表示业主私有星历',
+  \`owner_org_id\`    bigint unsigned NULL COMMENT '上传者组织',
+  \`visibility\`      varchar(16)  NOT NULL DEFAULT 'public' COMMENT 'public=全平台只读可用 / private=仅业主可用',
   PRIMARY KEY (\`id\`),
   KEY \`idx_eph_norad\` (\`norad\`),
   KEY \`idx_eph_format\` (\`format\`),
   KEY \`idx_eph_name\` (\`name\`),
   KEY \`idx_eph_start\` (\`start_ms\`),
-  KEY \`idx_eph_published\` (\`published_at\`)
+  KEY \`idx_eph_published\` (\`published_at\`),
+  KEY \`idx_eph_owner\` (\`owner_user_id\`),
+  KEY \`idx_eph_visibility\` (\`visibility\`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
   COMMENT='星历元数据索引（原始 .txt.gz 在文件系统 data/ephemerides/）'`
 
@@ -110,7 +128,11 @@ export function ensureEphemSchema(): Promise<boolean> {
         const upgradeCols: Array<[string, string, string | null]> = [
           ['published_at', 'bigint NOT NULL DEFAULT 0 AFTER `stop_ms`', 'ADD KEY `idx_eph_published` (`published_at`)'],
           ['raw_size', 'bigint NOT NULL DEFAULT 0 AFTER `file_size`', null],
-          ['bound_object_id', 'bigint NULL AFTER `object_id`', 'ADD KEY `idx_eph_bound` (`bound_object_id`)']
+          ['bound_object_id', 'bigint NULL AFTER `object_id`', 'ADD KEY `idx_eph_bound` (`bound_object_id`)'],
+          ['uploaded_by', "varchar(190) NOT NULL DEFAULT '' AFTER `originator`", null],
+          ['owner_user_id', 'bigint unsigned NULL AFTER `uploaded_by`', 'ADD KEY `idx_eph_owner` (`owner_user_id`)'],
+          ['owner_org_id', 'bigint unsigned NULL AFTER `owner_user_id`', null],
+          ['visibility', "varchar(16) NOT NULL DEFAULT 'public' AFTER `owner_org_id`", 'ADD KEY `idx_eph_visibility` (`visibility`)']
         ]
         for (const [col, def, extraIdx] of upgradeCols) {
           const [cols] = await pool.query<RowDataPacket[]>(
@@ -163,6 +185,10 @@ interface DbRow extends RowDataPacket {
   /** 旧表为 varchar（UTC 字符串）；新 schema 为 datetime（会话本地时间，读回 Date） */
   updated_at: string | Date
   originator: string
+  uploaded_by: string
+  owner_user_id: number | null
+  owner_org_id: number | null
+  visibility: string
 }
 
 /** 旧 varchar（UTC 字符串）保持原样；新 datetime（Date）转 UTC 分钟后展示，接口契约不变 */
@@ -210,7 +236,11 @@ function rowToEphemRow(r: DbRow): EphemRow {
     status: r.status,
     updatedAt: dbTimeToMinute(r.updated_at),
     originator: r.originator,
-    sourceName: r.source_name
+    sourceName: r.source_name,
+    uploadedBy: r.uploaded_by || '',
+    ownerUserId: r.owner_user_id == null ? null : Number(r.owner_user_id),
+    ownerOrgId: r.owner_org_id == null ? null : Number(r.owner_org_id),
+    visibility: r.visibility === 'private' ? 'private' : 'public'
   }
 }
 
@@ -238,6 +268,10 @@ export function toListItem(r: EphemRow) {
     originator: r.originator,
     format: r.format,
     file: r.file,
+    // 第 6 项：星历归属与可见性
+    uploadedBy: r.uploadedBy || undefined,
+    ownerUserId: r.ownerUserId ?? undefined,
+    visibility: r.visibility,
     // 列表 size 显示解压后原大小（rawSize 缺失时回退压缩大小）
     size: formatSize(r.rawSize || r.fileSize)
   }
@@ -250,8 +284,22 @@ export interface ListQuery {
   size?: number
 }
 
+/** 可见性过滤片段：超管全见；登录用户看 public + 自己的 private；匿名仅 public */
+function applyViewerFilter(viewer: EphemViewer | null | undefined, where: string[], params: unknown[]): void {
+  if (viewer?.superAdmin) return
+  if (viewer?.userId != null) {
+    where.push(`(visibility = 'public' OR owner_user_id = ?)`)
+    params.push(viewer.userId)
+  } else {
+    where.push(`visibility = 'public'`)
+  }
+}
+
 /** 分页查询（q 匹配 name/norad 前缀子串）；返回 total 与当前页行 */
-export async function listRowsDb(query: ListQuery): Promise<{ total: number; rows: EphemRow[] }> {
+export async function listRowsDb(
+  query: ListQuery,
+  viewer?: EphemViewer | null
+): Promise<{ total: number; rows: EphemRow[] }> {
   const where: string[] = []
   const params: unknown[] = []
   if (query.format === 'ITC' || query.format === 'OCM') {
@@ -263,6 +311,7 @@ export async function listRowsDb(query: ListQuery): Promise<{ total: number; row
     where.push('(name LIKE ? OR norad LIKE ?)')
     params.push(`%${q}%`, `%${q}%`)
   }
+  applyViewerFilter(viewer, where, params)
   const whereSql = where.length ? `WHERE ${where.join(' AND ')}` : ''
   const [cntRows] = await pool.query<RowDataPacket[]>(`SELECT COUNT(*) AS c FROM \`ephemeris\` ${whereSql}`, params)
   const total = Number((cntRows[0] as { c: number }).c) || 0
@@ -279,10 +328,14 @@ export async function listRowsDb(query: ListQuery): Promise<{ total: number; row
 }
 
 /** 全量行（legacy 模式 / index.json 导出）；limit 兜底防超大响应 */
-export async function listAllRowsDb(limit = 5000): Promise<EphemRow[]> {
+export async function listAllRowsDb(limit = 5000, viewer?: EphemViewer | null): Promise<EphemRow[]> {
+  const where: string[] = []
+  const params: unknown[] = []
+  applyViewerFilter(viewer, where, params)
+  const whereSql = where.length ? `WHERE ${where.join(' AND ')}` : ''
   const [rows] = await pool.query<DbRow[]>(
-    `SELECT * FROM \`ephemeris\` ORDER BY published_at DESC, CAST(norad AS UNSIGNED) ASC, format ASC LIMIT ?`,
-    [limit]
+    `SELECT * FROM \`ephemeris\` ${whereSql} ORDER BY published_at DESC, CAST(norad AS UNSIGNED) ASC, format ASC LIMIT ?`,
+    [...params, limit]
   )
   return rows.map(rowToEphemRow)
 }
@@ -302,9 +355,16 @@ export async function getRowBySourceNameDb(sourceName: string): Promise<EphemRow
   return rows.length ? rowToEphemRow(rows[0]) : null
 }
 
-/** 行键集合（norad|format，供前端与 IndexedDB 本机行去重） */
-export async function listAllKeysDb(): Promise<string[]> {
-  const [rows] = await pool.query<RowDataPacket[]>('SELECT norad, format FROM `ephemeris`')
+/** 行键集合（norad|format，供前端与 IndexedDB 本机行去重；按可见性过滤） */
+export async function listAllKeysDb(viewer?: EphemViewer | null): Promise<string[]> {
+  const where: string[] = []
+  const params: unknown[] = []
+  applyViewerFilter(viewer, where, params)
+  const whereSql = where.length ? `WHERE ${where.join(' AND ')}` : ''
+  const [rows] = await pool.query<RowDataPacket[]>(
+    `SELECT norad, format FROM \`ephemeris\` ${whereSql}`,
+    params
+  )
   return (rows as { norad: string; format: string }[]).map((r) => `${r.norad}|${r.format}`)
 }
 
@@ -332,6 +392,36 @@ export async function upsertRowDb(r: EphemRow): Promise<void> {
       r.maneuvers, r.maneuverSummary, JSON.stringify(r.maneuverEpochs), r.status, r.updatedAt, r.originator
     ]
   )
+}
+
+/** 业主上传后写归属与可见性（owner 为空 = 平台/超管导入） */
+export async function setEphemerisOwnershipDb(
+  id: string,
+  opts: {
+    ownerUserId: number | null
+    ownerOrgId: number | null
+    visibility: 'public' | 'private'
+    uploadedBy: string
+  }
+): Promise<void> {
+  await pool.query(
+    `UPDATE \`ephemeris\` SET owner_user_id = ?, owner_org_id = ?, visibility = ?, uploaded_by = ? WHERE id = ?`,
+    [opts.ownerUserId, opts.ownerOrgId, opts.visibility, opts.uploadedBy.slice(0, 190), id]
+  )
+}
+
+/** 切换星历可见性（仅业主本人 / 超管，鉴权在路由层） */
+export async function setEphemerisVisibilityDb(id: string, visibility: 'public' | 'private'): Promise<boolean> {
+  const [r] = await pool.query('UPDATE `ephemeris` SET visibility = ? WHERE id = ?', [visibility, id])
+  return Number((r as { affectedRows?: number }).affectedRows ?? 0) > 0
+}
+
+/** 删除元数据行（返回被删行用于清理物理文件）；业主本人 / 超管 */
+export async function deleteRowDb(id: string): Promise<EphemRow | null> {
+  const row = await getRowDb(id)
+  if (!row) return null
+  await pool.query('DELETE FROM `ephemeris` WHERE id = ?', [id])
+  return row
 }
 
 /** 清空全部行（force rebuild 用：解析口径变更后全量重入库） */

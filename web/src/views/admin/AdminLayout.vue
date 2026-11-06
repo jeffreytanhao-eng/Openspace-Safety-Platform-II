@@ -42,6 +42,9 @@ function signOut() {
         <RouterLink to="/admin/orgs" class="side-item" :class="{ on: isActive('/admin/orgs') }">
           客户组织
         </RouterLink>
+        <RouterLink to="/admin/claims" class="side-item" :class="{ on: isActive('/admin/claims') }">
+          认领审核
+        </RouterLink>
         <RouterLink to="/admin/audit" class="side-item" :class="{ on: isActive('/admin/audit') }">
           审计日志
         </RouterLink>

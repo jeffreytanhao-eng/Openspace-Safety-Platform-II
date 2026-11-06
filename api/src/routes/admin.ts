@@ -17,7 +17,7 @@ import { ensureOrgSchema, findUserByEmail, findOrgById, createOrgWithAdmin, type
 import { ensureAdminSchema, writeAudit, listAudit } from '../db/adminDb.js'
 import { ensurePlanSchema, getEffectiveLimits, getOrgQuotaRows, getOrgFlagRows, setOrgQuotaOverride, clearOrgQuotaOverride, setOrgFlagOverride, clearOrgFlagOverride, FEATURE_KEYS, FLAG_CATALOG, TLE_SCOPE, PC_BIT } from '../db/planDb.js'
 import { requireAuth, type AuthContext } from './auth.js'
-import { listClaimScopes, replaceClaimScopes, type ClaimScopeType } from '../db/objectsDb.js'
+import { listClaimScopes, replaceClaimScopes, type ClaimScopeType, ensureObjectsSchema, listOwnerClaims, approveOwnerClaim, rejectOwnerClaim } from '../db/objectsDb.js'
 import { QUOTA_EXCEEDED } from '../middleware/plan.js'
 
 const router = Router()
@@ -452,6 +452,77 @@ router.post('/admin/orgs/:id/members', requireAuth, requireSuperAdmin, async (re
   }
 })
 
+/* ------------------------- 第 5 项：业主认领审核 ------------------------- */
+
+/** 授权认领申请列表（默认待审；status=all 看全部） */
+router.get('/admin/object-claims', requireAuth, requireSuperAdmin, async (req, res) => {
+  if (!(await ensureObjectsSchema())) {
+    res.status(503).json(fail(503, '数据库不可用'))
+    return
+  }
+  const status = String(req.query.status || 'pending')
+  if (!['pending', 'claimed', 'rejected', 'all'].includes(status)) {
+    res.status(400).json(fail(400, 'status 仅支持 pending / claimed / rejected / all'))
+    return
+  }
+  const items = await listOwnerClaims(status as 'pending' | 'claimed' | 'rejected' | 'all')
+  res.json(ok({ items }))
+})
+
+/** 审核通过：该用户成为目标唯一业主（同目标其它待审申请自动驳回） */
+router.post('/admin/object-claims/:id/approve', requireAuth, requireSuperAdmin, async (req: ScopedRequest, res) => {
+  if (!(await ensureObjectsSchema())) {
+    res.status(503).json(fail(503, '数据库不可用'))
+    return
+  }
+  const id = Number(req.params.id)
+  if (!Number.isInteger(id) || id <= 0) {
+    res.status(400).json(fail(400, '申请编号无效'))
+    return
+  }
+  const note = String((req.body || {}).note || '').slice(0, 255)
+  const r = await approveOwnerClaim(id, req.auth!.user.email, note)
+  if (!r.ok) {
+    res.status(409).json(fail(409, r.error || '审核失败'))
+    return
+  }
+  await writeAudit({
+    actorUserId: req.auth!.user.id,
+    actorEmail: req.auth!.user.email,
+    orgId: Number(r.row?.org_id ?? 0),
+    action: 'object_claim.approve',
+    after: { claimId: id, norad: r.row?.norad_id ?? null, note }
+  })
+  res.json(ok({ id, status: 'claimed', object: r.row }))
+})
+
+/** 审核驳回 */
+router.post('/admin/object-claims/:id/reject', requireAuth, requireSuperAdmin, async (req: ScopedRequest, res) => {
+  if (!(await ensureObjectsSchema())) {
+    res.status(503).json(fail(503, '数据库不可用'))
+    return
+  }
+  const id = Number(req.params.id)
+  if (!Number.isInteger(id) || id <= 0) {
+    res.status(400).json(fail(400, '申请编号无效'))
+    return
+  }
+  const note = String((req.body || {}).note || '').slice(0, 255)
+  const r = await rejectOwnerClaim(id, req.auth!.user.email, note)
+  if (!r.ok) {
+    res.status(409).json(fail(409, r.error || '驳回失败'))
+    return
+  }
+  await writeAudit({
+    actorUserId: req.auth!.user.id,
+    actorEmail: req.auth!.user.email,
+    orgId: 0,
+    action: 'object_claim.reject',
+    after: { claimId: id, note }
+  })
+  res.json(ok({ id, status: 'rejected' }))
+})
+
 /** C6：按 NORAD 查当前业主认领（全局唯一） */
 router.get('/admin/owner/:norad', requireAuth, requireSuperAdmin, async (req, res) => {
   const norad = Number(req.params.norad)
@@ -462,7 +533,7 @@ router.get('/admin/owner/:norad', requireAuth, requireSuperAdmin, async (req, re
   const [rows] = await pool.query<import('mysql2').RowDataPacket[]>(
     `SELECT o.id, o.org_id, o.norad_id, o.name, o.claim_type, o.created_at, o.updated_at, g.name AS org_name
        FROM objects o LEFT JOIN organizations g ON g.id = o.org_id
-      WHERE o.norad_id = ? AND o.claim_type = 'owner' LIMIT 1`,
+      WHERE o.norad_id = ? AND o.claim_type = 'owner' AND o.claim_status = 'claimed' LIMIT 1`,
     [norad]
   )
   res.json(ok({ norad, owner: rows[0] ?? null }))
@@ -478,7 +549,7 @@ router.delete('/admin/owner/:norad', requireAuth, requireSuperAdmin, async (req:
   const [rows] = await pool.query<import('mysql2').RowDataPacket[]>(
     `SELECT o.id, o.org_id, o.norad_id, o.name, o.claim_type, g.name AS org_name
        FROM objects o LEFT JOIN organizations g ON g.id = o.org_id
-      WHERE o.norad_id = ? AND o.claim_type = 'owner' LIMIT 1`,
+      WHERE o.norad_id = ? AND o.claim_type = 'owner' AND o.claim_status = 'claimed' LIMIT 1`,
     [norad]
   )
   const row = rows[0]
@@ -487,6 +558,7 @@ router.delete('/admin/owner/:norad', requireAuth, requireSuperAdmin, async (req:
     return
   }
   await pool.query('UPDATE ephemeris SET bound_object_id = NULL WHERE bound_object_id = ?', [row.id])
+  await pool.query('DELETE FROM object_ca_params WHERE object_id = ?', [row.id])
   await pool.query('DELETE FROM objects WHERE id = ?', [row.id])
   await writeAudit({
     actorUserId: req.auth!.user.id,

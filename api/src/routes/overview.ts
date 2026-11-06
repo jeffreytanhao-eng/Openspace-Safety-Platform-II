@@ -21,13 +21,9 @@ type ScopedRequest = Request & { auth?: AuthContext }
 router.get('/overview/summary', requireAuth, async (req: ScopedRequest, res) => {
   try {
     const orgId = req.auth?.user.orgId ? Number(req.auth.user.orgId) : null
-    // 与 /cgi/objects 等客户业务接口口径一致：平台账号（无组织）不返回「系统池」半成功视图
-    if (!orgId) {
-      res.status(403).json(fail(403, '需要组织账号'))
-      return
-    }
+    // 平台账号（超管，无组织）走「系统池」平台级口径，不再 403 拦截
 
-    // 目标数 + 托管 NORAD 集合（平台账号无组织 → 0）
+    // 目标数 + 托管 NORAD 集合（平台账号无组织 → 全平台目标总数，不做单组织 CDM 关联）
     let owned = 0
     let ownedNorads: number[] = []
     if (orgId) {
@@ -41,6 +37,11 @@ router.get('/overview/summary', requireAuth, async (req: ScopedRequest, res) => 
         [orgId]
       )
       ownedNorads = noradRows.map((r) => Number(r.norad_id))
+    } else {
+      const [rows] = await pool.query<Array<RowDataPacket & { n: number }>>(
+        'SELECT COUNT(*) AS n FROM objects'
+      )
+      owned = Number(rows[0]?.n) || 0
     }
 
     // 星历统计：R1-4 组织化——组织账号只看绑定到本组织目标的星历；平台账号看全量
@@ -152,12 +153,10 @@ router.get('/overview/summary', requireAuth, async (req: ScopedRequest, res) => 
 
     // 今日筛查次数（E1：screening_jobs；筛查表未建时兜底 0）
     let screensToday = 0
-    if (orgId) {
-      try {
-        screensToday = await countScreensToday(orgId)
-      } catch {
-        screensToday = 0
-      }
+    try {
+      screensToday = await countScreensToday(orgId)
+    } catch {
+      screensToday = 0
     }
 
     res.json(

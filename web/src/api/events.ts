@@ -141,3 +141,57 @@ export interface PcCompareParams {
 export function pcCompare(p: PcCompareParams): Promise<PcCompareResult> {
   return cgiCall({ method: 'POST', url: '/events/pc-compare', data: p, headers: authHeaders() })
 }
+
+/** R2-20：近期 CDM 报文（系统池，由后端按档位历史窗隔离；前端按 NORAD 过滤） */
+export interface RecentCdm {
+  cdm_id: string | null
+  creation_date: string | null
+  tca: string | null
+  norad_a: number
+  name_a: string
+  norad_b: number
+  name_b: string
+  miss_distance_km: number | null
+  rel_speed_km_per_s: number | null
+  collision_probability: number | null
+}
+
+/** R2-20：近端 CDM 列表（只读聚合，不做本地缓存） */
+export function listRecentCdms(limit = 500): Promise<{ total: number; items: RecentCdm[] }> {
+  return cgiCall({
+    method: 'GET',
+    url: '/catalog/cdms',
+    params: { limit },
+    headers: authHeaders()
+  })
+}
+
+/** R2-16：TCA 附近相对运动采样点（R/I/C 为相对位置在主星 UVW 基上的分量，单位 km） */
+export interface RelMotionSample {
+  tMs: number
+  dR: number
+  dI: number
+  dC: number
+  dist: number
+}
+
+export interface RelMotionResult {
+  noradA: number
+  noradB: number
+  tcaMs: number
+  minutes: number
+  stepS: number
+  source: string
+  names: { a: string; b: string }
+  samples: RelMotionSample[]
+}
+
+/** R2-16：相对运动时间序列（服务端 TLE/SGP4 传播 + 主星 UVW 投影） */
+export function getRelativeMotion(key: string, minutes = 30, stepS = 30): Promise<RelMotionResult> {
+  return cgiCall({
+    method: 'GET',
+    url: `/events/${encodeURIComponent(key)}/relative-motion`,
+    params: { minutes, stepS },
+    headers: authHeaders()
+  })
+}

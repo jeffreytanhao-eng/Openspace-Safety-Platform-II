@@ -8,16 +8,20 @@ import {
   getEvent,
   getCdmRaw,
   pcCompare,
+  getRelativeMotion,
   type ConjunctionEvent,
   type CdmMember,
   type TleProfile,
   type EventLevel,
   type PcCompareResult,
   type PcAgreement,
-  type PcMethod
+  type PcMethod,
+  type RelMotionSample,
+  type RelMotionResult
 } from '@/api/events'
 import {
   getCaDefaults,
+  getCaProfiles,
   recomputeEvent,
   listRecomputeRuns,
   type CaDefaults,
@@ -28,6 +32,8 @@ import {
   type Propagator
 } from '@/api/ca'
 import { AuthError } from '@/api/auth'
+import EChart from '@/components/EChart.vue'
+import type { EChartsCoreOption } from 'echarts/core'
 
 const route = useRoute()
 const router = useRouter()
@@ -51,6 +57,8 @@ async function load(): Promise<void> {
     secondary.value = resp.secondary
     void runCompare() // 详情就绪后自动比对（onMounted 时 event 尚为 null，不能挂在那里）
     void loadCaContext() // F1：预填组织默认参数 + 拉 run 历史（未登录回落系统缺省）
+    void loadCaProfiles() // 第 4 项：个人 2 组参数可用性
+    void loadRelativeMotion() // R2-16：TCA 附近相对运动序列
   } catch (e) {
     error.value = e instanceof Error ? e.message : String(e)
     event.value = null
@@ -60,6 +68,214 @@ async function load(): Promise<void> {
 }
 
 onMounted(() => void load())
+
+/* ------------------------- R2-16 相对运动（TCA 附近） ------------------------- */
+const rmLoading = ref(false)
+const rmError = ref('')
+const rm = ref<RelMotionResult | null>(null)
+
+async function loadRelativeMotion(): Promise<void> {
+  rmLoading.value = true
+  rmError.value = ''
+  try {
+    rm.value = await getRelativeMotion(key.value, 30, 30)
+  } catch (e) {
+    rmError.value = e instanceof AuthError ? e.message : String((e as Error).message || e)
+    rm.value = null
+  } finally {
+    rmLoading.value = false
+  }
+}
+
+const RM_AXIS_TEXT = '#8fa3b8'
+const RM_GRID_LINE = { lineStyle: { color: 'rgba(120,150,180,0.12)' } }
+
+/** 距离—时间：总距离与 R/I/C 三分量同轴（单位一致，均为 km） */
+const rmTimeOption = computed<EChartsCoreOption>(() => {
+  const s = rm.value?.samples ?? []
+  const tcaMs = rm.value?.tcaMs ?? 0
+  const xs = s.map((p) => Number(((p.tMs - tcaMs) / 60000).toFixed(2)))
+  const mk = (name: string, pick: (p: RelMotionSample) => number, color: string) => ({
+    name,
+    type: 'line' as const,
+    showSymbol: false,
+    data: s.map((p, i) => [xs[i], pick(p)]),
+    lineStyle: { width: 1.6, color },
+    itemStyle: { color }
+  })
+  return {
+    backgroundColor: 'transparent',
+    grid: { left: 56, right: 18, top: 34, bottom: 38 },
+    legend: { top: 0, textStyle: { color: '#9fb3c8', fontSize: 11 }, itemWidth: 14, itemHeight: 8 },
+    tooltip: { trigger: 'axis', valueFormatter: (v: unknown) => `${v} km` },
+    xAxis: {
+      type: 'value',
+      name: t('rm.axisMin'),
+      nameTextStyle: { color: '#7f93a8', fontSize: 11 },
+      axisLabel: { color: RM_AXIS_TEXT, fontSize: 11 },
+      splitLine: RM_GRID_LINE
+    },
+    yAxis: {
+      type: 'value',
+      name: t('rm.axisKm'),
+      nameTextStyle: { color: '#7f93a8', fontSize: 11 },
+      axisLabel: { color: RM_AXIS_TEXT, fontSize: 11 },
+      splitLine: RM_GRID_LINE
+    },
+    series: [
+      {
+        ...mk(t('rm.total'), (p) => p.dist, '#e2e8f0'),
+        markLine: {
+          silent: true,
+          symbol: 'none',
+          data: [{ xAxis: 0 }],
+          lineStyle: { color: '#f59e0b', type: 'dashed' },
+          label: { formatter: t('rm.tca'), color: '#f59e0b' }
+        }
+      },
+      mk(t('rm.radial'), (p) => p.dR, '#3b82f6'),
+      mk(t('rm.intrack'), (p) => p.dI, '#22c55e'),
+      mk(t('rm.crosstrack'), (p) => p.dC, '#a855f7')
+    ]
+  }
+})
+
+/** R–I / C–I 平面：横轴均为迹向 I，纵轴为径向 R 或法向 C；TCA 点高亮 */
+function rmPlaneOption(xKey: 'dI', yKey: 'dR' | 'dC', yName: string): EChartsCoreOption {
+  const s = rm.value?.samples ?? []
+  const tcaMs = rm.value?.tcaMs ?? 0
+  const tcaPoint = s.reduce<typeof s[number] | null>(
+    (best, p) => (!best || Math.abs(p.tMs - tcaMs) < Math.abs(best.tMs - tcaMs) ? p : best),
+    null
+  )
+  return {
+    backgroundColor: 'transparent',
+    grid: { left: 52, right: 16, top: 30, bottom: 34 },
+    tooltip: {
+      trigger: 'item',
+      valueFormatter: (v: unknown) => `${v} km`
+    },
+    xAxis: {
+      type: 'value',
+      name: 'I (km)',
+      nameTextStyle: { color: '#7f93a8', fontSize: 11 },
+      axisLabel: { color: RM_AXIS_TEXT, fontSize: 11 },
+      splitLine: RM_GRID_LINE
+    },
+    yAxis: {
+      type: 'value',
+      name: yName,
+      nameTextStyle: { color: '#7f93a8', fontSize: 11 },
+      axisLabel: { color: RM_AXIS_TEXT, fontSize: 11 },
+      splitLine: RM_GRID_LINE
+    },
+    series: [
+      {
+        type: 'scatter',
+        symbolSize: 5,
+        data: s.map((p) => [p[xKey], p[yKey]]),
+        itemStyle: { color: '#38bdf8' }
+      },
+      {
+        type: 'scatter',
+        symbolSize: 10,
+        data: tcaPoint ? [[tcaPoint[xKey], tcaPoint[yKey]]] : [],
+        itemStyle: { color: '#f59e0b' },
+        z: 3
+      }
+    ]
+  }
+}
+
+const rmRiOption = computed<EChartsCoreOption>(() => rmPlaneOption('dI', 'dR', 'R (km)'))
+const rmCiOption = computed<EChartsCoreOption>(() => rmPlaneOption('dI', 'dC', 'C (km)'))
+
+/* ------------------------- R2-18 风险演变（多源 Pc / 脱靶随时间） ------------------------- */
+const pct = (v: unknown): number | null => {
+  const n = typeof v === 'number' ? v : Number(v)
+  return Number.isFinite(n) && n > 0 ? n : null
+}
+
+const riskOption = computed<EChartsCoreOption>(() => {
+  // CDM 报文序列（Space-Track / 客户上传）：按报文发布时间排序
+  const cdmPc: Array<[number, number]> = []
+  const cdmMiss: Array<[number, number]> = []
+  for (const c of cdms.value) {
+    const t = Date.parse(c.creation_date)
+    if (!Number.isFinite(t)) continue
+    const pc = pct(c.collision_probability)
+    if (pc) cdmPc.push([t, pc])
+    if (c.miss_distance_km != null && Number.isFinite(Number(c.miss_distance_km)))
+      cdmMiss.push([t, Number(c.miss_distance_km)])
+  }
+  cdmPc.sort((a, b) => a[0] - b[0])
+  cdmMiss.sort((a, b) => a[0] - b[0])
+  // 本平台重算 run：取首个可用非官方方法的结果，按 run 创建时刻
+  const localPc: Array<[number, number]> = []
+  for (const r of rcRuns.value) {
+    const t = Date.parse(r.created_at)
+    if (!Number.isFinite(t)) continue
+    const row = r.rows.find((x) => !x.disabled && x.method !== 'official' && pct(x.pc))
+    const pc = row ? pct(row.pc) : null
+    if (pc) localPc.push([t, pc])
+  }
+  localPc.sort((a, b) => a[0] - b[0])
+
+  return {
+    backgroundColor: 'transparent',
+    grid: { left: 62, right: 58, top: 34, bottom: 38 },
+    legend: { top: 0, textStyle: { color: '#9fb3c8', fontSize: 11 }, itemWidth: 14, itemHeight: 8 },
+    tooltip: { trigger: 'axis', axisPointer: { type: 'cross' } },
+    xAxis: {
+      type: 'time',
+      axisLabel: { color: RM_AXIS_TEXT, fontSize: 11, hideOverlap: true },
+      splitLine: RM_GRID_LINE
+    },
+    yAxis: [
+      {
+        type: 'log',
+        name: 'Pc',
+        min: 1e-12,
+        nameTextStyle: { color: '#7f93a8', fontSize: 11 },
+        axisLabel: { color: RM_AXIS_TEXT, fontSize: 11, formatter: (v: number) => v.toExponential(0) },
+        splitLine: RM_GRID_LINE
+      },
+      {
+        type: 'value',
+        name: `${t('conj.col.miss')} (km)`,
+        nameTextStyle: { color: '#7f93a8', fontSize: 11 },
+        axisLabel: { color: RM_AXIS_TEXT, fontSize: 11 },
+        splitLine: { show: false }
+      }
+    ],
+    series: [
+      {
+        name: t('rk.cdmPc'),
+        type: 'line',
+        symbolSize: 7,
+        data: cdmPc,
+        lineStyle: { width: 1.6, color: '#f59e0b' },
+        itemStyle: { color: '#f59e0b' }
+      },
+      {
+        name: t('rk.localPc'),
+        type: 'scatter',
+        symbolSize: 9,
+        data: localPc,
+        itemStyle: { color: '#38bdf8' }
+      },
+      {
+        name: t('rk.cdmMiss'),
+        type: 'line',
+        yAxisIndex: 1,
+        symbolSize: 5,
+        data: cdmMiss,
+        lineStyle: { width: 1.2, type: 'dashed', color: '#94a3b8' },
+        itemStyle: { color: '#94a3b8' }
+      }
+    ]
+  }
+})
 
 /** Pc 多算法比对（E3）：同源输入由服务端统一 TLE 传播，官方 Pc 仅作对照行 */
 type I18nKey = Parameters<ReturnType<typeof useI18n>['t']>[0]
@@ -195,6 +411,22 @@ const caForm = reactive<CaFormState>({
 const caDefaults = ref<CaDefaults | null>(null)
 const caOrgReady = ref(false) // 有组织账号（可重算）
 
+/* 第 4 项：参数来源（default / mine1 / mine2 / target） */
+const rcParamsSource = ref<'default' | 'mine1' | 'mine2' | 'target'>('default')
+const rcSlotReady = ref<Record<number, boolean>>({ 1: false, 2: false })
+
+async function loadCaProfiles() {
+  try {
+    const r = await getCaProfiles()
+    rcSlotReady.value = {
+      1: !!r.mine.find((x) => x.slot === 1)?.params,
+      2: !!r.mine.find((x) => x.slot === 2)?.params
+    }
+  } catch {
+    /* 未登录 / 无组织：仅默认参数 */
+  }
+}
+
 function fillCaForm(d: CaDefaults | null): void {
   if (!d) return
   caForm.hbrMode = d.hbr_mode
@@ -263,32 +495,40 @@ async function runRecompute(): Promise<void> {
     rcError.value = t('ca.detailNeedLogin')
     return
   }
-  if (!caMethodsList().length) {
+  const useProfile = rcParamsSource.value !== 'default'
+  if (!useProfile && !caMethodsList().length) {
     rcError.value = t('ca.err.noMethod')
     return
   }
   rcLoading.value = true
   rcError.value = ''
   try {
-    // 参数解析顺序（服务端）：仅本次表单 > 组织默认 > 系统缺省；生效值回显在 run 参数摘要
-    rcResult.value = await recomputeEvent(key.value, {
-      hbrMode: caForm.hbrMode,
-      hbrM: caForm.hbrM,
-      hbrAM: caForm.hbrAM,
-      hbrBM: caForm.hbrBM,
-      acceptedPc: caForm.acceptedPc,
-      acceptedMissKm: caForm.acceptedMissKm,
-      screenDistanceKm: caForm.screenDistanceKm,
-      covarianceMode: caForm.covarianceMode,
-      propagator: caForm.propagator,
-      windowH: caForm.windowH,
-      stepS: caForm.stepS,
-      methods: caMethodsList(),
-      // 官方对照口径随请求固化进 run（后续回看时与当次 CDM 状态一致）
+    // 参数解析顺序（服务端）：指定参数档案（个人 2 组 / 目标自定义）或本次表单 > 组织默认 > 系统缺省
+    const official = {
       officialPc: event.value.pc,
       officialMissKm: event.value.missKm,
       officialRelSpeedKms: event.value.relSpeedKmS
-    })
+    }
+    rcResult.value = await recomputeEvent(
+      key.value,
+      useProfile
+        ? { paramsSource: rcParamsSource.value, ...official }
+        : {
+            hbrMode: caForm.hbrMode,
+            hbrM: caForm.hbrM,
+            hbrAM: caForm.hbrAM,
+            hbrBM: caForm.hbrBM,
+            acceptedPc: caForm.acceptedPc,
+            acceptedMissKm: caForm.acceptedMissKm,
+            screenDistanceKm: caForm.screenDistanceKm,
+            covarianceMode: caForm.covarianceMode,
+            propagator: caForm.propagator,
+            windowH: caForm.windowH,
+            stepS: caForm.stepS,
+            methods: caMethodsList(),
+            ...official
+          }
+    )
     void loadRuns()
   } catch (e) {
     rcError.value = e instanceof Error ? e.message : String(e)
@@ -562,6 +802,41 @@ function doExport(kind: 'md' | 'html' | 'csv'): void {
           </p>
         </div>
       </section>
+      <!-- R2-18：风险演变（CDM 报文 + 本平台重算的 Pc / 脱靶随时间） -->
+      <section class="panel wide">
+        <div class="ph">
+          <span>{{ t('rk.title') }}</span>
+          <span class="dim-tag">{{ t('rk.sources') }}</span>
+        </div>
+        <p class="note">{{ t('rk.desc') }}</p>
+        <EChart v-if="cdms.length || rcRuns.length" :option="riskOption" :height="260" />
+        <p v-else class="dim">{{ t('rk.empty') }}</p>
+      </section>
+      <!-- R2-16：相对运动（TCA 附近距离—时间 + R–I / C–I 平面） -->
+      <section class="panel wide">
+        <div class="ph">
+          <span>{{ t('rm.title') }}</span>
+          <span v-if="rm" class="dim-tag">±{{ rm.minutes }} min · {{ rm.source }}</span>
+        </div>
+        <p class="note">{{ t('rm.desc') }}</p>
+        <p v-if="rmLoading" class="dim">{{ t('rm.loading') }}</p>
+        <p v-else-if="rmError" class="state error inline">{{ rmError }}</p>
+        <template v-else-if="rm && rm.samples.length">
+          <div class="rm-title">{{ t('rm.distTime') }}</div>
+          <EChart :option="rmTimeOption" :height="240" />
+          <div class="rm-planes">
+            <div>
+              <div class="rm-title">{{ t('rm.planeRI') }}</div>
+              <EChart :option="rmRiOption" :height="220" />
+            </div>
+            <div>
+              <div class="rm-title">{{ t('rm.planeCI') }}</div>
+              <EChart :option="rmCiOption" :height="220" />
+            </div>
+          </div>
+        </template>
+        <p v-else class="dim">{{ t('rm.noTle') }}</p>
+      </section>
       <!-- F1：碰撞参数与重算（仅本次 + run 对比） -->
       <section class="panel wide">
         <div class="ph">
@@ -576,33 +851,47 @@ function doExport(kind: 'md' | 'html' | 'csv'): void {
         <!-- 参数编辑（仅本次） -->
         <div class="ca-form">
           <label class="cf field">
+            <span class="lbl">参数来源</span>
+            <span class="row">
+              <select v-model="rcParamsSource">
+                <option value="default">默认参数（组织）</option>
+                <option value="mine1" :disabled="!rcSlotReady[1]">我的参数组 1{{ rcSlotReady[1] ? '' : '（未配置）' }}</option>
+                <option value="mine2" :disabled="!rcSlotReady[2]">我的参数组 2{{ rcSlotReady[2] ? '' : '（未配置）' }}</option>
+                <option value="target">目标自定义参数（业主）</option>
+              </select>
+            </span>
+          </label>
+          <div v-if="rcParamsSource !== 'default'" class="cf-hint">
+            使用所选参数档案重算，下方手动参数不再生效（结果摘要会回显实际生效值）。
+          </div>
+          <label class="cf field">
             <span class="lbl">{{ t('ca.f.hbrMode') }}</span>
             <span class="row">
-              <label class="radio"><input v-model="caForm.hbrMode" type="radio" value="single" /> {{ t('ca.single') }}</label>
-              <label class="radio"><input v-model="caForm.hbrMode" type="radio" value="both" /> {{ t('ca.both') }}</label>
+              <label class="radio"><input v-model="caForm.hbrMode" type="radio" value="single" :disabled="rcParamsSource !== 'default'" /> {{ t('ca.single') }}</label>
+              <label class="radio"><input v-model="caForm.hbrMode" type="radio" value="both" :disabled="rcParamsSource !== 'default'" /> {{ t('ca.both') }}</label>
             </span>
           </label>
           <label class="cf field">
             <span class="lbl">{{ caForm.hbrMode === 'both' ? `${t('ca.f.hbr')} (A / B)` : t('ca.f.hbr') }}</span>
             <span v-if="caForm.hbrMode === 'both'" class="row">
-              <input v-model.number="caForm.hbrAM" type="number" min="0.1" max="1000" step="0.1" /> /
-              <input v-model.number="caForm.hbrBM" type="number" min="0.1" max="1000" step="0.1" /> m
+              <input v-model.number="caForm.hbrAM" type="number" min="0.1" max="1000" step="0.1" :disabled="rcParamsSource !== 'default'" /> /
+              <input v-model.number="caForm.hbrBM" type="number" min="0.1" max="1000" step="0.1" :disabled="rcParamsSource !== 'default'" /> m
             </span>
             <span v-else class="row">
-              <input v-model.number="caForm.hbrM" type="number" min="1" max="1000" step="1" /> m
+              <input v-model.number="caForm.hbrM" type="number" min="1" max="1000" step="1" :disabled="rcParamsSource !== 'default'" /> m
             </span>
           </label>
           <label class="cf field">
             <span class="lbl">{{ t('ca.f.acceptedPc') }}</span>
-            <span class="row"><input v-model.number="caForm.acceptedPc" type="number" min="1e-9" max="1" step="1e-5" /></span>
+            <span class="row"><input v-model.number="caForm.acceptedPc" type="number" min="1e-9" max="1" step="1e-5" :disabled="rcParamsSource !== 'default'" /></span>
           </label>
           <label class="cf field">
             <span class="lbl">{{ t('ca.f.acceptedMiss') }}</span>
-            <span class="row"><input v-model.number="caForm.acceptedMissKm" type="number" min="0.01" max="100" step="0.1" /> km</span>
+            <span class="row"><input v-model.number="caForm.acceptedMissKm" type="number" min="0.01" max="100" step="0.1" :disabled="rcParamsSource !== 'default'" /> km</span>
           </label>
           <label class="cf field">
             <span class="lbl">{{ t('ca.f.screenDist') }}</span>
-            <span class="row"><input v-model.number="caForm.screenDistanceKm" type="number" min="0.5" max="100" step="0.5" /> km</span>
+            <span class="row"><input v-model.number="caForm.screenDistanceKm" type="number" min="0.5" max="100" step="0.5" :disabled="rcParamsSource !== 'default'" /> km</span>
           </label>
           <label class="cf field">
             <span class="lbl">{{ t('ca.f.covMode') }}</span>
@@ -867,6 +1156,13 @@ h1 {
 .note { margin: 10px 0 0; font-size: 10px; color: var(--text-dim); }
 .note.warn { color: var(--warn); }
 
+/* R2-16 相对运动 */
+.rm-title { margin: 12px 0 4px; font-size: 12px; color: var(--text-dim); }
+.rm-planes { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+@media (max-width: 900px) {
+  .rm-planes { grid-template-columns: 1fr; }
+}
+
 /* F1 碰撞参数与重算 */
 .dim-tag {
   font-size: 9px; color: var(--text-dim); border: 1px solid var(--border);
@@ -878,6 +1174,7 @@ h1 {
   gap: 8px 14px; align-items: end;
 }
 .ca-form .field { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+.cf-hint { grid-column: 1 / -1; font-size: 10px; color: var(--text-dim); line-height: 1.5; }
 .ca-form .lbl { font-size: 9px; color: var(--text-dim); text-transform: uppercase; letter-spacing: 0.03em; }
 .ca-form .row { display: flex; align-items: center; gap: 4px; font-size: 11px; color: var(--text-dim); flex-wrap: wrap; }
 .ca-form input[type='number'],

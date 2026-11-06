@@ -780,9 +780,18 @@ export function prewarmCatalogModels(): void {
   }
 }
 
-/** 星历等外部通道解析型号键（无类型来源，名称/NORAD 关键词匹配，兜底 osp_sat） */
-export function resolveCatalogModelKey(objectName: string, norad?: number | null): string {
-  return resolveModelKey({ object_type: '', object_name: objectName, cons: [], norad_id: norad ?? undefined })
+/** 解析型号键（无类型来源时名称/NORAD 关键词匹配，兜底 osp_sat）；编目侧可传入真实 object_type */
+export function resolveCatalogModelKey(
+  objectName: string,
+  norad?: number | null,
+  objectType?: string | null
+): string {
+  return resolveModelKey({
+    object_type: objectType || '',
+    object_name: objectName,
+    cons: [],
+    norad_id: norad ?? undefined
+  })
 }
 
 /** 取共享模型几何/材质（归一化 + 统一材质；调用方不得 dispose 返回值） */

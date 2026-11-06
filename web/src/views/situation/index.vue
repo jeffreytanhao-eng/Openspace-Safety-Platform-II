@@ -339,6 +339,14 @@ function fmtPcSci(pc: number | null): string {
   return pc === 0 ? '0' : pc.toExponential(2)
 }
 
+/** R2-15：交会点经纬度（度 → 带半球标识的短格式） */
+function fmtEventGeo(latDeg?: number, lonDeg?: number): string {
+  if (latDeg == null || lonDeg == null || !Number.isFinite(latDeg) || !Number.isFinite(lonDeg)) return '—'
+  const ns = latDeg >= 0 ? 'N' : 'S'
+  const ew = lonDeg >= 0 ? 'E' : 'W'
+  return `${Math.abs(latDeg).toFixed(2)}°${ns}, ${Math.abs(lonDeg).toFixed(2)}°${ew}`
+}
+
 /* 深链 /situation?conj=A-B&tca=ms：打开事件云 → 定位 TCA → 飞向并高亮该事件 */
 let pendingEventDeepLink = false
 
@@ -605,6 +613,10 @@ watch(
         <b class="mono">{{ selEvent.missKm != null ? selEvent.missKm.toFixed(3) + ' km' : '—' }}</b>
         <span>{{ t('conj.relVel') }}</span>
         <b class="mono">{{ selEvent.relSpeedKmS != null ? selEvent.relSpeedKmS.toFixed(2) + ' km/s' : t('conj.relVelNaShort') }}</b>
+        <span>{{ t('sit.eventGeo') }}</span>
+        <b class="mono">{{ fmtEventGeo(selEvent.latDeg, selEvent.lonDeg) }}</b>
+        <span>{{ t('sit.eventAlt') }}</span>
+        <b class="mono">{{ selEvent.altKm != null ? selEvent.altKm.toFixed(1) + ' km' : '—' }}</b>
         <span>{{ t('conj.col.cdm') }}</span><b class="mono">{{ selEvent.cdmCount }}</b>
       </div>
       <router-link
