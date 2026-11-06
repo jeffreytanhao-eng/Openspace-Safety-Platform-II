@@ -47,6 +47,8 @@ export interface AdminObjectClaim {
   org_name: string
   user_id: number | null
   user_email: string
+  reviewed_by: string | null
+  reviewed_at: string | null
 }
 
 export function adminListObjectClaims(

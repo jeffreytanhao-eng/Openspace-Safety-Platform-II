@@ -8,7 +8,7 @@
  * - 认证走 JWT（无 sessions 表），密码 bcryptjs 哈希存储。
  */
 import { pool } from './pool.js'
-import type { RowDataPacket } from 'mysql2'
+import type { ResultSetHeader, RowDataPacket } from 'mysql2'
 
 /** 组织行（password_hash 永不出库） */
 export interface OrgRow {
@@ -102,6 +102,15 @@ export async function findUserById(id: number): Promise<UserRow | null> {
     [id]
   )
   return (rows[0] as UserRow) || null
+}
+
+/** R2-21：仅更新当前用户自己的密码哈希 */
+export async function updateUserPassword(id: number, passwordHash: string): Promise<boolean> {
+  const [r] = await pool.query<ResultSetHeader>(
+    'UPDATE users SET password_hash = ? WHERE id = ?',
+    [passwordHash, id]
+  )
+  return r.affectedRows > 0
 }
 
 export async function findOrgById(id: number): Promise<OrgRow | null> {

@@ -190,6 +190,36 @@ function rmPlaneOption(xKey: 'dI', yKey: 'dR' | 'dC', yName: string): EChartsCor
 const rmRiOption = computed<EChartsCoreOption>(() => rmPlaneOption('dI', 'dR', 'R (km)'))
 const rmCiOption = computed<EChartsCoreOption>(() => rmPlaneOption('dI', 'dC', 'C (km)'))
 
+/** TCA（或最近采样点）的 R/I/C 分量，用于一句白话轴摘要 */
+const rmTcaPoint = computed<RelMotionSample | null>(() => {
+  const s = rm.value?.samples ?? []
+  if (!s.length) return null
+  const tcaMs = rm.value?.tcaMs ?? 0
+  return s.reduce((best, cur) =>
+    Math.abs(cur.tMs - tcaMs) < Math.abs(best.tMs - tcaMs) ? cur : best
+  )
+})
+
+const rmAxisSummary = computed(() => {
+  const p = rmTcaPoint.value
+  if (!p) return ''
+  const abs = [Math.abs(p.dR), Math.abs(p.dI), Math.abs(p.dC)]
+  const max = Math.max(...abs)
+  const min = Math.min(...abs)
+  if (!Number.isFinite(max) || max <= 0) return ''
+  // 三者相差都在 30% 以内：不强行归因到单一轴
+  if (max <= min * 1.3) return t('rm.sum.mixed')
+  const idx = abs.indexOf(max)
+  const key = idx === 0 ? 'rm.sum.radial' : idx === 1 ? 'rm.sum.intrack' : 'rm.sum.crosstrack'
+  return t(key)
+})
+
+const rmAxisValues = computed(() => {
+  const p = rmTcaPoint.value
+  if (!p) return ''
+  return `R ${Math.abs(p.dR).toFixed(1)} · I ${Math.abs(p.dI).toFixed(1)} · C ${Math.abs(p.dC).toFixed(1)} km`
+})
+
 /* ------------------------- R2-18 风险演变（多源 Pc / 脱靶随时间） ------------------------- */
 const pct = (v: unknown): number | null => {
   const n = typeof v === 'number' ? v : Number(v)
@@ -445,6 +475,9 @@ function fillCaForm(d: CaDefaults | null): void {
   caForm.methods.chan = list.includes('chan')
   caForm.methods.alfano = list.includes('alfano')
 }
+
+/** R2-24：重算面板默认折叠，标题可见 */
+const caOpen = ref(false)
 
 /** 重算结果（最新一次） */
 const rcLoading = ref(false)
@@ -822,6 +855,10 @@ function doExport(kind: 'md' | 'html' | 'csv'): void {
         <p v-if="rmLoading" class="dim">{{ t('rm.loading') }}</p>
         <p v-else-if="rmError" class="state error inline">{{ rmError }}</p>
         <template v-else-if="rm && rm.samples.length">
+          <p v-if="rmAxisSummary" class="rm-summary">
+            {{ rmAxisSummary }}
+            <span class="dim mono">{{ rmAxisValues }}</span>
+          </p>
           <div class="rm-title">{{ t('rm.distTime') }}</div>
           <EChart :option="rmTimeOption" :height="240" />
           <div class="rm-planes">
@@ -842,6 +879,12 @@ function doExport(kind: 'md' | 'html' | 'csv'): void {
         <div class="ph">
           <span>{{ t('ca.detailTitle') }}</span>
           <span class="dim-tag">{{ t('ca.onceOnly') }}</span>
+          <button type="button" class="btn sm" @click="caOpen = !caOpen">
+            {{ caOpen ? '▾' : '▸' }} {{ caOpen ? t('ca.collapse') : t('ca.expand') }}
+          </button>
+        </div>
+        <div v-show="caOpen" class="ca-body">
+        <div class="ca-actions">
           <button type="button" class="btn primary sm" :disabled="rcLoading || !caOrgReady" @click="runRecompute">
             {{ rcLoading ? t('ca.recomputing') : t('ca.recompute') }}
           </button>
@@ -854,7 +897,7 @@ function doExport(kind: 'md' | 'html' | 'csv'): void {
             <span class="lbl">参数来源</span>
             <span class="row">
               <select v-model="rcParamsSource">
-                <option value="default">默认参数（组织）</option>
+                <option value="default">单位默认</option>
                 <option value="mine1" :disabled="!rcSlotReady[1]">我的参数组 1{{ rcSlotReady[1] ? '' : '（未配置）' }}</option>
                 <option value="mine2" :disabled="!rcSlotReady[2]">我的参数组 2{{ rcSlotReady[2] ? '' : '（未配置）' }}</option>
                 <option value="target">目标自定义参数（业主）</option>
@@ -1045,6 +1088,7 @@ function doExport(kind: 'md' | 'html' | 'csv'): void {
             </tbody>
           </table>
         </div>
+        </div>
       </section>
     </section>
 
@@ -1131,7 +1175,20 @@ h1 {
   background: var(--bg-panel-2); border: 1px solid var(--border); border-radius: 6px; padding: 8px 10px;
 }
 .kv dt { margin: 0; font-size: 10px; color: var(--text-dim); }
-.kv dd { margin: 4px 0 0; font-size: 12px; font-weight: 600; }
+.kv dd {
+  margin: 4px 0 0; font-size: 12px; font-weight: 600;
+  /* R2-24：避免 PAYLOAD / ROCKET BODY 等英文类型被硬拆成难看两截 */
+  word-break: normal; overflow-wrap: break-word; hyphens: none;
+}
+/* R2-24：相对运动白话摘要 */
+.rm-summary {
+  margin: 6px 0 10px; padding: 8px 10px; font-size: 12px; line-height: 1.5;
+  background: var(--bg-panel-2); border: 1px solid var(--border); border-left: 2px solid var(--watch);
+  border-radius: 6px;
+}
+.rm-summary .dim { margin-left: 6px; }
+/* R2-24：重算面板动作行 */
+.ca-actions { display: flex; justify-content: flex-end; margin-bottom: 6px; }
 .dim { color: var(--text-dim); font-size: 12px; }
 
 .tl { overflow-x: auto; }

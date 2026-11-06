@@ -17,6 +17,7 @@ import {
   findUserById,
   findOrgById,
   createOrgWithAdmin,
+  updateUserPassword,
   type UserRow,
   type OrgRow
 } from '../db/orgDb.js'
@@ -208,6 +209,59 @@ router.post('/auth/login', async (req, res) => {
 /** 当前登录用户 + 组织（受保护接口样例，供前端「保持登录」探测） */
 router.get('/auth/me', requireAuth, async (req, res) => {
   res.json(ok(req.auth ?? null))
+})
+
+/**
+ * R2-21：自助修改密码。
+ * 只能改当前登录用户本人；策略与注册一致（新密码 ≥ 8 位）；
+ * 不提供任何档位（plan）自助修改入口。
+ */
+router.post('/auth/password', requireAuth, async (req, res) => {
+  if (!(await ensureOrgSchema())) {
+    res.status(503).json(fail(503, '数据库不可用'))
+    return
+  }
+  const body = req.body || {}
+  const oldPassword = String(body.oldPassword || '')
+  const newPassword = String(body.newPassword || '')
+  if (!oldPassword || !newPassword) {
+    res.status(400).json(fail(400, '请输入原密码与新密码'))
+    return
+  }
+  if (newPassword.length < 8) {
+    res.status(400).json(fail(400, '新密码至少 8 位'))
+    return
+  }
+  if (newPassword.length > 100) {
+    res.status(400).json(fail(400, '新密码过长'))
+    return
+  }
+  try {
+    const uid = req.auth!.user.id
+    const user = await findUserById(uid)
+    if (!user) {
+      res.status(401).json(fail(401, '账号不存在'))
+      return
+    }
+    if (!(await bcrypt.compare(oldPassword, user.password_hash))) {
+      res.status(400).json(fail(400, '原密码不正确'))
+      return
+    }
+    if (await bcrypt.compare(newPassword, user.password_hash)) {
+      res.status(400).json(fail(400, '新密码不能与原密码相同'))
+      return
+    }
+    const passwordHash = await bcrypt.hash(newPassword, 10)
+    const changed = await updateUserPassword(uid, passwordHash)
+    if (!changed) {
+      res.status(500).json(fail(500, '密码修改失败'))
+      return
+    }
+    res.json(ok({ changed: true }))
+  } catch (e) {
+    console.error('[auth] change password failed:', (e as Error).message)
+    res.status(500).json(fail(500, '密码修改失败'))
+  }
 })
 
 /**

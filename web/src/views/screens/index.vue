@@ -360,7 +360,7 @@ function pcSourceLabel(e: ScreenEvent): string {
               <label class="field">
                 <span class="lbl">参数来源</span>
                 <select v-model="paramsSource">
-                  <option value="default">默认参数（组织）</option>
+                  <option value="default">单位默认</option>
                   <option value="mine1" :disabled="!slotReady[1]">我的参数组 1{{ slotReady[1] ? '' : '（未配置）' }}</option>
                   <option value="mine2" :disabled="!slotReady[2]">我的参数组 2{{ slotReady[2] ? '' : '（未配置）' }}</option>
                   <option value="target">目标自定义参数（业主）</option>

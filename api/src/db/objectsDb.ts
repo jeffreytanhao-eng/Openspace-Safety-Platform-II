@@ -325,6 +325,8 @@ export interface OwnerClaimReviewRow {
   org_name: string
   user_id: number | null
   user_email: string
+  reviewed_by: string | null
+  reviewed_at: string | null
 }
 
 /** 超管审核列表：授权认领申请（默认只看待审） */
@@ -336,7 +338,8 @@ export async function listOwnerClaims(
   const [rows] = await pool.query<RowDataPacket[]>(
     `SELECT o.id, o.norad_id, o.claim_status, o.created_at, o.review_note,
             o.org_id, COALESCE(g.name, '') AS org_name,
-            o.requested_by_user_id AS user_id, COALESCE(u.email, '') AS user_email
+            o.requested_by_user_id AS user_id, COALESCE(u.email, '') AS user_email,
+            o.reviewed_by, o.reviewed_at
        FROM objects o
        LEFT JOIN organizations g ON g.id = o.org_id
        LEFT JOIN users u ON u.id = o.requested_by_user_id

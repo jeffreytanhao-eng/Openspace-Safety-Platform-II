@@ -423,7 +423,7 @@ router.post('/admin/orgs/:id/members', requireAuth, requireSuperAdmin, async (re
     if (membersMax !== undefined && usage >= membersMax) {
       res.status(403).json({
         code: QUOTA_EXCEEDED,
-        msg: `已达组织成员数上限（${usage}/${membersMax}），请升级档位`,
+        msg: `已达单位成员数上限（${usage}/${membersMax}），请升级档位`,
         data: { feature: 'members_max', usage, limit: membersMax }
       })
       return

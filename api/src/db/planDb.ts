@@ -37,11 +37,11 @@ export const FEATURE_KEYS: FeatureMeta[] = [
   { key: 'ephem_upload_day', label: '每日星历上传', unit: 'count' },
   { key: 'screen_day', label: '每日筛查任务', unit: 'count' },
   { key: 'recompute_day', label: '每日重算次数', unit: 'count' },
-  { key: 'system_tle_scope', label: '系统池可见范围', unit: 'scope' },
+  { key: 'system_tle_scope', label: '系统目录可见范围', unit: 'scope' },
   { key: 'system_cdm_days', label: '系统CDM可查天数', unit: 'days' },
   { key: 'pc_methods', label: 'Pc 算法集', unit: 'bitmap' },
   { key: 'api_keys_max', label: 'API Key 数', unit: 'count' },
-  { key: 'members_max', label: '组织成员数', unit: 'count' }
+  { key: 'members_max', label: '单位成员数', unit: 'count' }
 ]
 
 /** Pc 算法位图位 */

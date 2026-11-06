@@ -80,6 +80,16 @@ export function authMe(): Promise<{ user: AuthUser; org: AuthOrg | null }> {
   return cgiCall({ method: 'GET', url: '/auth/me', headers: authHeaders() })
 }
 
+/** R2-21：自助修改当前账号密码（仅本人） */
+export function authChangePassword(oldPassword: string, newPassword: string): Promise<{ changed: boolean }> {
+  return cgiCall({
+    method: 'POST',
+    url: '/auth/password',
+    data: { oldPassword, newPassword },
+    headers: authHeaders()
+  })
+}
+
 export function authUpdateOrg(name: string): Promise<AuthOrg> {
   return cgiCall({ method: 'PATCH', url: '/org', data: { name }, headers: authHeaders() })
 }

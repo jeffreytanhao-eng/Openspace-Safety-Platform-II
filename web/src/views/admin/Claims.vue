@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { onMounted, ref } from 'vue'
+import { useI18n } from '@/composables/useI18n'
 import { AuthError } from '@/api/auth'
 import {
   adminListObjectClaims,
@@ -8,6 +9,8 @@ import {
   type AdminObjectClaim,
   type ObjectClaimStatus
 } from '@/api/admin'
+
+const { t } = useI18n()
 
 const status = ref<ObjectClaimStatus | 'all'>('pending')
 const items = ref<AdminObjectClaim[]>([])
@@ -86,6 +89,15 @@ const STATUS_LABEL: Record<ObjectClaimStatus, string> = {
   rejected: '已驳回'
 }
 
+/**
+ * R2-25：历史直写标记。
+ * 规则仅看数据形态：owner 且已 claimed 且无审核人/审核时间 —— 对任意 NORAD 一视同仁，
+ * 不按星座或组织做特例；不自动撤销、不改写历史数据。
+ */
+function isLegacyDirect(row: AdminObjectClaim): boolean {
+  return row.claim_status === 'claimed' && !row.reviewed_by && !row.reviewed_at
+}
+
 onMounted(load)
 </script>
 
@@ -124,7 +136,14 @@ onMounted(load)
             <td>{{ row.org_name || `#${row.org_id}` }}</td>
             <td>{{ row.user_email || '—' }}</td>
             <td class="mono">{{ fmtTime(row.created_at) }}</td>
-            <td><span class="chip" :class="row.claim_status">{{ STATUS_LABEL[row.claim_status] }}</span></td>
+            <td>
+              <span class="chip" :class="row.claim_status">{{ STATUS_LABEL[row.claim_status] }}</span>
+              <span
+                v-if="isLegacyDirect(row)"
+                class="chip legacy"
+                :title="t('adm.claims.legacyTip')"
+              >{{ t('adm.claims.legacy') }}</span>
+            </td>
             <td class="delta">{{ row.review_note || '—' }}</td>
             <td class="ops">
               <template v-if="row.claim_status === 'pending'">
@@ -182,4 +201,10 @@ onMounted(load)
 .chip.pending { color: #d9a441; border-color: rgba(217, 164, 65, 0.4); }
 .chip.claimed { color: var(--ok, #63b463); border-color: rgba(99, 180, 99, 0.4); }
 .chip.rejected { color: var(--danger, #d38); border-color: rgba(220, 90, 90, 0.4); }
+.chip.legacy {
+  margin-left: 6px;
+  color: #d9a441;
+  border-color: rgba(217, 164, 65, 0.5);
+  background: rgba(217, 164, 65, 0.08);
+}
 </style>

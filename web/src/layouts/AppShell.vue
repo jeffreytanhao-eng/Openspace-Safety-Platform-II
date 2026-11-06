@@ -58,6 +58,7 @@ const activeKey = computed(() => {
   const name = String(route.name || '')
   if (name === 'overview' || route.path === '/') return 'overview'
   if (name === 'situation') return 'simulation'
+  if (name === 'conjunction-detail' || route.path.startsWith('/conjunctions')) return 'conjunctions'
   return name || 'overview'
 })
 
@@ -125,6 +126,9 @@ onUnmounted(() => {
             class="auth-btn"
             @click="router.push('/admin')"
           >{{ t('auth.adminConsole') }}</button>
+          <button type="button" class="auth-btn" @click="router.push('/account')">
+            {{ t('auth.account') }}
+          </button>
           <button type="button" class="auth-btn" @click="signOut">{{ t('auth.signOut') }}</button>
         </template>
         <button v-else type="button" class="auth-btn" @click="router.push('/login')">
