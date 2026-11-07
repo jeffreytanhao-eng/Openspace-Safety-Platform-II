@@ -32,6 +32,7 @@ const router = createRouter({
         { path: '', redirect: '/admin/orgs' },
         { path: 'orgs', name: 'admin-orgs', component: () => import('@/views/admin/Orgs.vue'), meta: { title: 'Admin · Orgs', requiresAuth: true, requiresPlatform: true } },
         { path: 'claims', name: 'admin-claims', component: () => import('@/views/admin/Claims.vue'), meta: { title: 'Admin · Claims', requiresAuth: true, requiresPlatform: true } },
+        { path: 'upgrades', name: 'admin-upgrades', component: () => import('@/views/admin/Upgrades.vue'), meta: { title: 'Admin · Upgrades', requiresAuth: true, requiresPlatform: true } },
         { path: 'orgs/:id', name: 'admin-org-detail', component: () => import('@/views/admin/OrgDetail.vue'), meta: { title: 'Admin · Org Detail', requiresAuth: true, requiresPlatform: true } },
         { path: 'audit', name: 'admin-audit', component: () => import('@/views/admin/Audit.vue'), meta: { title: 'Admin · Audit', requiresAuth: true, requiresPlatform: true } },
         { path: 'data-ops', name: 'admin-data-ops', component: () => import('@/views/admin/DataOps.vue'), meta: { title: 'Admin · Data Ops', requiresAuth: true, requiresPlatform: true } }

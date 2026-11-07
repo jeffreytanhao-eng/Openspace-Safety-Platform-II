@@ -288,7 +288,7 @@ onUnmounted(() => {
   background: transparent;
 }
 .plan-chip.free { color: #9aa7b2; border-color: rgba(154, 167, 178, 0.4); }
-.plan-chip.normal { color: #6fb3d8; border-color: rgba(111, 179, 216, 0.45); }
+.plan-chip.normal { color: #63b463; border-color: rgba(99, 180, 99, 0.45); }
 .plan-chip.vip { color: #e0b45c; border-color: rgba(224, 180, 92, 0.5); }
 
 .auth-btn {

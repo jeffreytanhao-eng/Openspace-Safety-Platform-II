@@ -17,7 +17,6 @@ const error = ref('')
 
 const email = ref('')
 const password = ref('')
-const orgName = ref('')
 const displayName = ref('')
 
 const redirectTarget = computed(() => {
@@ -39,7 +38,6 @@ async function submit() {
       await auth.login(email.value.trim(), password.value)
     } else {
       await auth.register({
-        orgName: orgName.value.trim(),
         email: email.value.trim(),
         password: password.value,
         displayName: displayName.value.trim() || undefined
@@ -87,18 +85,6 @@ async function submit() {
       </div>
 
       <form @submit.prevent="submit">
-        <label v-if="mode === 'register'" class="field">
-          <span>{{ t('auth.orgName') }}</span>
-          <input
-            v-model="orgName"
-            type="text"
-            name="username"
-            autocomplete="username"
-            required
-            maxlength="128"
-            :placeholder="t('auth.orgNamePh')"
-          />
-        </label>
         <label class="field">
           <span>{{ mode === 'login' ? t('auth.loginId') : t('auth.email') }}</span>
           <input
@@ -133,6 +119,8 @@ async function submit() {
             :placeholder="t('auth.displayNamePh')"
           />
         </label>
+
+        <p v-if="mode === 'register'" class="hint">{{ t('auth.registerHint') }}</p>
 
         <div v-if="error" class="error">{{ error }}</div>
 
@@ -217,6 +205,8 @@ form { display: flex; flex-direction: column; gap: 12px; }
 }
 .field input::placeholder { color: var(--text-dim); }
 .field input:focus { border-color: var(--accent); }
+
+.hint { margin: 0; font-size: 11px; line-height: 1.6; color: var(--text-dim); }
 
 .error {
   font-size: 12px;

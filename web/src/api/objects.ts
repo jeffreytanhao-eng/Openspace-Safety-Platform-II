@@ -137,8 +137,8 @@ export interface CatalogLiteRow {
   epoch: string | null
 }
 
-export function searchCatalogLite(q: string, limit = 50): Promise<{ total: number; items: CatalogLiteRow[] }> {
-  const qs = new URLSearchParams({ q, limit: String(limit) })
+export function searchCatalogLite(q: string, limit = 50, offset = 0): Promise<{ total: number; items: CatalogLiteRow[] }> {
+  const qs = new URLSearchParams({ q, limit: String(limit), offset: String(offset) })
   return cgiCall<{ total: number; items: CatalogLiteRow[] }>({
     method: 'GET',
     url: `/catalog/tles?${qs}`,

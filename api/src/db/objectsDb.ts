@@ -183,9 +183,10 @@ interface RawObject extends RowDataPacket, ObjectRow {}
 
 const COLS = 'id, org_id, norad_id, name, mass_kg, cross_section_m2, propulsion, accepted_pc, accepted_miss_km, claim_status, claim_type, requested_by_user_id, reviewed_by, reviewed_at, review_note, created_at, updated_at'
 
-export async function listObjectsByOrg(orgId: number): Promise<ObjectRow[]> {
+export async function listObjectsByOrg(orgId: number, opts?: { includePending?: boolean }): Promise<ObjectRow[]> {
+  const statusFilter = opts?.includePending ? "claim_status IN ('claimed','pending')" : "claim_status = 'claimed'"
   const [rows] = await pool.query<RawObject[]>(
-    `SELECT ${COLS} FROM objects WHERE org_id = ? AND claim_status = 'claimed' ORDER BY id DESC`,
+    `SELECT ${COLS} FROM objects WHERE org_id = ? AND ${statusFilter} ORDER BY id DESC`,
     [orgId]
   )
   return rows as ObjectRow[]
@@ -305,6 +306,37 @@ export async function resubmitObjectClaim(
     [
       input.claimType,
       input.claimType === 'owner' ? 'pending' : 'claimed',
+      input.requestedByUserId,
+      input.massKg ?? null,
+      input.crossSectionM2 ?? null,
+      input.propulsion ?? '',
+      id
+    ]
+  )
+  return Number((r as { affectedRows?: number }).affectedRows || 0) > 0
+}
+
+/**
+ * R2-27：同一组织已「关注」的目标再发起业主认领时，原地升级为 owner+pending，
+ * 不插入第二行（uk_org_norad 保证一行）；仅允许 claimed+normal 的现有行。
+ */
+export async function upgradeNormalToOwner(
+  id: number,
+  input: {
+    requestedByUserId: number
+    massKg?: number | null
+    crossSectionM2?: number | null
+    propulsion?: string
+  }
+): Promise<boolean> {
+  const [r] = await pool.query(
+    `UPDATE objects
+        SET claim_type = 'owner', claim_status = 'pending', requested_by_user_id = ?,
+            review_note = NULL, reviewed_by = '', reviewed_at = NULL,
+            mass_kg = ?, cross_section_m2 = ?, propulsion = ?,
+            created_at = CURRENT_TIMESTAMP(3)
+      WHERE id = ? AND claim_type = 'normal' AND claim_status = 'claimed'`,
+    [
       input.requestedByUserId,
       input.massKg ?? null,
       input.crossSectionM2 ?? null,

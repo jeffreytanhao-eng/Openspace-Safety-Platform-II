@@ -92,29 +92,48 @@ const claimType = ref<ClaimType>('normal')
 const claimForm = ref({ massKg: '', crossSectionM2: '', propulsion: '' })
 const preview = ref<LookupResult | null>(null)
 const auth = useAuthStore()
-/** 平台账号（无组织）：全平台只读视图 */
-const isPlatform = computed(() => !auth.org)
-/** C0：业主认领仅 VIP（且组织状态正常）可选；其余档位只保留关注 */
-const vipClaim = computed(() => auth.org?.plan === 'vip' && auth.org?.status === 'active')
-/** 该目标已有授权认领、本组织非 VIP、或不在业主授权范围（C1）时，授权选项不可选 */
+/** 平台账号（platform_*）：全平台只读视图（不再用「无组织」判断，普通注册用户也无组织） */
+const isPlatform = computed(() => !!auth.user?.role?.startsWith('platform_'))
+/** C0：业主认领仅 VIP（组织 plan=vip 或用户级 VIP，且组织状态正常） */
+const vipClaim = computed(
+  () =>
+    (auth.user?.isVip === true || auth.org?.plan === 'vip') &&
+    (!auth.org || auth.org.status === 'active')
+)
+/** 该目标已有授权认领、本组织非 VIP、或不在业主授权范围（C1）时，业主认领不可提交 */
 const ownerLocked = computed(() => {
   if (!vipClaim.value || preview.value?.owner_claim) return true
   const scope = preview.value?.owner_scope
   return !!scope && !scope.allowed
 })
+/** R2-27：仅「未认领 / 被驳回 / 已关注且本次走业主认领（同行升级）」可提交 */
+const claimSubmittable = computed(() => {
+  const mc = preview.value?.my_claim
+  if (!mc) return true
+  if (mc.claimStatus === 'rejected') return true
+  return claimType.value === 'owner' && mc.claimStatus === 'claimed' && mc.claimType === 'normal'
+})
+/** 已关注 → 业主认领升级（不新增第二行） */
+const isUpgradeClaim = computed(
+  () =>
+    claimType.value === 'owner' &&
+    preview.value?.my_claim?.claimStatus === 'claimed' &&
+    preview.value?.my_claim?.claimType === 'normal'
+)
 const previewLoading = ref(false)
 const claimError = ref('')
 const claimNotice = ref('')
 const claimQuota = ref(false)
 const submitting = ref(false)
 
-function openClaim() {
+/** R2-27：两个独立入口 —— 认领目标（owner，仅 VIP）/ 关注目标（normal，立即生效） */
+function openClaim(mode: 'owner' | 'follow') {
   claimOpen.value = true
   preview.value = null
   claimError.value = ''
   claimQuota.value = false
   claimNorad.value = ''
-  claimType.value = 'normal'
+  claimType.value = mode === 'owner' ? 'owner' : 'normal'
   claimForm.value = { massKg: '', crossSectionM2: '', propulsion: '' }
 }
 function closeClaim() {
@@ -130,6 +149,15 @@ const discPicked = ref<number[]>([])
 const discLoading = ref(false)
 const discBusy = ref(false)
 const discMsg = ref('')
+/** 编目发现分页：每页 20 条，支持页码跳转 */
+const DISC_PAGE_SIZE = 20
+const discPage = ref(1)
+const discTotal = ref(0)
+const discJump = ref('')
+const discPages = computed(() => Math.max(1, Math.ceil(discTotal.value / DISC_PAGE_SIZE)))
+const discPageAllPicked = computed(
+  () => discRows.value.length > 0 && discRows.value.every((r) => discPicked.value.includes(r.norad_id))
+)
 
 async function loadQuota() {
   try {
@@ -141,25 +169,44 @@ async function loadQuota() {
   }
 }
 
-async function searchCatalog() {
+async function searchCatalog(page = 1) {
   const k = discQ.value.trim()
   if (!k) {
     discRows.value = []
     discPicked.value = []
+    discTotal.value = 0
+    discPage.value = 1
     return
   }
   discLoading.value = true
   discMsg.value = ''
   try {
-    const data = await searchCatalogLite(k, 50)
+    const data = await searchCatalogLite(k, DISC_PAGE_SIZE, (page - 1) * DISC_PAGE_SIZE)
     discRows.value = data.items
-    discPicked.value = []
-    if (!data.items.length) discMsg.value = t('obj.discNoMatch')
+    discTotal.value = data.total
+    discPage.value = page
+    // 翻页保留已勾选目标；重新检索（第 1 页）时清空
+    if (page === 1) discPicked.value = []
+    if (!data.items.length) {
+      discMsg.value = t('obj.discNoMatch')
+    }
   } catch (e) {
     discMsg.value = e instanceof Error ? e.message : String(e)
   } finally {
     discLoading.value = false
   }
+}
+
+async function gotoDiscPage(page: number) {
+  if (page < 1 || page > discPages.value || discLoading.value) return
+  await searchCatalog(page)
+}
+
+function jumpDiscPage() {
+  const n = Number(discJump.value)
+  discJump.value = ''
+  if (!Number.isInteger(n)) return
+  void gotoDiscPage(n)
 }
 
 function toggleDisc(norad: number) {
@@ -169,8 +216,12 @@ function toggleDisc(norad: number) {
 }
 
 function toggleDiscAll() {
-  discPicked.value =
-    discPicked.value.length === discRows.value.length ? [] : discRows.value.map((r) => r.norad_id)
+  const ids = discRows.value.map((r) => r.norad_id)
+  if (ids.every((n) => discPicked.value.includes(n))) {
+    discPicked.value = discPicked.value.filter((n) => !ids.includes(n))
+  } else {
+    discPicked.value = Array.from(new Set([...discPicked.value, ...ids]))
+  }
 }
 
 async function claimPicked() {
@@ -208,8 +259,6 @@ async function doLookup() {
   previewLoading.value = true
   try {
     preview.value = await lookupObject(n)
-    // 已有业主认领 / 非 VIP / 不在授权范围（C1）时，本组织只能做关注
-    if (preview.value.owner_claim || ownerLocked.value) claimType.value = 'normal'
   } catch (e) {
     claimError.value = e instanceof Error ? e.message : String(e)
   } finally {
@@ -235,10 +284,12 @@ async function doClaim() {
       propulsion: claimType.value === 'owner' ? claimForm.value.propulsion.trim() || undefined : undefined
     })
     claimOpen.value = false
-    // 第 5 项：业主认领需超管审核，提交后进入 pending 态
+    // 第 5 项：业主认领需超管审核，提交后进入 pending 态；关注立即生效
     claimNotice.value = r.pending_review
       ? `业主认领申请已提交（NORAD ${preview.value.sat.norad_id}），等待超管审核通过后方可维护参数与上传星历。`
-      : ''
+      : claimType.value === 'normal'
+        ? `已关注 NORAD ${preview.value.sat.norad_id}`
+        : ''
     await load()
   } catch (e) {
     if (e instanceof AuthError && e.code === 4030) claimQuota.value = true
@@ -759,7 +810,19 @@ function lvLabel(v?: string | null): string {
         <span v-if="isPlatform" class="pill">{{ t('obj.platformReadonly') }}</span>
         <span class="count">{{ filtered.length }} / {{ objects.length }}</span>
         <span v-if="quotaChip" class="count quota" :title="t('obj.quotaChip')">{{ quotaChip }}</span>
-        <button v-if="!isPlatform" type="button" class="btn primary" @click="openClaim">{{ t('obj.claim') }}</button>
+        <button
+          v-if="!isPlatform"
+          type="button"
+          class="btn"
+          :disabled="!vipClaim"
+          :title="!vipClaim ? t('obj.ownerVipOnly') : ''"
+          @click="openClaim('owner')"
+        >
+          {{ t('obj.claim') }}
+        </button>
+        <button v-if="!isPlatform" type="button" class="btn primary" @click="openClaim('follow')">
+          {{ t('obj.follow') }}
+        </button>
       </div>
     </header>
 
@@ -795,7 +858,8 @@ function lvLabel(v?: string | null): string {
             <td class="name">{{ o.name }}</td>
             <td class="mono">{{ o.norad_id }}</td>
             <td>
-              <span class="pill" :class="o.claim_type === 'owner' ? 'fresh' : 'missing'">
+              <span v-if="o.claim_status === 'pending'" class="pill missing">{{ t('obj.claimPending') }}</span>
+              <span v-else class="pill" :class="o.claim_type === 'owner' ? 'fresh' : 'missing'">
                 {{ o.claim_type === 'owner' ? t('obj.claimTypeOwner') : t('obj.claimTypeNormal') }}
               </span>
             </td>
@@ -814,9 +878,11 @@ function lvLabel(v?: string | null): string {
 
     <!-- 认领对话框 -->
     <aside v-if="claimOpen" class="drawer" @click.self="closeClaim">
-      <div class="drawer-panel">
+      <div class="drawer-panel claim-panel">
         <header class="dh">
-          <div class="d-title">{{ t('obj.claimTitle') }}</div>
+          <div class="d-title">
+            {{ claimType === 'owner' ? t('obj.claimTitle') : t('obj.followTitle') }}
+          </div>
           <button type="button" class="x" @click="closeClaim">×</button>
         </header>
         <div class="claim-row">
@@ -857,56 +923,59 @@ function lvLabel(v?: string | null): string {
               }}
             </template>
           </div>
-          <template v-if="!preview.my_claim || preview.my_claim.claimStatus === 'rejected'">
-            <div class="claim-type">
-              <label>
-                <input v-model="claimType" type="radio" value="normal" />
-                <span>{{ t('obj.claimNormal') }}</span>
-              </label>
-              <label :class="{ disabled: ownerLocked }">
-                <input v-model="claimType" type="radio" value="owner" :disabled="ownerLocked" />
-                <span>{{ t('obj.claimOwner') }}</span>
-              </label>
-            </div>
-            <div v-if="!vipClaim" class="hint">{{ t('obj.ownerVipOnly') }}</div>
-            <template v-else>
-              <div v-if="preview.owner_scope && !preview.owner_scope.configured && !preview.owner_claim" class="hint warn">
-                {{ t('obj.ownerScopeNone') }}
+          <template v-if="claimSubmittable">
+            <p v-if="isUpgradeClaim" class="type-hint">{{ t('obj.upgradeHint') }}</p>
+            <template v-if="claimType === 'owner'">
+              <div v-if="!vipClaim" class="hint">{{ t('obj.ownerVipOnly') }}</div>
+              <template v-else>
+                <div v-if="preview.owner_scope && !preview.owner_scope.configured && !preview.owner_claim" class="hint warn">
+                  {{ t('obj.ownerScopeNone') }}
+                </div>
+                <div
+                  v-else-if="preview.owner_scope && preview.owner_scope.configured && !preview.owner_scope.allowed && !preview.owner_claim"
+                  class="hint warn"
+                >
+                  {{ t('obj.ownerScopeOut') }}
+                </div>
+              </template>
+              <div class="form">
+                <label><span>{{ t('obj.mass') }}</span><input v-model="claimForm.massKg" type="number" min="0" step="any" /></label>
+                <label><span>{{ t('obj.crossSection') }}</span><input v-model="claimForm.crossSectionM2" type="number" min="0" step="any" /></label>
+                <label><span>{{ t('obj.propulsion') }}</span><input v-model="claimForm.propulsion" type="text" maxlength="60" /></label>
+                <p class="type-hint">{{ t('obj.ownerHint') }}</p>
+                <p class="type-hint">{{ t('obj.dimNote') }}</p>
               </div>
-              <div
-                v-else-if="preview.owner_scope && preview.owner_scope.configured && !preview.owner_scope.allowed && !preview.owner_claim"
-                class="hint warn"
+              <button
+                type="button"
+                class="btn primary wide"
+                :disabled="submitting || ownerLocked"
+                @click="doClaim"
               >
-                {{ t('obj.ownerScopeOut') }}
-              </div>
+                {{ submitting ? t('obj.saving') : t('obj.claimSubmit') }}
+              </button>
             </template>
-            <div v-if="claimType === 'owner'" class="form">
-              <label><span>{{ t('obj.mass') }}</span><input v-model="claimForm.massKg" type="number" min="0" step="any" /></label>
-              <label><span>{{ t('obj.crossSection') }}</span><input v-model="claimForm.crossSectionM2" type="number" min="0" step="any" /></label>
-              <label><span>{{ t('obj.propulsion') }}</span><input v-model="claimForm.propulsion" type="text" maxlength="60" /></label>
-              <p class="type-hint">{{ t('obj.ownerHint') }}</p>
-              <p class="type-hint">{{ t('obj.dimNote') }}</p>
-            </div>
-            <p v-else class="type-hint">{{ t('obj.normalHint') }}</p>
-            <button type="button" class="btn primary wide" :disabled="submitting" @click="doClaim">
-              {{ submitting ? t('obj.saving') : t('obj.claimSubmit') }}
-            </button>
+            <template v-else>
+              <p class="type-hint">{{ t('obj.followHint') }}</p>
+              <button type="button" class="btn primary wide" :disabled="submitting" @click="doClaim">
+                {{ submitting ? t('obj.saving') : t('obj.followSubmit') }}
+              </button>
+            </template>
           </template>
         </div>
 
         <!-- R2-2：通用编目发现 + 批量认领（任意名称 / NORAD / 星座标签批次） -->
-        <div class="block">
+        <div class="block disc-block">
           <div class="bt">{{ t('obj.discover') }}</div>
           <div class="claim-row">
-            <input v-model="discQ" type="search" :placeholder="t('obj.discSearch')" @keyup.enter="searchCatalog" />
-            <button type="button" class="btn" :disabled="discLoading" @click="searchCatalog">
+            <input v-model="discQ" type="search" :placeholder="t('obj.discSearch')" @keyup.enter="searchCatalog(1)" />
+            <button type="button" class="btn" :disabled="discLoading" @click="searchCatalog(1)">
               {{ discLoading ? t('obj.claiming') : t('obj.discSearchBtn') }}
             </button>
           </div>
           <div v-if="discMsg" class="hint">{{ discMsg }}</div>
           <div v-if="discRows.length" class="disc-head">
             <label class="disc-all">
-              <input type="checkbox" :checked="discPicked.length === discRows.length" @change="toggleDiscAll" />
+              <input type="checkbox" :checked="discPageAllPicked" @change="toggleDiscAll" />
               {{ t('obj.discAll') }}
             </label>
             <button type="button" class="btn primary" :disabled="!discPicked.length || discBusy" @click="claimPicked">
@@ -926,6 +995,28 @@ function lvLabel(v?: string | null): string {
               <span class="dim">{{ r.regime || r.object_type || '' }}</span>
             </li>
           </ul>
+          <div v-if="discRows.length" class="pager">
+            <span>{{ t('obj.pageTotal', { n: discTotal }) }}</span>
+            <span class="spacer"></span>
+            <button type="button" class="btn" :disabled="discPage <= 1 || discLoading" @click="gotoDiscPage(discPage - 1)">
+              {{ t('obj.pagePrev') }}
+            </button>
+            <span class="mono">{{ t('obj.pageOf', { p: discPage, n: discPages }) }}</span>
+            <button type="button" class="btn" :disabled="discPage >= discPages || discLoading" @click="gotoDiscPage(discPage + 1)">
+              {{ t('obj.pageNext') }}
+            </button>
+            <input
+              v-model="discJump"
+              type="number"
+              min="1"
+              :max="discPages"
+              class="page-jump"
+              @keyup.enter="jumpDiscPage"
+            />
+            <button type="button" class="btn" :disabled="discLoading" @click="jumpDiscPage">
+              {{ t('obj.pageJump') }}
+            </button>
+          </div>
         </div>
       </div>
     </aside>
@@ -1332,6 +1423,11 @@ tbody tr:hover { background: var(--bg-hover); }
   width: min(440px, 100%); height: 100%; background: var(--bg-panel);
   border-left: 1px solid var(--border); padding: 14px; overflow: auto;
 }
+/* 认领/关注弹窗：列表区撑满至窗口底部，分页条固定在末尾 */
+.claim-panel { display: flex; flex-direction: column; overflow: hidden; }
+.claim-panel .disc-block { flex: 1; min-height: 0; display: flex; flex-direction: column; margin-bottom: 0; }
+.claim-panel .disc-list { flex: 1; min-height: 0; max-height: none; }
+.claim-panel .pager { flex: 0 0 auto; }
 .dh { display: flex; justify-content: space-between; gap: 8px; margin-bottom: 12px; }
 .d-title { font-size: 15px; font-weight: 650; }
 .d-sub { font-size: 11px; color: var(--text-dim); margin-top: 2px; }
@@ -1351,6 +1447,17 @@ tbody tr:hover { background: var(--bg-hover); }
   border: 1px solid var(--border);
   border-radius: 6px;
 }
+.pager {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 8px;
+  font-size: 11px;
+  color: var(--text-dim);
+}
+.pager .spacer { flex: 1; }
+.pager .btn { padding: 4px 8px; font-size: 11px; }
+.pager .page-jump { width: 54px; padding: 4px 6px; text-align: center; }
 .disc-list li {
   display: grid;
   grid-template-columns: 16px 1fr auto auto;
@@ -1391,7 +1498,12 @@ tbody tr:hover { background: var(--bg-hover); }
 .claim-type label.disabled { opacity: 0.5; cursor: not-allowed; }
 .type-hint { margin: 0 0 8px; font-size: 10px; line-height: 1.5; color: var(--text-dim); }
 .form input:disabled { opacity: 0.6; cursor: not-allowed; }
-.form input, .bind-row select {
+.form input, .form select, .bind-row select {
+  appearance: none; border: 1px solid var(--border); background: var(--bg-deep);
+  color: var(--text); border-radius: 4px; padding: 7px 9px; font-size: 12px; outline: none;
+}
+.claim-row input[type='search'] {
+  flex: 1; min-width: 180px;
   appearance: none; border: 1px solid var(--border); background: var(--bg-deep);
   color: var(--text); border-radius: 4px; padding: 7px 9px; font-size: 12px; outline: none;
 }

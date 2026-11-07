@@ -49,6 +49,36 @@ body {
   box-sizing: border-box;
 }
 
+/* 全局表单控件基础样式：避免未单独设样式的 input/select/textarea 回落到浏览器默认
+   （白底黑字 16px），保证各页面输入框文字与配色口径一致。组件内样式优先级更高，会正常覆盖。 */
+input:where(:not([type='checkbox']):not([type='radio']):not([type='file']):not([type='range'])),
+select,
+textarea {
+  font-family: inherit;
+  font-size: 12px;
+  color: var(--text);
+  background-color: var(--bg-deep);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 6px 9px;
+  outline: none;
+}
+input::placeholder,
+textarea::placeholder {
+  color: var(--text-dim);
+}
+input:focus,
+select:focus,
+textarea:focus {
+  border-color: var(--accent);
+}
+input:disabled,
+select:disabled,
+textarea:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
 button {
   font-family: inherit;
 }

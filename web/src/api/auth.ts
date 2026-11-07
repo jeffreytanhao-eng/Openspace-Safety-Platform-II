@@ -15,6 +15,10 @@ export interface AuthUser {
   displayName: string
   role: 'platform_super_admin' | 'platform_ops' | 'org_admin' | 'org_member'
   status: string
+  /** R2-28：用户级 VIP（升级申请通过） */
+  isVip?: boolean
+  /** 账号简介（≤20 字） */
+  bio?: string
 }
 
 export interface AuthOrg {
@@ -67,8 +71,8 @@ export function authLogin(email: string, password: string): Promise<LoginResp> {
   return cgiCall<LoginResp>({ method: 'POST', url: '/auth/login', data: { email, password } })
 }
 
+/** R2-28：注册只建普通账号，不再提交组织名 */
 export function authRegister(payload: {
-  orgName: string
   email: string
   password: string
   displayName?: string
@@ -94,6 +98,16 @@ export function authUpdateOrg(name: string): Promise<AuthOrg> {
   return cgiCall({ method: 'PATCH', url: '/org', data: { name }, headers: authHeaders() })
 }
 
+/** 更新本人账号简介（≤20 字） */
+export function authUpdateBio(bio: string): Promise<{ bio: string }> {
+  return cgiCall({
+    method: 'PATCH',
+    url: '/auth/profile',
+    data: { bio },
+    headers: authHeaders()
+  })
+}
+
 export interface QuotaItem {
   key: string
   label: string
@@ -105,4 +119,66 @@ export interface QuotaItem {
 
 export function authOrgQuota(): Promise<{ plan: string; items: QuotaItem[] }> {
   return cgiCall({ method: 'GET', url: '/org/quota', headers: authHeaders() })
+}
+
+/* ---------------- R2-28：VIP 升级申请 ---------------- */
+
+export interface UpgradeRequest {
+  id: number
+  user_id: number
+  reason: string
+  status: 'pending' | 'approved' | 'rejected'
+  review_note: string
+  reviewed_at: string | null
+  created_at: string
+}
+
+export interface MyUpgradeRequest {
+  isVip: boolean
+  status: 'none' | 'pending' | 'approved' | 'rejected'
+  request: UpgradeRequest | null
+}
+
+export function authGetUpgradeRequest(): Promise<MyUpgradeRequest> {
+  return cgiCall({ method: 'GET', url: '/auth/upgrade-request', headers: authHeaders() })
+}
+
+export function authSubmitUpgradeRequest(reason: string): Promise<UpgradeRequest> {
+  return cgiCall({
+    method: 'POST',
+    url: '/auth/upgrade-request',
+    data: { reason },
+    headers: authHeaders()
+  })
+}
+
+/* ---------------- R2-30：组织管理员管理成员 ---------------- */
+
+export interface OrgMember {
+  id: number
+  email: string
+  display_name: string
+  status: string
+  created_at: string
+}
+
+export function authListOrgMembers(): Promise<{
+  items: OrgMember[]
+  usage: number
+  max: number
+  can_manage: boolean
+}> {
+  return cgiCall({ method: 'GET', url: '/org/members', headers: authHeaders() })
+}
+
+export function authCreateOrgMember(payload: {
+  email: string
+  password: string
+  displayName?: string
+}): Promise<{ id: number; email: string; role: string }> {
+  return cgiCall({ method: 'POST', url: '/org/members', data: payload, headers: authHeaders() })
+}
+
+export function authRemoveOrgMember(id: number): Promise<{ id: number; removed: boolean }> {
+  return cgiCall({ method: 'DELETE', url: `/org/members/${id}`, headers: authHeaders() })
 }

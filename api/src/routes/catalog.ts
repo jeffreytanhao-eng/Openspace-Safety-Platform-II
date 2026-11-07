@@ -166,7 +166,7 @@ router.get('/catalog/tles', requireAuth, async (req, res) => {
   const sql =
     `SELECT norad_id, object_name, object_type, regime, epoch, incl, apogee, perigee, ` +
     `tle_line1, tle_line2, is_active, source, updated_at, owner_code FROM sat_tle WHERE ${where.join(' AND ')} ` +
-    `ORDER BY updated_at DESC LIMIT ? OFFSET ?`
+    `ORDER BY updated_at DESC, norad_id ASC LIMIT ? OFFSET ?`
   params.push(limit, offset)
   const [rows] = await pool.query<TleRow[]>(sql, params)
   const [cnt] = await pool.query<RowDataPacket[]>(

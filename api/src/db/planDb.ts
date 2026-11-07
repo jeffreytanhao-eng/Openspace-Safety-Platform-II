@@ -97,7 +97,8 @@ const PLAN_SEED: Record<'free' | 'normal' | 'vip', Record<string, number>> = {
     system_cdm_days: 365,
     pc_methods: PC_BIT.Foster | PC_BIT.Chan | PC_BIT.Alfano | PC_BIT.OfficialCDM,
     api_keys_max: 20,
-    members_max: 50
+    // R2-30：组织管理员最多 3 名成员（不含管理员本人），VIP 档位默认同口径
+    members_max: 3
   }
 }
 
@@ -146,6 +147,10 @@ export function ensurePlanSchema(): Promise<boolean> {
           await pool.query(
             "UPDATE plan_defaults SET limit_value = ? WHERE plan = 'normal' AND feature_key = 'system_tle_scope' AND limit_value = ?",
             [TLE_SCOPE.FULL, TLE_SCOPE.MANAGED]
+          )
+          // R2-30 一次性：VIP 档成员上限 50 → 3（改成 3 后不再命中）
+          await pool.query(
+            "UPDATE plan_defaults SET limit_value = 3 WHERE plan = 'vip' AND feature_key = 'members_max' AND limit_value = 50"
           )
         }
         return true
@@ -226,10 +231,10 @@ const usageComputers: Record<string, (orgId: number) => Promise<number>> = {
     )
     return Number((rows[0] as { n: number }).n)
   },
-  // 组织成员数（users 表 Epic A1 已建）
+  // 组织成员数（R2-30：只统计 org_member，不含管理员本人）
   members_max: async (orgId) => {
     const [rows] = await pool.query<RowDataPacket[]>(
-      'SELECT COUNT(*) AS n FROM users WHERE org_id = ?',
+      "SELECT COUNT(*) AS n FROM users WHERE org_id = ? AND role = 'org_member'",
       [orgId]
     )
     return Number((rows[0] as { n: number }).n)

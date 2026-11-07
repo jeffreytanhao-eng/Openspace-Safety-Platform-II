@@ -1,4 +1,4 @@
-﻿﻿/**
+﻿﻿﻿/**
  * 目标路由（Epic D1）：组织认领 NORAD 目标并维护档案。
  * 全部 requireAuth；认领挂 checkQuota('objects_max')（免费档 3 个，超限 403 + 升级提示）。
  */
@@ -20,6 +20,7 @@ import {
   getOwnerClaim,
   createObject,
   resubmitObjectClaim,
+  upgradeNormalToOwner,
   updateObject,
   deleteObject,
   countBoundEphem,
@@ -37,6 +38,7 @@ import {
   mergeCaParams
 } from '../db/caDb.js'
 import { sanitizeCaPatch } from './ca.js'
+import { ensurePersonalWorkspace, isVipUser } from '../db/orgDb.js'
 
 const router = Router()
 
@@ -79,12 +81,45 @@ function isPlatformAccount(req: ScopedRequest): boolean {
 }
 
 /**
- * C0 业主认领闸门：仅 plan=vip 且 status=active 的组织可业主认领（卫星业主）；
- * 免费/普通档一律 403，仅保留关注（watch）。前端隐藏不算数，API 强制。
+ * R2-28：无组织普通用户首次关注时自动创建个人工作区（普通档），
+ * 让关注有 org 归属；平台账号一律拒绝写操作。
  */
-function ownerClaimAllowed(org: AuthContext['org'], res: Response): boolean {
-  if (!org || org.plan !== 'vip' || org.status !== 'active') {
-    res.status(403).json(fail(403, '仅 VIP 组织可进行业主认领（当前档位仅支持关注）'))
+async function ensureBusinessOrg(req: ScopedRequest, res: Response): Promise<boolean> {
+  if (req.auth?.org && req.auth.user.orgId) return true
+  if (!req.auth) {
+    res.status(401).json(fail(401, '未登录'))
+    return false
+  }
+  if (isPlatformAccount(req)) {
+    res.status(403).json(fail(403, '平台账号为只读视图，不能认领或关注目标'))
+    return false
+  }
+  const ws = await ensurePersonalWorkspace(req.auth.user.id)
+  if (!ws) {
+    res.status(503).json(fail(503, '个人工作区创建失败，请稍后重试'))
+    return false
+  }
+  req.auth.user.orgId = ws.org.id
+  req.auth.user.role = ws.user.role
+  req.auth.org = {
+    id: ws.org.id,
+    name: ws.org.name,
+    plan: ws.org.plan,
+    status: ws.org.status,
+    trialEndsAt: ws.org.trial_ends_at
+  }
+  return true
+}
+
+/**
+ * C0 业主认领闸门：仅 VIP（组织 plan=vip 或用户级 VIP）且组织正常时可业主认领；
+ * 普通用户一律 403，仅保留关注。前端禁用按钮不算数，API 强制。
+ */
+function ownerClaimAllowed(auth: AuthContext | undefined, res: Response): boolean {
+  const org = auth?.org
+  const vip = !!auth?.user.isVip || org?.plan === 'vip'
+  if (!org || !vip || org.status !== 'active') {
+    res.status(403).json(fail(403, '仅 VIP 可发起业主认领（当前档位仅支持关注）'))
     return false
   }
   return true
@@ -162,7 +197,8 @@ router.get('/objects/lookup/:noradId', async (req, res) => {
   const owner = await getOwnerClaim(norad)
   const mine = orgId ? await getObjectByOrgNorad(orgId, norad) : null
   // C1：VIP 组织预览时回显该目标是否在业主授权范围内（前端据此灰显「业主认领」）
-  const isVip = req.auth?.org?.plan === 'vip' && req.auth?.org?.status === 'active'
+  const isVip =
+    (!!req.auth?.user.isVip || req.auth?.org?.plan === 'vip') && req.auth?.org?.status === 'active'
   const scope = orgId && isVip ? await checkClaimScope(orgId, norad) : null
   res.json(
     ok({
@@ -187,7 +223,8 @@ router.get('/objects/lookup/:noradId', async (req, res) => {
 router.get('/objects', async (req: ScopedRequest, res) => {
   if (!req.auth?.org || !req.auth.user.orgId) {
     if (!isPlatformAccount(req)) {
-      res.status(403).json(fail(403, '需要组织账号'))
+      // R2-28：无组织普通用户尚未关注任何目标（首次关注时才会创建个人工作区）
+      res.json(ok([]))
       return
     }
     const all = await listAllObjects()
@@ -196,7 +233,8 @@ router.get('/objects', async (req: ScopedRequest, res) => {
     return
   }
   const orgId = Number(req.auth.user.orgId)
-  const list = await listObjectsByOrg(orgId)
+  // 待审核业主申请也返回本组织列表，便于用户看到「待审核」状态（不影响日更/其它只取 claimed 的场景）
+  const list = await listObjectsByOrg(orgId, { includePending: true })
   const bound = await countBoundEphem(list.map((o) => o.id))
   res.json(ok(list.map((o) => ({ ...o, bound_ephemerides: bound.get(o.id) ?? 0 }))))
 })
@@ -207,7 +245,8 @@ router.get('/objects', async (req: ScopedRequest, res) => {
  *  - owner 授权认领：卫星业主，同一 NORAD 全局仅一条（唯一键兜底）。
  * 冲突语义优先于配额，避免 403 掩盖 409。
  */
-router.post('/objects', requireOrg, async (req: ScopedRequest, res) => {
+router.post('/objects', async (req: ScopedRequest, res) => {
+  if (!(await ensureBusinessOrg(req, res))) return
   const orgId = Number(req.auth!.user.orgId)
   const body = req.body as {
     noradId?: unknown
@@ -222,18 +261,27 @@ router.post('/objects', requireOrg, async (req: ScopedRequest, res) => {
     return
   }
   const claimType: ClaimType = body.claimType === 'owner' ? 'owner' : 'normal'
-  if (claimType === 'owner' && !ownerClaimAllowed(req.auth!.org, res)) return
+  // R2-27：普通用户 API 层直接拒绝业主认领（不依赖前端按钮禁用）
+  if (claimType === 'owner' && !ownerClaimAllowed(req.auth, res)) return
   const tle = await satTleOf(norad)
   if (!tle) {
     res.status(404).json(fail(404, `编目中未找到 NORAD ${norad}，无法认领`))
     return
   }
   const mine = await getObjectByOrgNorad(orgId, norad)
-  if (mine && mine.claim_status !== 'rejected') {
-    res.status(409).json(
-      fail(409, `本组织已认领该目标（${mine.claim_type === 'owner' ? '业主认领' : '关注'}）`)
-    )
+  if (mine && mine.claim_status === 'pending') {
+    res.status(409).json(fail(409, '本组织已有待审核的业主认领申请，请等待平台超管审核'))
     return
+  }
+  if (mine && mine.claim_status === 'claimed') {
+    if (mine.claim_type === 'owner') {
+      res.status(409).json(fail(409, '本组织已是该目标的业主，无需重复认领'))
+      return
+    }
+    if (claimType === 'normal') {
+      res.status(409).json(fail(409, '本组织已关注该目标，无需重复关注'))
+      return
+    }
   }
   if (claimType === 'owner') {
     const owner = await getOwnerClaim(norad)
@@ -252,13 +300,36 @@ router.post('/objects', requireOrg, async (req: ScopedRequest, res) => {
       return
     }
   }
+  const mass = body.massKg === undefined || body.massKg === null || body.massKg === '' ? null : Number(body.massKg)
+  const cs = body.crossSectionM2 === undefined || body.crossSectionM2 === null || body.crossSectionM2 === '' ? null : Number(body.crossSectionM2)
+  // R2-27：已关注的组织再发起业主认领 → 同行升级为 owner+pending，绝不插入第二行
+  if (mine && mine.claim_status === 'claimed' && mine.claim_type === 'normal' && claimType === 'owner') {
+    const okUpgrade = await upgradeNormalToOwner(mine.id, {
+      requestedByUserId: req.auth!.user.id,
+      massKg: mass !== null && Number.isFinite(mass) ? mass : null,
+      crossSectionM2: cs !== null && Number.isFinite(cs) ? cs : null,
+      propulsion: typeof body.propulsion === 'string' ? body.propulsion.slice(0, 60) : ''
+    })
+    if (!okUpgrade) {
+      res.status(409).json(fail(409, '认领冲突：该目标状态已变化，请刷新后重试'))
+      return
+    }
+    const row = await getObjectById(mine.id)
+    res.json(
+      ok({
+        ...row,
+        sat: tle,
+        pending_review: true,
+        message: '关注已升级为业主认领申请，等待平台超管审核'
+      })
+    )
+    return
+  }
   const exceeded = await quotaExceeded('objects_max', req.auth!.org)
   if (exceeded) {
     res.status(exceeded.status).json(exceeded.body)
     return
   }
-  const mass = body.massKg === undefined || body.massKg === null || body.massKg === '' ? null : Number(body.massKg)
-  const cs = body.crossSectionM2 === undefined || body.crossSectionM2 === null || body.crossSectionM2 === '' ? null : Number(body.crossSectionM2)
   try {
     // 曾经被驳回的本组织记录：重置后重新进入审核流（避免唯一键冲突）
     if (mine) {
@@ -382,7 +453,8 @@ router.post('/objects/sync-tle', requireOrg, async (req: ScopedRequest, res) => 
  * 冲突与配额逐条裁剪：已在本组织 / 编目缺失 / 配额不足分别返回，不整体失败；
  * 普通认领允许多组织重复，因此不存在「已被他组织」跳过。
  */
-router.post('/objects/batch-claim', requireOrg, async (req: ScopedRequest, res) => {
+router.post('/objects/batch-claim', async (req: ScopedRequest, res) => {
+  if (!(await ensureBusinessOrg(req, res))) return
   const orgId = Number(req.auth!.user.orgId)
   const raw = (req.body as { norads?: unknown })?.norads
   const norads = [

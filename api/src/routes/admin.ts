@@ -13,7 +13,18 @@ import bcrypt from 'bcryptjs'
 import type { RowDataPacket } from 'mysql2'
 import { ok, fail } from '../utils/response.js'
 import { pool } from '../db/pool.js'
-import { ensureOrgSchema, findUserByEmail, findOrgById, createOrgWithAdmin, type OrgRow } from '../db/orgDb.js'
+import {
+  ensureOrgSchema,
+  findUserByEmail,
+  findOrgById,
+  createOrgForExistingUser,
+  countOrgMembers,
+  listAssignableVipUsers,
+  listUpgradeRequests,
+  approveUpgradeRequest,
+  rejectUpgradeRequest,
+  type OrgRow
+} from '../db/orgDb.js'
 import { ensureAdminSchema, writeAudit, listAudit } from '../db/adminDb.js'
 import { ensurePlanSchema, getEffectiveLimits, getOrgQuotaRows, getOrgFlagRows, setOrgQuotaOverride, clearOrgQuotaOverride, setOrgFlagOverride, clearOrgFlagOverride, FEATURE_KEYS, FLAG_CATALOG, TLE_SCOPE, PC_BIT } from '../db/planDb.js'
 import { requireAuth, type AuthContext } from './auth.js'
@@ -32,6 +43,9 @@ export function requireSuperAdmin(req: ScopedRequest, res: import('express').Res
   }
   next()
 }
+
+/** R2-30：组织成员硬上限（不含管理员本人），账号页与超管后台同一口径 */
+const MAX_ORG_MEMBERS = 3
 
 const PLANS = ['free', 'normal', 'vip'] as const
 type Plan = (typeof PLANS)[number]
@@ -62,7 +76,12 @@ router.get('/admin/orgs', requireAuth, requireSuperAdmin, async (_req, res) => {
   res.json(ok({ items: rows }))
 })
 
-/** 开通向导：建组织 + 首个管理员 + 初始档位 */
+/**
+ * R2-29 开通组织：组织只能由超管创建，并指定一个「已有 VIP」作为组织管理员。
+ * - 不再新建管理员邮箱/密码（公开注册只建普通账号，VIP 须先经升级申请审核）；
+ * - 被指定账号必须：已是 VIP、尚未加入任何组织（含不能已是其它组织管理员）；
+ * - 档位固定 vip（成员据此享有 VIP 能力）。
+ */
 router.post('/admin/orgs', requireAuth, requireSuperAdmin, async (req: ScopedRequest, res) => {
   if (!(await ensureOrgSchema())) {
     res.status(503).json(fail(503, '数据库不可用'))
@@ -70,42 +89,52 @@ router.post('/admin/orgs', requireAuth, requireSuperAdmin, async (req: ScopedReq
   }
   const body = req.body || {}
   const name = String(body.name || '').trim()
-  const plan = PLANS.includes(body.plan) ? (body.plan as Plan) : 'free'
   const email = String(body.adminEmail || '').trim().toLowerCase()
-  const password = String(body.adminPassword || '')
-  const displayName = String(body.adminDisplayName || '').trim()
 
   if (!name || name.length > 128) {
     res.status(400).json(fail(400, '组织名不能为空且不超过 128 字'))
     return
   }
   if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
-    res.status(400).json(fail(400, '管理员邮箱格式不正确'))
-    return
-  }
-  if (password.length < 8) {
-    res.status(400).json(fail(400, '管理员密码至少 8 位'))
+    res.status(400).json(fail(400, '请指定已有 VIP 账号的邮箱'))
     return
   }
   try {
-    if (await findUserByEmail(email)) {
-      res.status(409).json(fail(409, '该邮箱已被注册'))
+    const admin = await findUserByEmail(email)
+    if (!admin) {
+      res.status(404).json(fail(404, '该邮箱尚未注册，请先让用户注册并通过 VIP 升级申请'))
       return
     }
-    const passwordHash = await bcrypt.hash(password, 10)
-    const { org, user } = await createOrgWithAdmin({
+    if (admin.role.startsWith('platform_')) {
+      res.status(400).json(fail(400, '平台账号不能作为组织管理员'))
+      return
+    }
+    if (Number(admin.is_vip) !== 1) {
+      res.status(409).json(fail(409, '该账号尚未通过 VIP 升级申请，请先在「升级申请」中审核通过'))
+      return
+    }
+    // 系统自动创建的「个人工作区」不算正式组织，可被新组织收编；其它组织一律拒绝
+    let personalOrgId: number | undefined
+    if (admin.org_id) {
+      const existingOrg = await findOrgById(admin.org_id)
+      if (!existingOrg || existingOrg.notes !== 'auto:personal') {
+        res.status(409).json(fail(409, '该账号已属于其它组织，请先移出后再指定'))
+        return
+      }
+      personalOrgId = admin.org_id
+    }
+    const { org, user } = await createOrgForExistingUser({
       orgName: name,
-      email,
-      passwordHash,
-      displayName: displayName || email.split('@')[0],
-      plan
+      userId: admin.id,
+      plan: 'vip',
+      allowPersonalOrgId: personalOrgId
     })
     await writeAudit({
       actorUserId: req.auth!.user.id,
       actorEmail: req.auth!.user.email,
       orgId: org.id,
       action: 'org.create',
-      after: { name: org.name, plan: org.plan, adminEmail: user.email }
+      after: { name: org.name, plan: org.plan, adminEmail: user.email, assignedExistingVip: true }
     })
     res.json(ok({ org, admin: { id: user.id, email: user.email, role: user.role } }))
   } catch (e) {
@@ -114,13 +143,87 @@ router.post('/admin/orgs', requireAuth, requireSuperAdmin, async (req: ScopedReq
       res.status(409).json(fail(409, '组织名已存在'))
       return
     }
-    if (msg.includes('uk_user_email')) {
-      res.status(409).json(fail(409, '该邮箱已被注册'))
+    if (msg === 'USER_HAS_ORG') {
+      res.status(409).json(fail(409, '该账号已属于其它组织，请先移出后再指定'))
       return
     }
     console.error('[admin] create org failed:', msg)
     res.status(500).json(fail(500, '开通失败'))
   }
+})
+
+/** R2-29：可选的组织管理员候选（已通过 VIP、尚未加入组织） */
+router.get('/admin/vip-users', requireAuth, requireSuperAdmin, async (req, res) => {
+  if (!(await ensureOrgSchema())) {
+    res.status(503).json(fail(503, '数据库不可用'))
+    return
+  }
+  const q = String((req.query as { q?: string }).q || '')
+  const items = await listAssignableVipUsers(q)
+  res.json(ok({ items }))
+})
+
+/* ---------------------- R2-28：VIP 升级申请审核 ---------------------- */
+
+router.get('/admin/upgrade-requests', requireAuth, requireSuperAdmin, async (req, res) => {
+  if (!(await ensureOrgSchema())) {
+    res.status(503).json(fail(503, '数据库不可用'))
+    return
+  }
+  const status = String((req.query as { status?: string }).status || 'pending') === 'all' ? 'all' : 'pending'
+  const items = await listUpgradeRequests(status)
+  res.json(ok({ items, status }))
+})
+
+router.post('/admin/upgrade-requests/:id/approve', requireAuth, requireSuperAdmin, async (req: ScopedRequest, res) => {
+  if (!(await ensureOrgSchema())) {
+    res.status(503).json(fail(503, '数据库不可用'))
+    return
+  }
+  const id = Number(req.params.id)
+  if (!Number.isInteger(id)) {
+    res.status(400).json(fail(400, '申请编号无效'))
+    return
+  }
+  const row = await approveUpgradeRequest(id, req.auth!.user.id)
+  if (!row) {
+    res.status(409).json(fail(409, '该申请不存在或已被处理'))
+    return
+  }
+  await writeAudit({
+    actorUserId: req.auth!.user.id,
+    actorEmail: req.auth!.user.email,
+    orgId: null,
+    action: 'user.upgrade.approve',
+    after: { requestId: id, userId: row.user_id }
+  })
+  res.json(ok(row))
+})
+
+router.post('/admin/upgrade-requests/:id/reject', requireAuth, requireSuperAdmin, async (req: ScopedRequest, res) => {
+  if (!(await ensureOrgSchema())) {
+    res.status(503).json(fail(503, '数据库不可用'))
+    return
+  }
+  const id = Number(req.params.id)
+  if (!Number.isInteger(id)) {
+    res.status(400).json(fail(400, '申请编号无效'))
+    return
+  }
+  const note = String((req.body || {}).note || '').trim()
+  const row = await rejectUpgradeRequest(id, req.auth!.user.id, note)
+  if (!row) {
+    res.status(409).json(fail(409, '该申请不存在或已被处理'))
+    return
+  }
+  await writeAudit({
+    actorUserId: req.auth!.user.id,
+    actorEmail: req.auth!.user.email,
+    orgId: null,
+    action: 'user.upgrade.reject',
+    after: { requestId: id, userId: row.user_id, note }
+  })
+  res.json(ok(row))
 })
 
 /** 组织详情（含成员 / 生效限额 / 配额行 / 功能开关行） */
@@ -385,7 +488,10 @@ router.patch('/admin/orgs/:id', requireAuth, requireSuperAdmin, async (req: Scop
   res.json(ok(updated))
 })
 
-/** 新建组织成员（org_admin / org_member，受 members_max 生效限额） */
+/**
+ * 新建组织成员（仅 org_member；R2-30 与账号页共用「最多 3 名成员」上限，防超管路径绕过）。
+ * org_admin 只能在该组织创建时由超管指定已有 VIP，不在此处新建。
+ */
 router.post('/admin/orgs/:id/members', requireAuth, requireSuperAdmin, async (req: ScopedRequest, res) => {
   const orgId = Number(req.params.id)
   const org = Number.isFinite(orgId) ? await findOrgById(orgId) : null
@@ -397,7 +503,11 @@ router.post('/admin/orgs/:id/members', requireAuth, requireSuperAdmin, async (re
   const email = String(body.email || '').trim().toLowerCase()
   const password = String(body.password || '')
   const displayName = String(body.displayName || '').trim()
-  const role = body.role === 'org_admin' ? 'org_admin' : 'org_member'
+  if (body.role === 'org_admin') {
+    res.status(400).json(fail(400, '组织管理员须在建组织时指定已有 VIP；此处仅可添加普通成员'))
+    return
+  }
+  const role = 'org_member' as const
 
   if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
     res.status(400).json(fail(400, '邮箱格式不正确'))
@@ -414,16 +524,13 @@ router.post('/admin/orgs/:id/members', requireAuth, requireSuperAdmin, async (re
     }
     await ensurePlanSchema()
     const limits = await getEffectiveLimits(org.id, org.plan)
-    const membersMax = limits.find((l) => l.feature === 'members_max')?.limit
-    const [cnt] = await pool.query<import('mysql2').RowDataPacket[]>(
-      'SELECT COUNT(*) AS n FROM users WHERE org_id = ?',
-      [orgId]
-    )
-    const usage = Number((cnt[0] as { n: number }).n)
-    if (membersMax !== undefined && usage >= membersMax) {
+    const effective = limits.find((l) => l.feature === 'members_max')?.limit
+    const membersMax = Math.min(effective ?? MAX_ORG_MEMBERS, MAX_ORG_MEMBERS)
+    const usage = await countOrgMembers(orgId)
+    if (usage >= membersMax) {
       res.status(403).json({
         code: QUOTA_EXCEEDED,
-        msg: `已达单位成员数上限（${usage}/${membersMax}），请升级档位`,
+        msg: `已达单位成员数上限（${usage}/${membersMax}），请先移除成员`,
         data: { feature: 'members_max', usage, limit: membersMax }
       })
       return

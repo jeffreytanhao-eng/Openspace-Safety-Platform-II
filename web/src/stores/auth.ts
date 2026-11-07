@@ -73,7 +73,6 @@ export const useAuthStore = defineStore('auth', () => {
   }
 
   async function register(payload: {
-    orgName: string
     email: string
     password: string
     displayName?: string

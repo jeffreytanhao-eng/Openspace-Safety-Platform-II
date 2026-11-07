@@ -16,8 +16,13 @@ import {
   findUserByEmail,
   findUserById,
   findOrgById,
-  createOrgWithAdmin,
+  createUser,
   updateUserPassword,
+  updateUserBio,
+  isVipUser,
+  createUpgradeRequest,
+  findPendingUpgrade,
+  findLatestUpgrade,
   type UserRow,
   type OrgRow
 } from '../db/orgDb.js'
@@ -35,6 +40,10 @@ export interface SafeUser {
   displayName: string
   role: UserRow['role']
   status: UserRow['status']
+  /** R2-28：用户级 VIP（升级申请通过后为 true） */
+  isVip: boolean
+  /** 账号简介（≤20 字） */
+  bio: string
 }
 
 export interface SafeOrg {
@@ -66,7 +75,9 @@ function toSafeUser(u: UserRow): SafeUser {
     email: u.email,
     displayName: u.display_name,
     role: u.role,
-    status: u.status
+    status: u.status,
+    isVip: Number(u.is_vip) === 1,
+    bio: u.bio || ''
   }
 }
 
@@ -113,22 +124,20 @@ export async function requireAuth(req: Request, res: Response, next: NextFunctio
   }
 }
 
-/** 注册：创建组织 + 首个组织管理员（plan 默认 free） */
+/**
+ * R2-28：公开注册只创建普通账号，不再填写/创建组织。
+ * 新用户 org_id 为空、role=org_member、非 VIP；组织只能由超管后台创建并指定已有 VIP。
+ */
 router.post('/auth/register', async (req, res) => {
   if (!(await ensureOrgSchema())) {
     res.status(503).json(fail(503, '数据库不可用'))
     return
   }
   const body = req.body || {}
-  const orgName = String(body.orgName || '').trim()
   const email = String(body.email || '').trim().toLowerCase()
   const password = String(body.password || '')
   const displayName = String(body.displayName || '').trim()
 
-  if (!orgName || orgName.length > 128) {
-    res.status(400).json(fail(400, '组织名不能为空且不超过 128 字'))
-    return
-  }
   if (!EMAIL_RE.test(email) || email.length > 190) {
     res.status(400).json(fail(400, '邮箱格式不正确'))
     return
@@ -143,19 +152,14 @@ router.post('/auth/register', async (req, res) => {
       return
     }
     const passwordHash = await bcrypt.hash(password, 10)
-    const { org, user } = await createOrgWithAdmin({
-      orgName,
+    const user = await createUser({
       email,
       passwordHash,
       displayName: displayName || email.split('@')[0]
     })
-    res.json(ok({ token: signToken(user), user: toSafeUser(user), org: toSafeOrg(org) }))
+    res.json(ok({ token: signToken(user), user: toSafeUser(user), org: null }))
   } catch (e) {
     const msg = (e as Error).message || ''
-    if (msg.includes('uk_org_name')) {
-      res.status(409).json(fail(409, '组织名已存在'))
-      return
-    }
     if (msg.includes('uk_user_email')) {
       res.status(409).json(fail(409, '该邮箱已被注册'))
       return
@@ -262,6 +266,88 @@ router.post('/auth/password', requireAuth, async (req, res) => {
     console.error('[auth] change password failed:', (e as Error).message)
     res.status(500).json(fail(500, '密码修改失败'))
   }
+})
+
+/**
+ * 账号简介：仅本人可改，最多 20 字（按 Unicode 字符计）。
+ */
+router.patch('/auth/profile', requireAuth, async (req, res) => {
+  if (!(await ensureOrgSchema())) {
+    res.status(503).json(fail(503, '数据库不可用'))
+    return
+  }
+  const raw = (req.body || {}).bio
+  if (typeof raw !== 'string') {
+    res.status(400).json(fail(400, '账号简介格式不正确'))
+    return
+  }
+  const bio = raw.trim()
+  if (Array.from(bio).length > 20) {
+    res.status(400).json(fail(400, '账号简介不能超过 20 字'))
+    return
+  }
+  try {
+    await updateUserBio(req.auth!.user.id, bio)
+    res.json(ok({ bio }))
+  } catch (e) {
+    console.error('[auth] update bio failed:', (e as Error).message)
+    res.status(500).json(fail(500, '账号简介保存失败'))
+  }
+})
+
+/**
+ * R2-28：普通用户提交 VIP 升级申请（不直接改档位；须超管审核）。
+ * 已有待审申请时拒绝重复提交，防止连点刷单。
+ */
+router.post('/auth/upgrade-request', requireAuth, async (req, res) => {
+  if (!(await ensureOrgSchema())) {
+    res.status(503).json(fail(503, '数据库不可用'))
+    return
+  }
+  const uid = req.auth!.user.id
+  const user = await findUserById(uid)
+  if (!user) {
+    res.status(401).json(fail(401, '账号不存在'))
+    return
+  }
+  if (isVipUser(user, req.auth!.org)) {
+    res.status(400).json(fail(400, '当前账号已是 VIP，无需申请升级'))
+    return
+  }
+  if (await findPendingUpgrade(uid)) {
+    res.status(409).json(fail(409, '升级申请已提交，请等待平台审核'))
+    return
+  }
+  const reason = String((req.body || {}).reason || '').trim()
+  try {
+    const created = await createUpgradeRequest(uid, reason)
+    res.json(ok(created))
+  } catch (e) {
+    console.error('[auth] upgrade request failed:', (e as Error).message)
+    res.status(500).json(fail(500, '提交升级申请失败'))
+  }
+})
+
+/** R2-28：当前账号的升级申请状态（none / pending / approved / rejected） */
+router.get('/auth/upgrade-request', requireAuth, async (req, res) => {
+  if (!(await ensureOrgSchema())) {
+    res.status(503).json(fail(503, '数据库不可用'))
+    return
+  }
+  const user = await findUserById(req.auth!.user.id)
+  if (!user) {
+    res.status(401).json(fail(401, '账号不存在'))
+    return
+  }
+  const latest = await findLatestUpgrade(user.id)
+  const vip = isVipUser(user, req.auth!.org)
+  res.json(
+    ok({
+      isVip: vip,
+      status: vip ? 'approved' : latest?.status ?? 'none',
+      request: latest
+    })
+  )
 })
 
 /**

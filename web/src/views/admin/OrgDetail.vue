@@ -36,7 +36,8 @@ const msg = ref('')
 
 const edit = ref({ plan: 'free', status: 'active', notes: '' })
 const busyOrg = ref(false)
-const memberForm = ref({ email: '', password: '', displayName: '', role: 'org_member' })
+// R2-29/R2-30：组织管理员只能由建组织时指定；此处仅创建普通成员，最多 3 名
+const memberForm = ref({ email: '', password: '', displayName: '' })
 const busyMember = ref(false)
 const memberError = ref('')
 
@@ -302,10 +303,9 @@ async function addMember() {
     await adminCreateMember(orgId, {
       email: memberForm.value.email.trim(),
       password: memberForm.value.password,
-      displayName: memberForm.value.displayName.trim() || undefined,
-      role: memberForm.value.role
+      displayName: memberForm.value.displayName.trim() || undefined
     })
-    memberForm.value = { email: '', password: '', displayName: '', role: 'org_member' }
+    memberForm.value = { email: '', password: '', displayName: '' }
     await load()
   } catch (e) {
     memberError.value = e instanceof AuthError ? e.message : String((e as Error).message || e)
@@ -536,7 +536,7 @@ onMounted(load)
       </div>
 
       <div class="card">
-        <h2>成员（{{ members.length }}）</h2>
+        <h2>成员（{{ members.filter((m) => m.role === 'org_member').length }} / 3）</h2>
         <table class="tbl">
           <thead><tr><th>ID</th><th>邮箱</th><th>姓名</th><th>角色</th><th>状态</th><th>创建时间</th></tr></thead>
           <tbody>
@@ -558,19 +558,17 @@ onMounted(load)
             <label><span>邮箱 *</span><input v-model="memberForm.email" type="email" required /></label>
             <label><span>密码 *</span><input v-model="memberForm.password" type="password" required minlength="8" placeholder="至少 8 位" /></label>
             <label><span>姓名</span><input v-model="memberForm.displayName" maxlength="64" placeholder="选填" /></label>
-            <label><span>角色</span>
-              <select v-model="memberForm.role">
-                <option value="org_member">成员</option>
-                <option value="org_admin">组织管理员</option>
-              </select>
-            </label>
           </div>
           <div v-if="memberError" class="error">{{ memberError }}</div>
           <div class="actions">
-            <button type="submit" class="btn primary" :disabled="busyMember">
+            <button
+              type="submit"
+              class="btn primary"
+              :disabled="busyMember || members.filter((m) => m.role === 'org_member').length >= 3"
+            >
               {{ busyMember ? '创建中…' : '创建成员' }}
             </button>
-            <span class="hint">受 members_max 档位限额约束（超限返回升级提示）</span>
+            <span class="hint">最多 3 名成员（不含管理员本人）；组织管理员须在建组织时指定已有 VIP</span>
           </div>
         </form>
       </div>

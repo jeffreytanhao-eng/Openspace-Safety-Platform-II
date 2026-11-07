@@ -2,7 +2,13 @@
 import { onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { AuthError } from '@/api/auth'
-import { adminCreateOrg, adminListOrgs, type AdminOrg } from '@/api/admin'
+import {
+  adminCreateOrg,
+  adminListOrgs,
+  adminListVipUsers,
+  type AdminOrg,
+  type VipCandidate
+} from '@/api/admin'
 
 const router = useRouter()
 const items = ref<AdminOrg[]>([])
@@ -12,7 +18,20 @@ const error = ref('')
 const wizardOpen = ref(false)
 const busy = ref(false)
 const wizError = ref('')
-const form = ref({ name: '', plan: 'free', adminEmail: '', adminPassword: '', adminDisplayName: '' })
+// R2-29：组织只能由超管创建，并指定已有 VIP 为管理员（不再新建管理员账号）
+const form = ref({ name: '', adminEmail: '' })
+const vipCandidates = ref<VipCandidate[]>([])
+
+async function toggleWizard() {
+  wizardOpen.value = !wizardOpen.value
+  if (wizardOpen.value) {
+    try {
+      vipCandidates.value = (await adminListVipUsers()).items
+    } catch {
+      vipCandidates.value = []
+    }
+  }
+}
 
 async function load() {
   loading.value = true
@@ -33,13 +52,10 @@ async function submitWizard() {
   try {
     await adminCreateOrg({
       name: form.value.name.trim(),
-      plan: form.value.plan,
-      adminEmail: form.value.adminEmail.trim(),
-      adminPassword: form.value.adminPassword,
-      adminDisplayName: form.value.adminDisplayName.trim() || undefined
+      adminEmail: form.value.adminEmail.trim()
     })
     wizardOpen.value = false
-    form.value = { name: '', plan: 'free', adminEmail: '', adminPassword: '', adminDisplayName: '' }
+    form.value = { name: '', adminEmail: '' }
     await load()
   } catch (e) {
     wizError.value = e instanceof AuthError ? e.message : String((e as Error).message || e)
@@ -69,7 +85,7 @@ onMounted(load)
         <h1>客户组织</h1>
         <p class="sub">开通、升降档与生命周期管理；全部写操作进审计。</p>
       </div>
-      <button type="button" class="btn primary" @click="wizardOpen = !wizardOpen">
+      <button type="button" class="btn primary" @click="toggleWizard">
         {{ wizardOpen ? '收起开通向导' : '+ 开通组织' }}
       </button>
     </div>
@@ -79,17 +95,25 @@ onMounted(load)
       <form @submit.prevent="submitWizard">
         <div class="grid">
           <label><span>组织名称 *</span><input v-model="form.name" required maxlength="128" /></label>
-          <label><span>初始档位</span>
-            <select v-model="form.plan">
-              <option value="free">free</option>
-              <option value="normal">normal</option>
-              <option value="vip">vip</option>
-            </select>
+          <label><span>初始档位</span><input value="VIP（固定）" disabled /></label>
+          <label><span>指定已有 VIP 管理员邮箱 *</span>
+            <input
+              v-model="form.adminEmail"
+              type="email"
+              list="vip-candidates"
+              required
+              placeholder="仅可选择已通过 VIP 升级申请的账号"
+            />
+            <datalist id="vip-candidates">
+              <option v-for="v in vipCandidates" :key="v.id" :value="v.email">
+                {{ v.display_name }}（{{ v.email }}）
+              </option>
+            </datalist>
           </label>
-          <label><span>管理员邮箱 *</span><input v-model="form.adminEmail" type="email" required /></label>
-          <label><span>管理员密码 *</span><input v-model="form.adminPassword" type="password" required minlength="8" placeholder="至少 8 位" /></label>
-          <label><span>管理员姓名</span><input v-model="form.adminDisplayName" maxlength="64" placeholder="选填" /></label>
         </div>
+        <p class="wiz-hint">
+          普通账号不能直接指定；被指定的 VIP 必须尚未加入任何组织。组织创建后该账号成为组织管理员，可自行添加最多 3 名成员。
+        </p>
         <div v-if="wizError" class="error">{{ wizError }}</div>
         <div class="actions">
           <button type="submit" class="btn primary" :disabled="busy">{{ busy ? '开通中…' : '开通' }}</button>

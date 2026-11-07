@@ -80,14 +80,55 @@ export function adminListOrgs(): Promise<{ items: AdminOrg[] }> {
   return cgiCall({ method: 'GET', url: '/admin/orgs', headers: headers() })
 }
 
+/** R2-29：超管建组织，必须指定一个已有 VIP（不新建管理员账号） */
 export function adminCreateOrg(payload: {
   name: string
-  plan: string
   adminEmail: string
-  adminPassword: string
-  adminDisplayName?: string
 }): Promise<{ org: AdminOrg; admin: { id: number; email: string; role: string } }> {
   return cgiCall({ method: 'POST', url: '/admin/orgs', data: payload, headers: headers() })
+}
+
+export interface VipCandidate {
+  id: number
+  email: string
+  display_name: string
+}
+
+export function adminListVipUsers(q = ''): Promise<{ items: VipCandidate[] }> {
+  return cgiCall({ method: 'GET', url: '/admin/vip-users', params: { q }, headers: headers() })
+}
+
+/* ---------------- R2-28：VIP 升级申请审核 ---------------- */
+
+export interface AdminUpgradeRequest {
+  id: number
+  user_id: number
+  email: string
+  display_name: string
+  reason: string
+  status: 'pending' | 'approved' | 'rejected'
+  review_note: string
+  reviewed_at: string | null
+  created_at: string
+}
+
+export function adminListUpgradeRequests(
+  status: 'pending' | 'all' = 'pending'
+): Promise<{ items: AdminUpgradeRequest[]; status: string }> {
+  return cgiCall({ method: 'GET', url: '/admin/upgrade-requests', params: { status }, headers: headers() })
+}
+
+export function adminApproveUpgradeRequest(id: number): Promise<AdminUpgradeRequest> {
+  return cgiCall({ method: 'POST', url: `/admin/upgrade-requests/${id}/approve`, headers: headers() })
+}
+
+export function adminRejectUpgradeRequest(id: number, note: string): Promise<AdminUpgradeRequest> {
+  return cgiCall({
+    method: 'POST',
+    url: `/admin/upgrade-requests/${id}/reject`,
+    data: { note },
+    headers: headers()
+  })
 }
 
 export function adminGetOrg(id: number): Promise<{
