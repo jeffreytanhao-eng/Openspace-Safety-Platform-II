@@ -62,7 +62,17 @@ const activeKey = computed(() => {
   return name || 'overview'
 })
 
-const planLabel = computed(() => (auth.org ? auth.org.plan.toUpperCase() : ''))
+/** 档位徽标：账号级 VIP 优先于组织档位；个人工作区不展示组织名而展示用户名称 */
+const planLabel = computed(() => {
+  if (auth.user?.isVip) return 'VIP'
+  return auth.org ? auth.org.plan.toUpperCase() : ''
+})
+const planClass = computed(() => (auth.user?.isVip ? 'vip' : auth.org?.plan || ''))
+const orgDisplayName = computed(() => {
+  if (!auth.org) return ''
+  if (auth.org.personal) return auth.user?.displayName || auth.user?.email || ''
+  return auth.org.name
+})
 
 function signOut() {
   auth.logout()
@@ -113,9 +123,9 @@ onUnmounted(() => {
       <div class="top-right">
         <template v-if="auth.user">
           <div v-if="auth.org" class="account" :title="auth.user.email">
-            <span class="org-name">{{ auth.org.name }}</span>
-            <span class="plan-chip" :class="auth.org.plan">{{ planLabel }}</span>
-            <span class="user-name">{{ auth.user.displayName || auth.user.email }}</span>
+            <span class="org-name">{{ orgDisplayName }}</span>
+            <span class="plan-chip" :class="planClass">{{ planLabel }}</span>
+            <span v-if="!auth.org.personal" class="user-name">{{ auth.user.displayName || auth.user.email }}</span>
           </div>
           <span v-else class="account" :title="auth.user.email">
             <span class="user-name">{{ auth.user.displayName || auth.user.email }}</span>

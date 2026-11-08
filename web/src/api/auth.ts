@@ -27,6 +27,8 @@ export interface AuthOrg {
   plan: 'free' | 'normal' | 'vip'
   status: 'active' | 'suspended' | 'closed'
   trialEndsAt: string | null
+  /** 系统自动创建的个人工作区（非正式组织） */
+  personal?: boolean
 }
 
 export interface LoginResp {

@@ -4,7 +4,7 @@
  * + 左侧分段锚点 + 主区可滚动 + 配额紧凑网格。
  * R2-28 普通用户可提交 VIP 升级申请；R2-30 组织管理员可管理最多 3 名成员。
  */
-import { computed, nextTick, onMounted, ref } from 'vue'
+import { computed, nextTick, onMounted, ref, watch } from 'vue'
 import {
   AuthError,
   authChangePassword,
@@ -34,8 +34,9 @@ const statusLabel = computed(() => {
 })
 
 const planLabel = computed(() => {
+  if (auth.user?.isVip) return t('acct.plan.vip')
   if (auth.org) return t(`acct.plan.${auth.org.plan}` as Parameters<typeof t>[0])
-  return isVip.value ? t('acct.plan.vip') : t('acct.plan.normal')
+  return t('acct.plan.normal')
 })
 
 /** 组织内身份：管理员 / 成员；无组织时显示普通账号，平台账号显示平台角色 */
@@ -49,12 +50,12 @@ const orgRoleLabel = computed(() => {
   return role === 'org_admin' ? t('acct.orgRole.admin') : t('acct.orgRole.member')
 })
 
-/** 档位徽标：普通绿 / VIP 成员黄 / VIP 管理员金 / 超管红 */
+/** 档位徽标：普通绿 / VIP 金色 / 超管红（账号级 VIP 与 VIP 管理员同为金色） */
 const badgeKind = computed(() => {
   const role = auth.user?.role || ''
   if (role.startsWith('platform_')) return 'super'
   if (auth.org?.plan === 'vip') return role === 'org_admin' ? 'vip-admin' : 'vip-member'
-  if (auth.user?.isVip) return 'vip-member'
+  if (auth.user?.isVip) return 'vip-admin'
   return 'normal'
 })
 
@@ -167,9 +168,9 @@ function quotaText(item: QuotaItem): string {
   return `${item.usage} / ${item.limit}`
 }
 
-/** 普通账号不展示「单位成员数」配额，成员能力仅 VIP 账号具备 */
+/** 普通账号与个人工作区不展示「单位成员数」配额，成员能力仅正式 VIP 组织具备 */
 const visibleQuotaItems = computed(() =>
-  quotaItems.value.filter((i) => isVip.value || i.key !== 'members_max')
+  quotaItems.value.filter((i) => auth.org?.plan === 'vip' || i.key !== 'members_max')
 )
 
 /* ---------------- 修改密码 ---------------- */
@@ -316,12 +317,21 @@ async function removeMember(m: OrgMember) {
 }
 
 onMounted(async () => {
-  void loadQuota()
   void loadUpgrade()
-  void loadMembers()
   await nextTick()
   onScroll()
 })
+
+// 会话恢复完成后才知道当前等级/组织：VIP 模板的配额与成员数据在 org 就绪时补载
+watch(
+  () => auth.org?.id,
+  (id) => {
+    if (!id) return
+    void loadQuota()
+    void loadMembers()
+  },
+  { immediate: true }
+)
 </script>
 
 <template>
@@ -375,10 +385,11 @@ onMounted(async () => {
               <p v-if="bioError" class="error inline">{{ bioError }}</p>
               <p v-else-if="bioDone" class="ok-note inline">{{ bioDone }}</p>
             </div>
+            <!-- VIP 模板：组织信息（普通模板不渲染） -->
             <div v-if="isVip && auth.org" class="org-block">
               <div class="quota-title">{{ t('acct.orgInfo') }}</div>
               <dl class="kv kv-2">
-                <div><dt>{{ t('acct.orgName') }}</dt><dd>{{ auth.org?.name || t('acct.noOrgShort') }}</dd></div>
+                <div><dt>{{ t('acct.orgName') }}</dt><dd>{{ auth.org?.personal ? (auth.user?.displayName || auth.user?.email || t('acct.noOrgShort')) : (auth.org?.name || t('acct.noOrgShort')) }}</dd></div>
                 <div><dt>{{ t('acct.orgRole') }}</dt><dd>{{ orgRoleLabel }}</dd></div>
                 <div v-if="auth.org"><dt>{{ t('acct.orgStatus') }}</dt><dd>{{ statusLabel }}</dd></div>
               </dl>
@@ -418,12 +429,12 @@ onMounted(async () => {
               <dt>{{ t('acct.planLabel') }}</dt>
               <dd>
                 <span class="chip" :class="badgeKind">{{ badgeLabel }}</span>
-                <span v-if="auth.user?.isVip && auth.org?.plan !== 'vip'" class="chip vip">{{ t('acct.userVip') }}</span>
               </dd>
             </div>
           </dl>
 
-          <div v-if="auth.org" class="quota">
+          <!-- VIP 模板：配额用量（普通模板只展示档位徽标） -->
+          <div v-if="isVip && auth.org" class="quota">
               <div class="quota-title">{{ t('acct.quota') }}</div>
               <p v-if="quotaLoading" class="dim">{{ t('acct.quotaLoading') }}</p>
               <p v-else-if="quotaError" class="dim">{{ quotaError }}</p>
@@ -464,6 +475,7 @@ onMounted(async () => {
           </template>
         </section>
 
+        <!-- VIP 模板：组织成员（普通模板与升级申请互斥） -->
         <section v-if="canManageMembers" class="card" data-sec="members">
           <h2>
             {{ t('acct.members') }}

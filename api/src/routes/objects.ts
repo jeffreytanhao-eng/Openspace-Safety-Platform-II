@@ -1,4 +1,4 @@
-﻿﻿﻿/**
+﻿﻿﻿﻿/**
  * 目标路由（Epic D1）：组织认领 NORAD 目标并维护档案。
  * 全部 requireAuth；认领挂 checkQuota('objects_max')（免费档 3 个，超限 403 + 升级提示）。
  */
@@ -106,7 +106,8 @@ async function ensureBusinessOrg(req: ScopedRequest, res: Response): Promise<boo
     name: ws.org.name,
     plan: ws.org.plan,
     status: ws.org.status,
-    trialEndsAt: ws.org.trial_ends_at
+    trialEndsAt: ws.org.trial_ends_at,
+    personal: (ws.org.notes || '').startsWith('auto:personal')
   }
   return true
 }

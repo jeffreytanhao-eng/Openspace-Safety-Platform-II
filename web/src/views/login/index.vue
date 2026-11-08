@@ -18,6 +18,7 @@ const error = ref('')
 const email = ref('')
 const password = ref('')
 const displayName = ref('')
+const showPassword = ref(false)
 
 const redirectTarget = computed(() => {
   const r = route.query.redirect
@@ -98,15 +99,47 @@ async function submit() {
         </label>
         <label class="field">
           <span>{{ t('auth.password') }}</span>
-          <input
-            v-model="password"
-            type="password"
-            name="password"
-            required
-            :minlength="mode === 'register' ? 8 : undefined"
-            :autocomplete="mode === 'login' ? 'current-password' : 'new-password'"
-            :placeholder="mode === 'register' ? t('auth.passwordHint') : ''"
-          />
+          <div class="pwd-row">
+            <input
+              v-model="password"
+              :type="showPassword ? 'text' : 'password'"
+              name="password"
+              required
+              :minlength="mode === 'register' ? 8 : undefined"
+              :autocomplete="mode === 'login' ? 'current-password' : 'new-password'"
+              :placeholder="mode === 'register' ? t('auth.passwordHint') : ''"
+            />
+            <button
+              type="button"
+              class="pwd-eye"
+              :aria-label="showPassword ? t('auth.hidePwd') : t('auth.showPwd')"
+              :title="showPassword ? t('auth.hidePwd') : t('auth.showPwd')"
+              @click="showPassword = !showPassword"
+            >
+              <svg
+                v-if="showPassword"
+                viewBox="0 0 24 24"
+                width="16"
+                height="16"
+                aria-hidden="true"
+              >
+                <path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94" />
+                <path d="M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19" />
+                <path d="M14.12 14.12a3 3 0 1 1-4.24-4.24" />
+                <line x1="1" y1="1" x2="23" y2="23" />
+              </svg>
+              <svg
+                v-else
+                viewBox="0 0 24 24"
+                width="16"
+                height="16"
+                aria-hidden="true"
+              >
+                <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z" />
+                <circle cx="12" cy="12" r="3" />
+              </svg>
+            </button>
+          </div>
         </label>
         <label v-if="mode === 'register'" class="field">
           <span>{{ t('auth.displayName') }}</span>
@@ -205,6 +238,36 @@ form { display: flex; flex-direction: column; gap: 12px; }
 }
 .field input::placeholder { color: var(--text-dim); }
 .field input:focus { border-color: var(--accent); }
+
+.pwd-row { position: relative; display: flex; }
+.pwd-row input { flex: 1 1 auto; padding-right: 42px; }
+.pwd-eye {
+  position: absolute;
+  right: 5px;
+  top: 50%;
+  transform: translateY(-50%);
+  appearance: none;
+  border: 0;
+  background: transparent;
+  color: var(--text-dim);
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 4px;
+  cursor: pointer;
+  line-height: 1;
+}
+.pwd-eye svg {
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.8;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+.pwd-eye:hover { color: var(--text); background: var(--bg-hover); }
 
 .hint { margin: 0; font-size: 11px; line-height: 1.6; color: var(--text-dim); }
 

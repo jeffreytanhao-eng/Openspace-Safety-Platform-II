@@ -46,6 +46,10 @@ let widget: CesiumWidget | null = null
 let scene: CesiumScene | null = null
 /** 自定义左键拖拽（绕地心旋转）的事件处理器（initCesium 创建，destroyCesium 销毁） */
 let dragHandler: import('cesium').ScreenSpaceEventHandler | null = null
+/** 松手后的拖拽惯性帧（destroyCesium 需取消） */
+let dragInertiaRaf = 0
+/** 窗口失焦兜底复位（destroyCesium 需移除） */
+let dragBlurHandler: (() => void) | null = null
 /** When set, left-drag orbits around this ECEF point (sat track); else around Earth center. */
 let orbitFocusCart: import('cesium').Cartesian3 | null = null
 let cesiumReady = false
@@ -108,55 +112,44 @@ async function createImageryLayer(): Promise<import('cesium').ImageryLayer | nul
 }
 
 /**
- * 极区补丁层：ArcGIS World Imagery 是 Web Mercator 切片，覆盖止于 ±85.05°，
- * 更靠极处会露出下层兜底贴图 / 球体底色，形成圆形缺口。
+ * 南极补丁层（只补南极）：ArcGIS World Imagery 是 Web Mercator 切片，覆盖止于 ±85.05°，
+ * 更靠极处会露出 globe.baseColor。南极冰盖近纯白，深色圆帽与冰盖对比强烈，故仍补一张
+ * 纯白贴图（-90°~-84°，与影像有效范围留重叠）。
  *
- * 取色依据（实采 World Imagery 极区瓦片）：北极 66.5°–85°N 海面为暗青蓝（均值 #175767，
- * 靠近极点约 #004052），南极 66.5°–85°S 冰盖为近纯白（均值 #F2F7FF）。
- * 因此补丁按同一色调生成：北极 #013a4b→#06475a 的暗青蓝，南极 #F2F7FF 的冰盖白，
- * 与相邻在线影像色差极小，接缝不可见；不用真实极区照片（VIIRS 海冰近乎纯白，
- * 与暗色北冰洋形成突兀白斑，这正是此前极区"看起来很怪"的原因）。
- * 覆盖 ±84° 以上，与在线影像有效范围留 1° 重叠；贴图缺失时静默跳过。
+ * 北极不铺任何补丁：旧项目（openspace-safety-platform）原方案就是不打补丁，
+ * ±85° 以上直接露 baseColor；此前叠加的合成极冠贴图会在极区产生放射状拉伸与接缝亮环，
+ * 已按原方案移除。
  */
-const POLAR_CAP_LAT = 84
-async function createPolarCapLayers(): Promise<import('cesium').ImageryLayer[]> {
+const SOUTH_POLAR_CAP_LAT = 84
+async function createSouthPolarCapLayer(): Promise<import('cesium').ImageryLayer | null> {
   const Cs = Cesium as CesiumModule
-  const base = `${import.meta.env.BASE_URL}tiles/polar/`
-  const caps: Array<{ url: string; rectangle: import('cesium').Rectangle }> = [
-    { url: `${base}north.png`, rectangle: Cs.Rectangle.fromDegrees(-180, POLAR_CAP_LAT, 180, 90) },
-    { url: `${base}south.png`, rectangle: Cs.Rectangle.fromDegrees(-180, -90, 180, -POLAR_CAP_LAT) }
-  ]
-  // 两张贴图均为 1024×256；Cesium 1.146 的 SingleTileImageryProvider 要求显式传入 tileWidth/tileHeight
+  const url = `${import.meta.env.BASE_URL}tiles/polar/south.png`
+  // 贴图 1024×256；Cesium 1.146 的 SingleTileImageryProvider 要求显式传入 tileWidth/tileHeight
   const TILE_W = 1024
   const TILE_H = 256
-  const layers: import('cesium').ImageryLayer[] = []
-  for (const cap of caps) {
-    try {
-      // 用图片解码探测可用性：HEAD 请求在并发初始化时可能被浏览器中止（ERR_ABORTED），
-      // 导致补丁被误判为缺失而跳过，这里改为真实加载一次（命中 HTTP 缓存）。
-      const ok = await new Promise<boolean>((resolve) => {
-        const img = new Image()
-        img.onload = () => resolve(img.naturalWidth > 0)
-        img.onerror = () => resolve(false)
-        img.src = cap.url
+  try {
+    // 用图片解码探测可用性：HEAD 请求在并发初始化时可能被浏览器中止（ERR_ABORTED），
+    // 导致补丁被误判为缺失而跳过，这里改为真实加载一次（命中 HTTP 缓存）。
+    const ok = await new Promise<boolean>((resolve) => {
+      const img = new Image()
+      img.onload = () => resolve(img.naturalWidth > 0)
+      img.onerror = () => resolve(false)
+      img.src = url
+    })
+    if (!ok) return null
+    return new Cs.ImageryLayer(
+      new Cs.SingleTileImageryProvider({
+        url,
+        rectangle: Cs.Rectangle.fromDegrees(-180, -90, 180, -SOUTH_POLAR_CAP_LAT),
+        tileWidth: TILE_W,
+        tileHeight: TILE_H,
+        credit: ''
       })
-      if (!ok) continue
-      layers.push(
-        new Cs.ImageryLayer(
-          new Cs.SingleTileImageryProvider({
-            url: cap.url,
-            rectangle: cap.rectangle,
-            tileWidth: TILE_W,
-            tileHeight: TILE_H,
-            credit: ''
-          })
-        )
-      )
-    } catch (e) {
-      console.warn('[cesiumEarth] 极区补丁不可用：', e)
-    }
+    )
+  } catch (e) {
+    console.warn('[cesiumEarth] 南极补丁不可用：', e)
+    return null
   }
-  return layers
 }
 
 /**
@@ -320,8 +313,8 @@ export async function initCesium(container: HTMLElement, hooks?: CesiumInitHooks
     // 仅当在线影像不可用时才用离线底图兜底，避免整颗球纯黑。
     const baseLayer = await createImageryLayer()
     const offlineBase = baseLayer ? null : await createOfflineBaseLayer()
-    // 极区补丁（±85° 以上）：盖住 Web Mercator 影像的极区缺口，必须叠在最上层
-    const polarCaps = await createPolarCapLayers()
+    // 南极补丁（北极按旧项目原方案不打补丁，直接露 baseColor）
+    const southCap = await createSouthPolarCapLayer()
 
     widget = new Cs.CesiumWidget(container, {
       baseLayer: baseLayer ?? false,
@@ -337,11 +330,8 @@ export async function initCesium(container: HTMLElement, hooks?: CesiumInitHooks
     })
     scene = widget.scene
     if (offlineBase) scene.imageryLayers.add(offlineBase, 0)
-    // 极区补丁追加到最上层（在线影像图层之上），仅作用于 ±84° 以上
-    for (const layer of polarCaps) scene.imageryLayers.add(layer)
-    if (import.meta.env.DEV) {
-      console.info('[cesiumEarth] 极区补丁图层', polarCaps.length, '影像图层总数', scene.imageryLayers.length)
-    }
+    // 南极补丁追加到最上层（在线影像图层之上）
+    if (southCap) scene.imageryLayers.add(southCap)
 
     // 星空 / 太阳 / 月亮由 Three 层负责（ECI 口径，与卫星、星官同一套视觉）；
     // Cesium 只保留地球本体 + 大气辉光 + 晨昏光照。
@@ -369,35 +359,46 @@ export async function initCesium(container: HTMLElement, hooks?: CesiumInitHooks
     c.enableTilt = false
 
     // 自定义左键拖拽：camera.rotateLeft/rotateUp 绕「参考系中心（地心）」旋转，
-    // 地球重心天然保持在屏幕正中。每像素转角 = 相机视场角 / 画布高（固定标定），
-    // 任意缩放档位下地表都近似跟手移动（手感等同拖动地球仪）。
-    // moveStart/moveEnd 事件由 Cesium 相机按帧间位移自动触发（滚轮缩放同样适用），
-    // 按下/松开时再手动补一发让 userInteracting 冻结即时生效（处理幂等，双触发无害）。
+    // 地球重心天然保持在屏幕正中。
+    //
+    // 手感标定（关键）：每像素转角不能是固定的 fovy/画布高，必须乘上「相机到被拖物的距离 / 地球半径」。
+    // 拖拽本质是让光标下的地表跟着光标走：相机离地面越远，同样的像素位移对应越大的地表位移，
+    // 需要转更多角度；反之贴地时只需要转很小角度。旧实现固定标定等价于只在 2R 视距跟手，
+    // 首页 4.5R 时地表只有约 1/3.5 的速度（发涩、打滑），近距跟踪时又过于灵敏。
+    //
+    // 惯性：Cesium 的阻尼只作用于原生控制器，自写拖拽需要自己做——松手后按最后的屏幕速度衰减继续旋转。
     dragHandler = new Cs.ScreenSpaceEventHandler(widget.canvas)
     let dragging = false
     let lastX = 0
     let lastY = 0
-    dragHandler.setInputAction((m: { position: { x: number; y: number } }) => {
-      dragging = true
-      lastX = m.position.x
-      lastY = m.position.y
-      hooks?.onMoveStart?.()
-    }, Cs.ScreenSpaceEventType.LEFT_DOWN)
-    dragHandler.setInputAction((m: { endPosition: { x: number; y: number } }) => {
-      if (!dragging || !scene || !widget || widget.isDestroyed() || !Cesium) return
-      const dx = m.endPosition.x - lastX
-      const dy = m.endPosition.y - lastY
-      lastX = m.endPosition.x
-      lastY = m.endPosition.y
-      const canvas = widget.canvas
-      const fr = scene.camera.frustum as import('cesium').PerspectiveFrustum
+    let lastMoveMs = 0
+    /** 屏幕拖拽速度（px/ms），松手后据此做惯性 */
+    let velX = 0
+    let velY = 0
+
+    /** 当前视距下每像素对应的旋转角（rad/px） */
+    const radPerPx = (cam: import('cesium').Camera): number => {
+      const canvasH = widget?.canvas.clientHeight || 0
+      const fr = cam.frustum as import('cesium').PerspectiveFrustum
       const fovy = (fr as unknown as { fovy?: number }).fovy
-      if (!canvas.clientHeight || typeof fovy !== 'number') return
-      const k = fovy / canvas.clientHeight
-      const Cs = Cesium
+      if (!canvasH || typeof fovy !== 'number') return 0
+      const earthM = EARTH_RADIUS_KM * 1000
+      // 被拖物到相机的距离：普通模式取离地高度，跟踪模式取相机到焦点距离
+      const d = orbitFocusCart
+        ? Cs.Cartesian3.distance(cam.positionWC, orbitFocusCart)
+        : Cs.Cartesian3.magnitude(cam.positionWC) - earthM
+      const ratio = Math.min(6, Math.max(0.06, d / earthM))
+      return (fovy / canvasH) * ratio
+    }
+
+    /** 按屏幕像素位移旋转相机（拖拽与惯性共用） */
+    const orbitByPx = (dx: number, dy: number): void => {
+      if (!scene || !Cesium) return
+      const cam = scene.camera
+      const k = radPerPx(cam)
+      if (!k) return
       // Track/select focus: orbit around target (old OrbitControls.target = sat), keep looking at it.
       if (orbitFocusCart) {
-        const cam = scene.camera
         const focus = orbitFocusCart
         const offset = Cs.Cartesian3.subtract(cam.positionWC, focus, new Cs.Cartesian3())
         const up = Cs.Ellipsoid.WGS84.geodeticSurfaceNormal(focus, new Cs.Cartesian3())
@@ -421,16 +422,91 @@ export async function initCesium(container: HTMLElement, hooks?: CesiumInitHooks
         return
       }
       // Default: earth-center turntable (keep globe centered).
-      scene.camera.rotateLeft(dx * k)
-      scene.camera.rotateUp(-dy * k)
+      cam.rotateLeft(dx * k)
+      cam.rotateUp(-dy * k)
+    }
+
+    const cancelInertia = () => {
+      if (dragInertiaRaf) cancelAnimationFrame(dragInertiaRaf)
+      dragInertiaRaf = 0
+    }
+
+    /** 松手：按最后的屏幕速度衰减滑行；速度过小直接收尾 */
+    const releaseInertia = () => {
+      cancelInertia()
+      const end = () => {
+        velX = 0
+        velY = 0
+        hooks?.onMoveEnd?.()
+      }
+      if (Math.hypot(velX, velY) < 0.05) {
+        end()
+        return
+      }
+      // 惯性衰减：整体只保留约 6 成甩动速度、90ms 时间常数，避免快速甩动后转过头
+      velX *= 0.6
+      velY *= 0.6
+      let lastT = performance.now()
+      const step = (t: number) => {
+        const dt = Math.min(50, Math.max(1, t - lastT))
+        lastT = t
+        const decay = Math.exp(-dt / 90)
+        velX *= decay
+        velY *= decay
+        if (Math.hypot(velX, velY) < 0.02) {
+          dragInertiaRaf = 0
+          end()
+          return
+        }
+        orbitByPx(velX * dt, velY * dt)
+        dragInertiaRaf = requestAnimationFrame(step)
+      }
+      dragInertiaRaf = requestAnimationFrame(step)
+    }
+
+    dragHandler.setInputAction((m: { position: { x: number; y: number } }) => {
+      cancelInertia()
+      velX = 0
+      velY = 0
+      dragging = true
+      lastX = m.position.x
+      lastY = m.position.y
+      lastMoveMs = performance.now()
+      if (widget) widget.canvas.style.cursor = 'grabbing'
+      hooks?.onMoveStart?.()
+    }, Cs.ScreenSpaceEventType.LEFT_DOWN)
+    dragHandler.setInputAction((m: { endPosition: { x: number; y: number } }) => {
+      if (!dragging || !scene || !widget || widget.isDestroyed()) return
+      const now = performance.now()
+      const dx = m.endPosition.x - lastX
+      const dy = m.endPosition.y - lastY
+      if (!dx && !dy) return
+      lastX = m.endPosition.x
+      lastY = m.endPosition.y
+      const dt = Math.max(1, now - lastMoveMs)
+      lastMoveMs = now
+      // 平滑速度：用最近几帧的加权值，避免最后一帧抖动主导惯性
+      velX = velX * 0.4 + (dx / dt) * 0.6
+      velY = velY * 0.4 + (dy / dt) * 0.6
+      orbitByPx(dx, dy)
     }, Cs.ScreenSpaceEventType.MOUSE_MOVE)
-    const endDrag = () => {
+    const endDrag = (withInertia: boolean) => {
       if (!dragging) return
       dragging = false
-      hooks?.onMoveEnd?.()
+      if (widget) widget.canvas.style.cursor = 'grab'
+      if (withInertia) releaseInertia()
+      else {
+        cancelInertia()
+        velX = 0
+        velY = 0
+        hooks?.onMoveEnd?.()
+      }
     }
     // mouseup 在 document 上监听（ScreenSpaceEventHandler 内建）：拖出画布松开同样收尾
-    dragHandler.setInputAction(endDrag, Cs.ScreenSpaceEventType.LEFT_UP)
+    dragHandler.setInputAction(() => endDrag(true), Cs.ScreenSpaceEventType.LEFT_UP)
+    // 切走窗口/失焦时收不到 mouseup 的兜底，避免 dragging 卡死
+    dragBlurHandler = () => endDrag(false)
+    window.addEventListener('blur', dragBlurHandler)
 
     // 相机移动开始/结束（对齐原 controls 'start'/'end' → userInteracting 暂停卫星传播）
     if (hooks?.onMoveStart) scene.camera.moveStart.addEventListener(hooks.onMoveStart)
@@ -445,6 +521,10 @@ export async function initCesium(container: HTMLElement, hooks?: CesiumInitHooks
     // 否则 resize() 读到的 clientWidth/Height 恒为 300×150，地球被压在左上角。
     widget.canvas.style.width = '100%'
     widget.canvas.style.height = '100%'
+    // 触摸设备上禁止浏览器把拖动解释成滚动/缩放手势，否则单指拖拽地球会整页滚动
+    widget.canvas.style.touchAction = 'none'
+    // 左键可拖拽的操作提示（按下时切换为 grabbing）
+    widget.canvas.style.cursor = 'grab'
 
     // 离线地形包：异步挂载，失败/未配置回退椭球面（不阻塞地球出图）
     createTerrainProvider().then((tp) => {
@@ -620,6 +700,10 @@ export function destroyCesium(): void {
   orbitFocusCart = null
   cesiumReady = false
   scene = null
+  if (dragInertiaRaf) cancelAnimationFrame(dragInertiaRaf)
+  dragInertiaRaf = 0
+  if (dragBlurHandler) window.removeEventListener('blur', dragBlurHandler)
+  dragBlurHandler = null
   if (dragHandler && !dragHandler.isDestroyed()) dragHandler.destroy()
   dragHandler = null
   if (widget && !widget.isDestroyed()) {

@@ -134,6 +134,19 @@ export async function findUserByEmail(email: string): Promise<UserRow | null> {
   return (rows[0] as UserRow) || null
 }
 
+/** 支持用显示名或邮箱前缀登录（无 @ 的账号名），同名时由调用方逐个比对密码 */
+export async function findUsersByLoginName(name: string): Promise<UserRow[]> {
+  const k = name.trim().toLowerCase()
+  if (!k) return []
+  const [rows] = await pool.query<RowDataPacket[]>(
+    `SELECT * FROM users
+     WHERE LOWER(display_name) = ? OR LOCATE(CONCAT(?, '@'), LOWER(email)) = 1
+     LIMIT 5`,
+    [k, k]
+  )
+  return rows as UserRow[]
+}
+
 export async function findUserById(id: number): Promise<UserRow | null> {
   const [rows] = await pool.query<RowDataPacket[]>(
     'SELECT * FROM users WHERE id = ? LIMIT 1',
@@ -279,6 +292,19 @@ export async function createUser(params: {
 }
 
 /**
+ * 账号级 VIP 的个人工作区若还是普通档（先关注后升级的历史数据），补齐为 VIP 档，
+ * 保证账号页的组织信息/配额/成员与 VIP 模板一致。
+ */
+export async function promotePersonalOrgToVip(userId: number): Promise<void> {
+  await pool.query(
+    `UPDATE organizations o JOIN users u ON u.org_id = o.id
+        SET o.plan = 'vip'
+      WHERE u.id = ? AND o.notes LIKE 'auto:personal%' AND o.plan <> 'vip'`,
+    [userId]
+  )
+}
+
+/**
  * R2-28：无组织普通用户首次关注时，自动创建一个隐藏的个人工作区（普通档），
  * 使其关注数据有归属组织；注册路径本身仍然不创建组织。
  * 并发安全：事务内 FOR UPDATE，多次调用只会建一个。
@@ -308,9 +334,11 @@ export async function ensurePersonalWorkspace(
       return org ? { org, user } : null
     }
     const name = `个人空间-${userId}`
+    // 账号级 VIP 的个人工作区直接按 VIP 档位建，保证配额、成员等能力与 VIP 账号页一致
+    const plan = Number(user.is_vip) === 1 ? 'vip' : 'normal'
     const [r] = await conn.query<ResultSetHeader>(
-      "INSERT INTO organizations (name, plan, notes) VALUES (?, 'normal', 'auto:personal')",
-      [name]
+      "INSERT INTO organizations (name, plan, notes) VALUES (?, ?, 'auto:personal')",
+      [name, plan]
     )
     await conn.query("UPDATE users SET org_id = ?, role = 'org_admin' WHERE id = ?", [r.insertId, userId])
     await conn.commit()
@@ -409,6 +437,13 @@ export async function approveUpgradeRequest(
       [reviewerId, id]
     )
     await conn.query('UPDATE users SET is_vip = 1 WHERE id = ?', [req.user_id])
+    // 已存在的个人工作区同步升到 VIP 档（与登录时补齐口径一致）
+    await conn.query(
+      `UPDATE organizations o JOIN users u ON u.org_id = o.id
+          SET o.plan = 'vip'
+        WHERE u.id = ? AND o.notes LIKE 'auto:personal%'`,
+      [req.user_id]
+    )
     await conn.commit()
     const [after] = await pool.query<RowDataPacket[]>(
       'SELECT * FROM org_upgrade_requests WHERE id = ?',

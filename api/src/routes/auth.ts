@@ -14,8 +14,11 @@ import { ok, fail } from '../utils/response.js'
 import {
   ensureOrgSchema,
   findUserByEmail,
+  findUsersByLoginName,
   findUserById,
   findOrgById,
+  ensurePersonalWorkspace,
+  promotePersonalOrgToVip,
   createUser,
   updateUserPassword,
   updateUserBio,
@@ -52,6 +55,8 @@ export interface SafeOrg {
   plan: OrgRow['plan']
   status: OrgRow['status']
   trialEndsAt: string | null
+  /** 系统自动创建的个人工作区（非正式组织），前端据此展示用户名称而非「个人空间-N」 */
+  personal: boolean
 }
 
 export interface AuthContext {
@@ -82,7 +87,14 @@ function toSafeUser(u: UserRow): SafeUser {
 }
 
 function toSafeOrg(o: OrgRow): SafeOrg {
-  return { id: o.id, name: o.name, plan: o.plan, status: o.status, trialEndsAt: o.trial_ends_at }
+  return {
+    id: o.id,
+    name: o.name,
+    plan: o.plan,
+    status: o.status,
+    trialEndsAt: o.trial_ends_at,
+    personal: (o.notes || '').startsWith('auto:personal')
+  }
 }
 
 function signToken(u: UserRow): string {
@@ -112,12 +124,26 @@ export async function requireAuth(req: Request, res: Response, next: NextFunctio
       res.status(401).json(fail(401, '账号不存在或已停用'))
       return
     }
-    const org = row.org_id ? await findOrgById(row.org_id) : null
+    let user = row
+    let org = user.org_id ? await findOrgById(user.org_id) : null
     if (org && org.status === 'closed') {
       res.status(401).json(fail(401, '组织已关闭，请联系平台管理员'))
       return
     }
-    req.auth = { user: toSafeUser(row), org: org ? toSafeOrg(org) : null }
+    // 账号级 VIP 的个人工作区仍为普通档时补齐（先关注后升级的历史数据）
+    if (org && Number(user.is_vip) === 1 && (org.notes || '').startsWith('auto:personal') && org.plan !== 'vip') {
+      await promotePersonalOrgToVip(user.id)
+      org = (await findOrgById(org.id)) ?? org
+    }
+    // 账号级 VIP 若尚无组织，自动补建个人 VIP 工作区（配额/成员与 VIP 账号页一致）
+    if (!org && Number(user.is_vip) === 1) {
+      const ws = await ensurePersonalWorkspace(user.id).catch(() => null)
+      if (ws) {
+        user = ws.user
+        org = ws.org
+      }
+    }
+    req.auth = { user: toSafeUser(user), org: org ? toSafeOrg(org) : null }
     next()
   } catch {
     res.status(401).json(fail(401, '登录已过期，请重新登录'))
@@ -177,16 +203,38 @@ router.post('/auth/login', async (req, res) => {
   }
   const body = req.body || {}
   const rawId = String(body.email || '').trim().toLowerCase()
-  // 固定测试账号允许直接用用户名登录（无 @ 时补默认域）
-  const email = rawId && !rawId.includes('@') ? `${rawId}@openspace.local` : rawId
   const password = String(body.password || '')
-  if (!email || !password) {
+  if (!rawId || !password) {
     res.status(400).json(fail(400, '请输入账号和密码'))
     return
   }
   try {
-    const user = await findUserByEmail(email)
-    if (!user || !(await bcrypt.compare(password, user.password_hash))) {
+    // 支持邮箱、显示名、邮箱前缀登录：
+    // - 含 @ 按邮箱查
+    // - 无 @ 先兼容历史默认域（name@openspace.local），再按显示名/邮箱前缀匹配
+    let candidates: UserRow[] = []
+    if (rawId.includes('@')) {
+      const u = await findUserByEmail(rawId)
+      if (u) candidates = [u]
+    } else {
+      const legacy = await findUserByEmail(`${rawId}@openspace.local`)
+      const named = await findUsersByLoginName(rawId)
+      const seen = new Set<number>()
+      for (const c of [...(legacy ? [legacy] : []), ...named]) {
+        if (!seen.has(c.id)) {
+          seen.add(c.id)
+          candidates.push(c)
+        }
+      }
+    }
+    let user: UserRow | null = null
+    for (const c of candidates) {
+      if (await bcrypt.compare(password, c.password_hash)) {
+        user = c
+        break
+      }
+    }
+    if (!user) {
       res.status(401).json(fail(401, '账号或密码错误'))
       return
     }
@@ -194,7 +242,7 @@ router.post('/auth/login', async (req, res) => {
       res.status(403).json(fail(403, '账号已停用，请联系平台管理员'))
       return
     }
-    const org = user.org_id ? await findOrgById(user.org_id) : null
+    let org = user.org_id ? await findOrgById(user.org_id) : null
     if (org?.status === 'suspended') {
       res.status(403).json(fail(403, '组织已被暂停，请联系平台管理员'))
       return
@@ -202,6 +250,22 @@ router.post('/auth/login', async (req, res) => {
     if (org?.status === 'closed') {
       res.status(403).json(fail(403, '组织已关闭，请联系平台管理员'))
       return
+    }
+    // 账号级 VIP 的个人工作区仍为普通档时补齐（先关注后升级的历史数据）
+    if (org && Number(user.is_vip) === 1 && (org.notes || '').startsWith('auto:personal') && org.plan !== 'vip') {
+      await promotePersonalOrgToVip(user.id)
+      org = (await findOrgById(org.id)) ?? org
+    }
+    // 账号级 VIP 若尚无组织，登录时自动补建个人 VIP 工作区
+    if (!org && Number(user.is_vip) === 1) {
+      const ws = await ensurePersonalWorkspace(user.id).catch(() => null)
+      if (ws) {
+        user = ws.user
+        res.json(
+          ok({ token: signToken(user), user: toSafeUser(user), org: toSafeOrg(ws.org) })
+        )
+        return
+      }
     }
     res.json(ok({ token: signToken(user), user: toSafeUser(user), org: org ? toSafeOrg(org) : null }))
   } catch (e) {
