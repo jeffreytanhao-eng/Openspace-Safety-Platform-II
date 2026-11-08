@@ -271,7 +271,9 @@ export function parseOcmMeta(text: string, fileName: string): EphemMetaParsed {
 }
 
 /** 按正文自动识别格式并解析（CCSDS_OCM_VERS → OCM，否则按 ITC 文件名口径） */
-export function parseMetaAuto(text: string, fileName: string): { format: 'ITC' | 'OCM'; meta: EphemMetaParsed } {
+export function parseMetaAuto(raw: string, fileName: string): { format: 'ITC' | 'OCM'; meta: EphemMetaParsed } {
+  // Windows 侧生成的星历可能带 UTF-8 BOM，首行会污染 CCSDS 头判定
+  const text = raw.replace(/^\uFEFF/, '')
   if (/^CCSDS_OCM_VERS/m.test(text)) {
     return { format: 'OCM', meta: parseOcmMeta(text, fileName) }
   }

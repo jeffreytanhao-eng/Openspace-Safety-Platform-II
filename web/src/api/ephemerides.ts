@@ -35,8 +35,8 @@ export interface EphListItem {
   uploadedBy?: string
   /** 第 6 项：上传者用户 id（null = 平台/同步导入） */
   ownerUserId?: number | null
-  /** 第 6 项：public=全平台只读可见 / private=仅上传业主可用 */
-  visibility?: 'public' | 'private'
+  /** 第 6 项：public=全平台只读可见 / vip=仅 VIP 可见 / private=仅上传业主可用 */
+  visibility?: 'public' | 'vip' | 'private'
 }
 
 export interface EphListData {
@@ -110,11 +110,38 @@ export async function fetchEphemerisText(filePath: string): Promise<string> {
   return await res.text()
 }
 
+/** 超管导入需覆盖业主星历时，后端 409 返回的既有星历信息 */
+export interface EphemUploadConflictInfo {
+  needConfirm: boolean
+  existing: {
+    id: string
+    name: string
+    norad: string
+    format: string
+    uploadedBy: string
+    ownerUserId: number | null
+    visibility: 'public' | 'vip' | 'private'
+    publishedMs: number
+    updatedAt: string
+  }
+}
+
+export class EphemerisUploadConflictError extends Error {
+  conflict: EphemUploadConflictInfo
+
+  constructor(conflict: EphemUploadConflictInfo) {
+    super('该目标已有业主上传的星历，覆盖前需确认')
+    this.name = 'EphemerisUploadConflictError'
+    this.conflict = conflict
+  }
+}
+
 /** 上传单文件（原始字节流；后端识别格式并入库，返回 added/updated/skipped 与落盘路径） */
 export async function uploadEphemerisFile(
   file: File | Blob,
   name: string,
-  visibility?: 'public' | 'private'
+  visibility?: 'public' | 'vip' | 'private',
+  opts?: { confirm?: boolean }
 ): Promise<{
   action: 'added' | 'updated' | 'skipped'
   id: string
@@ -124,11 +151,12 @@ export async function uploadEphemerisFile(
   format: 'ITC' | 'OCM'
   range: string
   size: string
-  visibility?: 'public' | 'private'
+  visibility?: 'public' | 'vip' | 'private'
 }> {
   const auth = localStorage.getItem('osp-token')
   const vis = visibility ? `&visibility=${visibility}` : ''
-  const url = `/cgi/ephemerides/upload?name=${encodeURIComponent(name)}${vis}`
+  const confirm = opts?.confirm ? '&confirm=1' : ''
+  const url = `/cgi/ephemerides/upload?name=${encodeURIComponent(name)}${vis}${confirm}`
   const buf = await file.arrayBuffer()
   const res = await fetch(url, {
     method: 'POST',
@@ -142,9 +170,13 @@ export async function uploadEphemerisFile(
     const text = await res.text()
     let msg = `HTTP ${res.status}`
     try {
-      const j = JSON.parse(text) as ApiWrap<never>
+      const j = JSON.parse(text) as ApiWrap<EphemUploadConflictInfo>
+      if (res.status === 409 && j.data?.needConfirm) throw new EphemerisUploadConflictError(j.data)
       if (j.msg) msg = j.msg
-    } catch { /* keep HTTP code */ }
+    } catch (e) {
+      if (e instanceof EphemerisUploadConflictError) throw e
+      /* keep HTTP code */
+    }
     throw new Error(msg)
   }
   const body = (await res.json()) as ApiWrap<{
@@ -156,7 +188,7 @@ export async function uploadEphemerisFile(
     format: 'ITC' | 'OCM'
     range: string
     size: string
-    visibility?: 'public' | 'private'
+    visibility?: 'public' | 'vip' | 'private'
   }>
   if (body.code !== 0 || !body.data) throw new Error(body.msg || '上传失败')
   return body.data

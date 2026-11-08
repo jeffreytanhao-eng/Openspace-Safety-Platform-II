@@ -44,14 +44,16 @@ export interface EphemRow {
   /** 上传者用户 id（NULL = 平台/同步导入，非业主私有） */
   ownerUserId: number | null
   ownerOrgId: number | null
-  /** public=全平台只读可用 / private=仅上传业主可用 */
-  visibility: 'public' | 'private'
+  /** public=全平台只读可用 / vip=仅 VIP 账号可用 / private=仅上传业主可用 */
+  visibility: 'public' | 'vip' | 'private'
 }
 
-/** 列表可见性过滤：未登录只看 public；登录用户额外看自己的 private */
+/** 列表可见性过滤：未登录只看 public；登录用户额外看自己的 private（VIP 账号额外看 vip） */
 export interface EphemViewer {
   userId: number | null
   superAdmin: boolean
+  /** 账号级 VIP（用户标记或组织 VIP 档） */
+  vip?: boolean
 }
 
 const SCHEMA = `
@@ -82,7 +84,7 @@ CREATE TABLE IF NOT EXISTS \`ephemeris\` (
   \`uploaded_by\`     varchar(190) NOT NULL DEFAULT '' COMMENT '上传者邮箱（审计）',
   \`owner_user_id\`   bigint unsigned NULL COMMENT '上传者用户；非 NULL 表示业主私有星历',
   \`owner_org_id\`    bigint unsigned NULL COMMENT '上传者组织',
-  \`visibility\`      varchar(16)  NOT NULL DEFAULT 'public' COMMENT 'public=全平台只读可用 / private=仅业主可用',
+  \`visibility\`      varchar(16)  NOT NULL DEFAULT 'public' COMMENT 'public=全平台只读可用 / vip=仅 VIP 可见 / private=仅业主可用',
   PRIMARY KEY (\`id\`),
   KEY \`idx_eph_norad\` (\`norad\`),
   KEY \`idx_eph_format\` (\`format\`),
@@ -240,7 +242,7 @@ function rowToEphemRow(r: DbRow): EphemRow {
     uploadedBy: r.uploaded_by || '',
     ownerUserId: r.owner_user_id == null ? null : Number(r.owner_user_id),
     ownerOrgId: r.owner_org_id == null ? null : Number(r.owner_org_id),
-    visibility: r.visibility === 'private' ? 'private' : 'public'
+    visibility: r.visibility === 'private' ? 'private' : r.visibility === 'vip' ? 'vip' : 'public'
   }
 }
 
@@ -284,15 +286,28 @@ export interface ListQuery {
   size?: number
 }
 
-/** 可见性过滤片段：超管全见；登录用户看 public + 自己的 private；匿名仅 public */
-function applyViewerFilter(viewer: EphemViewer | null | undefined, where: string[], params: unknown[]): void {
+/** 可见性过滤片段：超管全见；VIP 账号看 public + vip + 自己的 private；普通账号看 public + 自己的 private；匿名仅 public */
+export function applyViewerFilter(viewer: EphemViewer | null | undefined, where: string[], params: unknown[]): void {
   if (viewer?.superAdmin) return
   if (viewer?.userId != null) {
-    where.push(`(visibility = 'public' OR owner_user_id = ?)`)
+    const visible = viewer.vip ? `visibility IN ('public', 'vip')` : `visibility = 'public'`
+    where.push(`(${visible} OR owner_user_id = ?)`)
     params.push(viewer.userId)
   } else {
     where.push(`visibility = 'public'`)
   }
+}
+
+/** 单行可见性判定（列表过滤之外的按行校验：meta / 文件 / 精度对比） */
+export function canViewEphemeris(
+  row: Pick<EphemRow, 'visibility' | 'ownerUserId'>,
+  viewer: EphemViewer | null | undefined
+): boolean {
+  if (row.visibility === 'public') return true
+  if (viewer?.superAdmin) return true
+  if (!viewer || viewer.userId == null) return false
+  if (row.ownerUserId != null && row.ownerUserId === viewer.userId) return true
+  return row.visibility === 'vip' && !!viewer.vip
 }
 
 /** 分页查询（q 匹配 name/norad 前缀子串）；返回 total 与当前页行 */
@@ -400,7 +415,7 @@ export async function setEphemerisOwnershipDb(
   opts: {
     ownerUserId: number | null
     ownerOrgId: number | null
-    visibility: 'public' | 'private'
+    visibility: 'public' | 'vip' | 'private'
     uploadedBy: string
   }
 ): Promise<void> {
@@ -411,7 +426,10 @@ export async function setEphemerisOwnershipDb(
 }
 
 /** 切换星历可见性（仅业主本人 / 超管，鉴权在路由层） */
-export async function setEphemerisVisibilityDb(id: string, visibility: 'public' | 'private'): Promise<boolean> {
+export async function setEphemerisVisibilityDb(
+  id: string,
+  visibility: 'public' | 'vip' | 'private'
+): Promise<boolean> {
   const [r] = await pool.query('UPDATE `ephemeris` SET visibility = ? WHERE id = ?', [visibility, id])
   return Number((r as { affectedRows?: number }).affectedRows ?? 0) > 0
 }

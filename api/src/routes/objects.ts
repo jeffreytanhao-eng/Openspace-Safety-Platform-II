@@ -1,4 +1,4 @@
-﻿﻿﻿﻿/**
+﻿﻿﻿﻿﻿/**
  * 目标路由（Epic D1）：组织认领 NORAD 目标并维护档案。
  * 全部 requireAuth；认领挂 checkQuota('objects_max')（免费档 3 个，超限 403 + 升级提示）。
  */
@@ -290,13 +290,9 @@ router.post('/objects', async (req: ScopedRequest, res) => {
       res.status(409).json(fail(409, `NORAD ${norad} 已有业主认领（卫星业主），每个目标仅允许一个业主认领`))
       return
     }
-    // C1 授权范围：未配置范围 = 拒绝全部 owner（安全默认）
+    // C1 授权范围：配置了范围才拦截；未配置时放行，业主认领统一走「提交 → 平台超管审核」
     const scope = await checkClaimScope(orgId, norad)
-    if (!scope.configured) {
-      res.status(403).json(fail(403, '本组织尚未配置业主授权范围，请联系平台管理员开通后再认领'))
-      return
-    }
-    if (!scope.allowed) {
+    if (scope.configured && !scope.allowed) {
       res.status(403).json(fail(403, `NORAD ${norad} 不在本组织业主授权范围内，如需扩围请联系平台管理员`))
       return
     }

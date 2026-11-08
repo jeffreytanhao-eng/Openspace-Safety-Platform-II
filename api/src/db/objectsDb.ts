@@ -543,8 +543,9 @@ export async function replaceClaimScopes(
 }
 
 export interface ClaimScopeCheck {
-  /** 是否配置过授权范围（空 = 未配置，安全默认拒绝 owner） */
+  /** 是否配置过授权范围（空 = 未配置：不按范围拦截，认领提交后交给平台超管审核） */
   configured: boolean
+  /** 是否可提交业主认领：未配置范围视为可提交（审核兜底），配置了范围则须命中 */
   allowed: boolean
   /** 命中的范围（便于返回原因/审计） */
   matched: { scope_type: ClaimScopeType; scope_value: string } | null
@@ -559,7 +560,8 @@ export async function checkClaimScope(orgId: number, noradId: number): Promise<C
     'SELECT COUNT(*) AS n FROM org_claim_scopes WHERE org_id = ?',
     [orgId]
   )
-  if (!Number((cnt[0] as { n: number }).n)) return { configured: false, allowed: false, matched: null }
+  // 未配置范围：不按范围拦截，业主认领仍以「提交 → 平台超管审核」为准
+  if (!Number((cnt[0] as { n: number }).n)) return { configured: false, allowed: true, matched: null }
   const [hit] = await pool.query<RowDataPacket[]>(
     `SELECT s.scope_type, s.scope_value
        FROM org_claim_scopes s

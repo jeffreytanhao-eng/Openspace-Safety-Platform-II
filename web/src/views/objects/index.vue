@@ -100,11 +100,12 @@ const vipClaim = computed(
     (auth.user?.isVip === true || auth.org?.plan === 'vip') &&
     (!auth.org || auth.org.status === 'active')
 )
-/** 该目标已有授权认领、本组织非 VIP、或不在业主授权范围（C1）时，业主认领不可提交 */
+/** 该目标已有授权认领、本组织非 VIP、或（已配置）不在业主授权范围时，业主认领不可提交 */
 const ownerLocked = computed(() => {
   if (!vipClaim.value || preview.value?.owner_claim) return true
   const scope = preview.value?.owner_scope
-  return !!scope && !scope.allowed
+  // 未配置范围不拦截：提交后进入平台超管审核
+  return !!scope && scope.configured && !scope.allowed
 })
 /** R2-27：仅「未认领 / 被驳回 / 已关注且本次走业主认领（同行升级）」可提交 */
 const claimSubmittable = computed(() => {
@@ -928,8 +929,8 @@ function lvLabel(v?: string | null): string {
             <template v-if="claimType === 'owner'">
               <div v-if="!vipClaim" class="hint">{{ t('obj.ownerVipOnly') }}</div>
               <template v-else>
-                <div v-if="preview.owner_scope && !preview.owner_scope.configured && !preview.owner_claim" class="hint warn">
-                  {{ t('obj.ownerScopeNone') }}
+                <div v-if="preview.owner_scope && !preview.owner_scope.configured && !preview.owner_claim" class="hint">
+                  {{ t('obj.ownerScopeReview') }}
                 </div>
                 <div
                   v-else-if="preview.owner_scope && preview.owner_scope.configured && !preview.owner_scope.allowed && !preview.owner_claim"

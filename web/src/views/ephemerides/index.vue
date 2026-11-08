@@ -200,6 +200,10 @@ async function setVisibility(v: 'public' | 'private') {
   }
 }
 
+function visibilityText(v: EphListItem['visibility']): string {
+  return v === 'private' ? '仅自己可见' : v === 'vip' ? '仅 VIP 可见' : '全平台可见'
+}
+
 async function removeSelected() {
   const it = selected.value
   if (!it || !canManage(it) || delBusy.value) return
@@ -979,6 +983,7 @@ onMounted(() => {
               <span v-if="it.maneuvers > 0" class="tg man">{{ it.maneuvers }} 处机动</span>
               <span class="tg" :class="{ cov: it.covariance }">{{ it.covariance ? '含协方差' : '无协方差' }}</span>
               <span v-if="it.visibility === 'private'" class="tg priv">仅自己可见</span>
+              <span v-if="it.visibility === 'vip'" class="tg vip">仅 VIP 可见</span>
             </div>
           </button>
         </div>
@@ -1017,7 +1022,7 @@ onMounted(() => {
           <div class="vis-bar">
             <span class="vis-label">可见性</span>
             <span class="vis-badge" :class="(selected.visibility ?? 'public')">
-              {{ (selected.visibility ?? 'public') === 'private' ? '仅自己可见' : '全平台可见' }}
+              {{ visibilityText(selected.visibility) }}
             </span>
             <template v-if="canManage(selected)">
               <button type="button" :disabled="visBusy || (selected.visibility ?? 'public') === 'public'" @click="setVisibility('public')">全平台可见</button>
@@ -1278,6 +1283,7 @@ h1 { margin: 0; font-size: 16px; font-weight: 650; }
 .tg.man { color: #ffc98a; background: rgba(255, 170, 70, 0.12); border-color: rgba(255, 170, 80, 0.3); }
 .tg.cov { color: #6fe0c0; background: rgba(80, 220, 180, 0.12); border-color: rgba(80, 220, 180, 0.28); }
 .tg.priv { color: #c9a8ff; background: rgba(150, 110, 255, 0.14); border-color: rgba(150, 110, 255, 0.34); }
+.tg.vip { color: #e0b45c; background: rgba(224, 180, 92, 0.14); border-color: rgba(224, 180, 92, 0.34); }
 .prev-h { padding: 12px; border-bottom: 1px solid var(--border); }
 .h-title { font-size: 13px; font-weight: 650; }
 .h-sub { font-size: 11px; color: var(--text-dim); margin-top: 2px; }
@@ -1293,6 +1299,7 @@ h1 { margin: 0; font-size: 16px; font-weight: 650; }
 .vis-badge { padding: 1px 7px; border-radius: 3px; border: 1px solid var(--border); }
 .vis-badge.public { color: #6fe0c0; border-color: rgba(80, 220, 180, 0.3); }
 .vis-badge.private { color: #c9a8ff; border-color: rgba(150, 110, 255, 0.34); }
+.vis-badge.vip { color: #e0b45c; border-color: rgba(224, 180, 92, 0.4); }
 .vis-bar button {
   background: transparent; border: 1px solid var(--border); border-radius: 4px;
   color: var(--text-muted); font-size: 11px; padding: 3px 8px; cursor: pointer;

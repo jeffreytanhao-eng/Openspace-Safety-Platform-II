@@ -19,6 +19,7 @@ import {
   getRowBySourceNameDb,
   getRowDb,
   upsertRowDb,
+  deleteRowDb,
   deleteRowsByFilesDb,
   clearRowsDb,
   listAllRowsDb,
@@ -142,7 +143,7 @@ function listGzFiles(dir: string, base = ''): string[] {
 function parseGzFile(rel: string): { row: EphemRow; text: string } | { skip: string } {
   const full = path.join(EPH_ROOT, rel)
   const raw = fs.readFileSync(full)
-  const text = gunzipText(raw)
+  const text = gunzipText(raw).replace(/^\uFEFF/, '')
   const dirTop = rel.split('/')[0].toLowerCase()
   if (dirTop === 'ocm' || /^CCSDS_OCM_VERS/m.test(text)) {
     if (!/^CCSDS_OCM_VERS/m.test(text)) return { skip: `not CCSDS OCM: ${rel}` }
@@ -318,7 +319,8 @@ function sanitizeName(name: string): string {
 export async function ingestUploadFile(
   originalName: string,
   buf: Buffer,
-  uploadedBy = 'anonymous'
+  uploadedBy = 'anonymous',
+  opts: { overwriteSameName?: boolean } = {}
 ): Promise<UploadResult> {
   if (!(await ephemDbUp())) throw new Error('数据库不可用：星历上传入库需要 MySQL')
   const name = sanitizeName(originalName)
@@ -331,12 +333,15 @@ export async function ingestUploadFile(
     throw new Error('gzip 解压失败（文件损坏或非 gzip 格式）')
   }
   if (!text.trim()) throw new Error('文件内容为空')
+  // Windows 侧文件可能带 UTF-8 BOM：剥离后再解析/落盘，避免格式头判定失败
+  const hadBom = text.charCodeAt(0) === 0xfeff
+  if (hadBom) text = text.slice(1)
   const { format, meta } = parseMetaAuto(text, name)
   if (!/^\d+$/.test(meta.norad) || meta.norad === '0') throw new Error('无法从文件识别 NORAD 编号')
 
-  // 同名文件去重
+  // 同名文件去重（超管导入走覆盖模式：同名同样直接覆盖，不做跳过）
   const sameSource = await getRowBySourceNameDb(name)
-  if (sameSource) {
+  if (sameSource && !opts.overwriteSameName) {
     // G1：同名跳过也留版本痕（内容不同会新增版本，同内容由账本去重）
     await appendEphemVersion({
       format,
@@ -359,13 +364,15 @@ export async function ingestUploadFile(
   fs.mkdirSync(dir, { recursive: true })
   const fileName = isGz ? name : `${name}.gz`
   const full = path.join(dir, fileName)
-  fs.writeFileSync(full, isGz ? buf : zlib.gzipSync(text, { level: 9 }))
+  fs.writeFileSync(full, isGz && !hadBom ? buf : zlib.gzipSync(text, { level: 9 }))
   const st = fs.statSync(full)
   const rel = `${format.toLowerCase()}/${shard}/${fileName}`.replace(/\\/g, '/')
 
   const row = buildRow({ format, meta, file: rel, mtimeMs: st.mtimeMs, sizeBytes: st.size, rawSizeBytes: isGz ? Buffer.byteLength(text, 'utf8') : buf.length, sourceName: name })
   const existed = await getRowDb(row.id)
   await upsertRowDb(row)
+  // 覆盖模式下同名旧行若指向不同目标 id，清掉旧行避免文件/元数据错挂
+  if (sameSource && sameSource.id !== row.id) await deleteRowDb(sameSource.id)
   // G1 版本归档：同内容重复上传由账本去重，不重复记账
   await appendEphemVersion({
     format,
@@ -382,15 +389,18 @@ export async function ingestUploadFile(
   }
 }
 
-/** 上传前预解析 NORAD（第 6 项：仅能上传自己认领目标的星历）；解析失败返回 null */
-export function peekUploadNorad(originalName: string, buf: Buffer): string | null {
+/** 上传前预解析 NORAD 与格式（第 6 项：仅能上传自己认领目标的星历；超管覆盖校验需要目标行 id） */
+export function peekUploadMeta(
+  originalName: string,
+  buf: Buffer
+): { norad: string; format: 'ITC' | 'OCM' } | null {
   try {
     const name = sanitizeName(originalName)
     const isGz = name.toLowerCase().endsWith('.gz')
     const text = isGz ? gunzipText(buf) : buf.toString('utf8')
     if (!text.trim()) return null
-    const { meta } = parseMetaAuto(text, name)
-    return /^\d+$/.test(meta.norad) && meta.norad !== '0' ? meta.norad : null
+    const { format, meta } = parseMetaAuto(text, name)
+    return /^\d+$/.test(meta.norad) && meta.norad !== '0' ? { norad: meta.norad, format } : null
   } catch {
     return null
   }

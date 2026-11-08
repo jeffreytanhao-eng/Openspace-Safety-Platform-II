@@ -17,7 +17,7 @@
  */
 import type { RowDataPacket } from 'mysql2/promise'
 import { pool } from '../db/pool.js'
-import { getRowDb } from '../ephem/ephemDb.js'
+import { getRowDb, canViewEphemeris, applyViewerFilter, type EphemViewer } from '../ephem/ephemDb.js'
 import { EPH_ROOT } from '../ephem/ingest.js'
 import { parseOcmPv, pvAt, type PvState } from '../ephem/parsePv.js'
 import { buildSatrec, propagateJ2000 } from '../screen/coarse.js'
@@ -52,17 +52,20 @@ const ROOT_LATE_MS = 3 * 86400000
 
 /* ---------------------------- 源列举 ---------------------------- */
 
-/** 列出某 NORAD 可参与精度对比的源（OCM 星历 + 系统 TLE + AOE） */
-export async function listAccuracySources(norad: string): Promise<AccuracySourceItem[]> {
+/** 列出某 NORAD 可参与精度对比的源（OCM 星历 + 系统 TLE + AOE）；OCM 按查看者可见性裁剪 */
+export async function listAccuracySources(norad: string, viewer?: EphemViewer | null): Promise<AccuracySourceItem[]> {
   const out: AccuracySourceItem[] = []
   const noradNum = Number(norad)
   if (!Number.isFinite(noradNum) || noradNum <= 0) return out
 
+  const where = [`norad = ?`, `format = 'OCM'`]
+  const params: unknown[] = [String(noradNum)]
+  applyViewerFilter(viewer, where, params)
   const [ephRows] = await pool.query<RowDataPacket[]>(
     `SELECT id, name, norad, points, step_sec, start_ms, stop_ms, published_at, originator
-     FROM ephemeris WHERE norad = ? AND format = 'OCM'
+     FROM ephemeris WHERE ${where.join(' AND ')}
      ORDER BY published_at DESC LIMIT 50`,
-    [String(noradNum)]
+    params
   )
   for (const r of ephRows) {
     out.push({
@@ -141,9 +144,14 @@ function safeResolveEphFile(rel: string): string | null {
   return full
 }
 
-async function loadOcmSource(id: string, label: string): Promise<LoadedSource | null> {
+async function loadOcmSource(
+  id: string,
+  label: string,
+  viewer?: EphemViewer | null
+): Promise<LoadedSource | null> {
   const row = await getRowDb(id)
   if (!row || row.format !== 'OCM') return null
+  if (!canViewEphemeris(row, viewer)) throw new Error('OCM 星历不存在或无权访问')
   const full = safeResolveEphFile(row.file)
   if (!full || !fs.existsSync(full)) throw new Error(`OCM 文件缺失：${row.file}`)
   const buf = fs.readFileSync(full)
@@ -207,10 +215,11 @@ async function loadRootSource(
 async function loadSource(
   norad: number,
   desc: SourceDesc,
-  fallbackLabel: string
+  fallbackLabel: string,
+  viewer?: EphemViewer | null
 ): Promise<LoadedSource> {
   if (desc.kind === 'ocm') {
-    const s = await loadOcmSource(desc.id || '', fallbackLabel)
+    const s = await loadOcmSource(desc.id || '', fallbackLabel, viewer)
     if (s) return s
     throw new Error('OCM 星历不存在或非 OCM 格式')
   }
@@ -261,14 +270,15 @@ export async function compareSources(
   norad: string,
   aDesc: SourceDesc,
   bDesc: SourceDesc,
-  maxPoints = 240
+  maxPoints = 240,
+  viewer?: EphemViewer | null
 ): Promise<CompareResult> {
   const noradNum = Number(norad)
   if (!Number.isFinite(noradNum) || noradNum <= 0) throw new Error('无效的 NORAD 编号')
   const cap = Math.min(Math.max(maxPoints, 10), 1000)
 
-  const a = await loadSource(noradNum, aDesc, '源A')
-  const b = await loadSource(noradNum, bDesc, '源B')
+  const a = await loadSource(noradNum, aDesc, '源A', viewer)
+  const b = await loadSource(noradNum, bDesc, '源B', viewer)
 
   const startMs = Math.max(a.windowStartMs, b.windowStartMs)
   const stopMs = Math.min(a.windowEndMs, b.windowEndMs)
