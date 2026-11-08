@@ -348,7 +348,8 @@ router.post('/events/import', requireAuth, async (req: ScopedRequest, res) => {
 
 /** 事件聚合列表（R0-1 登录可读，C3 按档裁剪）：window=24h|3d|7d|all，level/q 前端过滤即可；
  *  客户上传 CDM（source=customer）仅上传组织可见；all 窗口回看深度按档 system_cdm_days。
- *  平台超管（无所属组织）仅可见系统池行，不跨组织泄露客户上传。 */
+ *  平台超管（无所属组织）仅可见系统池行，不跨组织泄露客户上传。
+ *  scope=mine 时只返回本组织关注/认领（claim_status=claimed）目标参与的星对。 */
 router.get('/events', requireAuth, async (req: ScopedRequest, res) => {
   const org = req.auth?.org ?? null
   const policy = await resolvePoolPolicy(org)
@@ -356,11 +357,23 @@ router.get('/events', requireAuth, async (req: ScopedRequest, res) => {
   // 客户 CDM 组织隔离：登录组织额外可见自己上传的行；超管/无组织只见系统池
   const isoSql = org ? `AND (source <> 'customer' OR org_id = ?)` : `AND source <> 'customer'`
   const params: unknown[] = org ? [from, to, org.id] : [from, to]
+  // 只看关注/认领目标：无组织账号（平台超管）没有关注目标，直接返回空列表
+  const scope = String(req.query.scope ?? '')
+  let scopeSql = ''
+  if (scope === 'mine') {
+    if (!org) {
+      res.json(ok({ events: [], window: { from: from.toISOString(), to: to.toISOString() }, pool: poolBadge(policy) }))
+      return
+    }
+    scopeSql = `AND (norad_a IN (SELECT norad_id FROM objects WHERE org_id = ? AND claim_status = 'claimed')
+                  OR norad_b IN (SELECT norad_id FROM objects WHERE org_id = ? AND claim_status = 'claimed'))`
+    params.push(org.id, org.id)
+  }
   const [rows] = await pool.query<CdmRow[]>(
     `SELECT id, cdm_id, creation_date, originator, tca, norad_a, name_a, norad_b, name_b,
             miss_distance_km, rel_speed_km_per_s, collision_probability, hard_body_radius_m, source, org_id
      FROM sat_cdm
-     WHERE tca IS NOT NULL AND tca >= ? AND tca <= ? ${isoSql}
+     WHERE tca IS NOT NULL AND tca >= ? AND tca <= ? ${isoSql} ${scopeSql}
      ORDER BY tca ASC
      LIMIT ${LIST_LIMIT}`,
     params

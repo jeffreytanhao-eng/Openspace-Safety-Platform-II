@@ -17,7 +17,10 @@ const { current } = useDataSource()
 const auth = useAuthStore()
 
 const windowTab = ref<'24h' | '3d' | '7d' | 'all'>('3d')
+const scope = ref<'all' | 'mine'>('all')
 const levelFilter = ref<'all' | EventLevel>('all')
+/** 排序：默认=风险优先（服务端顺序）；其余按 TCA / Pc 顺序或倒序 */
+const sortKey = ref<'default' | 'tcaAsc' | 'tcaDesc' | 'pcAsc' | 'pcDesc'>('default')
 const q = ref('')
 const loading = ref(false)
 const error = ref('')
@@ -34,7 +37,7 @@ async function load(): Promise<void> {
   loading.value = true
   error.value = ''
   try {
-    const resp = await listEvents(windowTab.value)
+    const resp = await listEvents(windowTab.value, scope.value)
     allEvents.value = resp.events ?? []
   } catch (e) {
     error.value = e instanceof Error ? e.message : String(e)
@@ -52,6 +55,12 @@ onMounted(() => {
 function switchWindow(w: '24h' | '3d' | '7d' | 'all'): void {
   if (windowTab.value === w) return
   windowTab.value = w
+  void load()
+}
+
+function switchScope(s: 'all' | 'mine'): void {
+  if (scope.value === s) return
+  scope.value = s
   void load()
 }
 
@@ -77,7 +86,7 @@ function fmtPc(pc: number | null): string {
 }
 
 const rows = computed(() => {
-  return allEvents.value.filter((e) => {
+  const list = allEvents.value.filter((e) => {
     if (levelFilter.value !== 'all' && e.level !== levelFilter.value) return false
     const s = q.value.trim().toLowerCase()
     if (!s) return true
@@ -88,7 +97,36 @@ const rows = computed(() => {
       String(e.noradB).includes(s)
     )
   })
+  const dir = sortKey.value === 'tcaDesc' || sortKey.value === 'pcDesc' ? -1 : 1
+  if (sortKey.value === 'tcaAsc' || sortKey.value === 'tcaDesc') {
+    // TCA 为 ISO 字符串，可直接字典序比较
+    list.sort((x, y) => dir * x.tca.localeCompare(y.tca))
+  } else if (sortKey.value === 'pcAsc' || sortKey.value === 'pcDesc') {
+    // Pc 为空（无概率）的事件始终排末尾
+    list.sort((x, y) => {
+      if (x.pc === null && y.pc === null) return 0
+      if (x.pc === null) return 1
+      if (y.pc === null) return -1
+      return dir * (x.pc - y.pc)
+    })
+  }
+  return list
 })
+
+/** 表头点击：同列再次点击切换顺序/倒序，第三次恢复默认（风险优先） */
+function toggleSort(key: 'tca' | 'pc'): void {
+  if (key === 'tca') {
+    sortKey.value = sortKey.value === 'tcaAsc' ? 'tcaDesc' : sortKey.value === 'tcaDesc' ? 'default' : 'tcaAsc'
+  } else {
+    sortKey.value = sortKey.value === 'pcAsc' ? 'pcDesc' : sortKey.value === 'pcDesc' ? 'default' : 'pcAsc'
+  }
+}
+
+function sortIcon(key: 'tca' | 'pc'): string {
+  if (sortKey.value === `${key}Asc`) return '↑'
+  if (sortKey.value === `${key}Desc`) return '↓'
+  return '⇅'
+}
 
 async function doImport(): Promise<void> {
   importErr.value = ''
@@ -139,6 +177,10 @@ function fmtTca(iso: string): string {
     <section class="filters">
       <input v-model="q" type="search" :placeholder="t('conj.search')" />
       <div class="seg">
+        <button type="button" :class="{ on: scope === 'all' }" @click="switchScope('all')">{{ t('conj.scope.all') }}</button>
+        <button type="button" :class="{ on: scope === 'mine' }" @click="switchScope('mine')">{{ t('conj.scope.mine') }}</button>
+      </div>
+      <div class="seg">
         <button type="button" :class="{ on: windowTab === '24h' }" @click="switchWindow('24h')">24h</button>
         <button type="button" :class="{ on: windowTab === '3d' }" @click="switchWindow('3d')">3d</button>
         <button type="button" :class="{ on: windowTab === '7d' }" @click="switchWindow('7d')">7d</button>
@@ -165,9 +207,13 @@ function fmtTca(iso: string): string {
             <th>{{ t('conj.col.risk') }}</th>
             <th>{{ t('conj.col.primary') }}</th>
             <th>{{ t('conj.col.secondary') }}</th>
-            <th>{{ t('conj.col.tca') }}</th>
+            <th class="sortable" :title="t('conj.sortHint')" @click="toggleSort('tca')">
+              {{ t('conj.col.tca') }} <span class="sarrow">{{ sortIcon('tca') }}</span>
+            </th>
             <th>{{ t('conj.col.miss') }}</th>
-            <th>{{ t('conj.col.pc') }}</th>
+            <th class="sortable" :title="t('conj.sortHint')" @click="toggleSort('pc')">
+              {{ t('conj.col.pc') }} <span class="sarrow">{{ sortIcon('pc') }}</span>
+            </th>
             <th>{{ t('conj.col.cdm') }}</th>
             <th>{{ t('conj.col.source') }}</th>
           </tr>
@@ -253,6 +299,9 @@ function fmtTca(iso: string): string {
   font-size: 11px; padding: 4px 8px; border-radius: 3px; cursor: pointer;
 }
 .seg button.on { background: var(--bg-hover); color: var(--text); }
+th.sortable { cursor: pointer; user-select: none; }
+th.sortable:hover { color: var(--text); }
+.sarrow { margin-left: 3px; font-size: 10px; opacity: 0.7; }
 .hint { font-size: 11px; color: var(--text-dim); margin-left: auto; }
 .state {
   flex: 1; min-height: 120px; display: flex; align-items: center; justify-content: center;

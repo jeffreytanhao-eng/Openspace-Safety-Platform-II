@@ -69,10 +69,14 @@ export interface TleProfile {
   updated_at: string | null
 }
 
-export function listEvents(window: '24h' | '3d' | '7d' | 'all'): Promise<{ events: ConjunctionEvent[] }> {
+/** scope=all 全部交会；mine 仅本组织关注/认领目标参与的星对 */
+export function listEvents(
+  window: '24h' | '3d' | '7d' | 'all',
+  scope: 'all' | 'mine' = 'all'
+): Promise<{ events: ConjunctionEvent[] }> {
   return cgiCall<{ events: ConjunctionEvent[] }>({
     method: 'GET',
-    url: `/events?window=${encodeURIComponent(window)}`,
+    url: `/events?window=${encodeURIComponent(window)}&scope=${encodeURIComponent(scope)}`,
     headers: authHeaders()
   })
 }
