@@ -44,9 +44,6 @@ export function requireSuperAdmin(req: ScopedRequest, res: import('express').Res
   next()
 }
 
-/** R2-30：组织成员硬上限（不含管理员本人），账号页与超管后台同一口径 */
-const MAX_ORG_MEMBERS = 3
-
 const PLANS = ['free', 'normal', 'vip'] as const
 type Plan = (typeof PLANS)[number]
 const STATUSES = ['active', 'suspended', 'closed'] as const
@@ -525,7 +522,8 @@ router.post('/admin/orgs/:id/members', requireAuth, requireSuperAdmin, async (re
     await ensurePlanSchema()
     const limits = await getEffectiveLimits(org.id, org.plan)
     const effective = limits.find((l) => l.feature === 'members_max')?.limit
-    const membersMax = Math.min(effective ?? MAX_ORG_MEMBERS, MAX_ORG_MEMBERS)
+    // 超管可为组织单独覆盖上限（requirement：VIP 默认 2），不再有代码级硬上限
+    const membersMax = effective ?? 0
     const usage = await countOrgMembers(orgId)
     if (usage >= membersMax) {
       res.status(403).json({

@@ -20,6 +20,8 @@ const { t } = useI18n()
 const auth = useAuthStore()
 /** 平台账号（无组织）：全平台只读视图 */
 const isPlatform = computed(() => !auth.org)
+/** 基础档不能发起筛查（后端 screen_day=0 兜底），前端直接禁用并提示升级 */
+const isVip = computed(() => auth.user?.isVip === true || auth.org?.plan === 'vip')
 
 /** 与后端 SCREEN_MAX_PRIMARY 默认值保持一致；后端为准，超限时以其报错文案提示 */
 const MAX_PRIMARY = 50
@@ -452,9 +454,10 @@ function pcSourceLabel(e: ScreenEvent): string {
                 <div v-else-if="managedLoaded" class="pick-hint">{{ t('scr.noManaged') }}</div>
               </div>
 
-              <button type="button" class="primary" :disabled="submitting || isPlatform" @click="submit">
+              <button type="button" class="primary" :disabled="submitting || isPlatform || !isVip" @click="submit">
                 {{ submitting ? t('scr.submitting') : t('scr.submit') }}
               </button>
+              <div v-if="!isVip && !isPlatform" class="err">{{ t('scr.vipOnly') }}</div>
               <div v-if="submitError" class="err">{{ submitError }}</div>
 
               <!-- R0-2：根数自检（系统池 TLE 可用性与龄期） -->

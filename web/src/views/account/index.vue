@@ -14,6 +14,7 @@ import {
   authListOrgMembers,
   authCreateOrgMember,
   authRemoveOrgMember,
+  authUpdateOrg,
   authUpdateBio,
   type QuotaItem,
   type UpgradeRequest,
@@ -257,7 +258,7 @@ const canManageMembers = computed(
   () => auth.user?.role === 'org_admin' && auth.org?.plan === 'vip' && auth.org?.status === 'active'
 )
 const members = ref<OrgMember[]>([])
-const memberMax = ref(3)
+const memberMax = ref(2)
 const membersLoading = ref(false)
 const membersError = ref('')
 const memberForm = ref({ email: '', password: '', displayName: '' })
@@ -274,7 +275,7 @@ async function loadMembers() {
   try {
     const r = await authListOrgMembers()
     members.value = r.items || []
-    memberMax.value = r.max || 3
+    memberMax.value = r.max ?? 0
   } catch (e) {
     membersError.value = e instanceof AuthError ? e.message : t('acct.memberLoadFail')
   } finally {
@@ -313,6 +314,38 @@ async function removeMember(m: OrgMember) {
     membersError.value = e instanceof AuthError ? e.message : t('acct.memberRemoveFail')
   } finally {
     memberBusyId.value = null
+  }
+}
+
+/* ---------------- 组织改名（仅 VIP 组织管理员） ---------------- */
+
+const orgNameDraft = ref('')
+const orgRenameBusy = ref(false)
+const orgRenameErr = ref('')
+const orgRenameMsg = ref('')
+
+watch(
+  () => auth.org?.name,
+  (n) => {
+    if (n) orgNameDraft.value = n
+  },
+  { immediate: true }
+)
+
+async function saveOrgName(): Promise<void> {
+  const name = orgNameDraft.value.trim()
+  if (!name || name === auth.org?.name) return
+  orgRenameBusy.value = true
+  orgRenameErr.value = ''
+  orgRenameMsg.value = ''
+  try {
+    const updated = await authUpdateOrg(name)
+    auth.org = { ...(auth.org || updated), ...updated }
+    orgRenameMsg.value = t('acct.orgRenameOk')
+  } catch (e) {
+    orgRenameErr.value = e instanceof AuthError ? e.message : t('acct.orgRenameFail')
+  } finally {
+    orgRenameBusy.value = false
   }
 }
 
@@ -389,10 +422,22 @@ watch(
             <div v-if="isVip && auth.org" class="org-block">
               <div class="quota-title">{{ t('acct.orgInfo') }}</div>
               <dl class="kv kv-2">
-                <div><dt>{{ t('acct.orgName') }}</dt><dd>{{ auth.org?.personal ? (auth.user?.displayName || auth.user?.email || t('acct.noOrgShort')) : (auth.org?.name || t('acct.noOrgShort')) }}</dd></div>
+                <div><dt>{{ t('acct.orgName') }}</dt><dd>{{ auth.org?.name || t('acct.noOrgShort') }}</dd></div>
                 <div><dt>{{ t('acct.orgRole') }}</dt><dd>{{ orgRoleLabel }}</dd></div>
                 <div v-if="auth.org"><dt>{{ t('acct.orgStatus') }}</dt><dd>{{ statusLabel }}</dd></div>
               </dl>
+              <!-- 组织管理员可改名（成员只读，不显示该表单） -->
+              <form v-if="canManageMembers" class="org-rename" @submit.prevent="saveOrgName">
+                <label>
+                  <span>{{ t('acct.orgRename') }}</span>
+                  <input v-model="orgNameDraft" type="text" maxlength="128" :placeholder="t('acct.orgRenamePlaceholder')" />
+                </label>
+                <button type="submit" class="btn" :disabled="orgRenameBusy || !orgNameDraft.trim() || orgNameDraft.trim() === auth.org?.name">
+                  {{ orgRenameBusy ? t('acct.saving') : t('acct.orgRenameSave') }}
+                </button>
+              </form>
+              <p v-if="orgRenameErr" class="error inline">{{ orgRenameErr }}</p>
+              <p v-if="orgRenameMsg" class="ok-note inline">{{ orgRenameMsg }}</p>
             </div>
           </section>
 
@@ -576,6 +621,11 @@ watch(
 .page { display: flex; flex-direction: column; gap: 12px; max-width: 760px; padding-bottom: 24px; }
 .row-2 { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
 .org-block { display: flex; flex-direction: column; gap: 8px; border-top: 1px solid var(--border); padding-top: 10px; }
+.org-rename { display: flex; align-items: flex-end; gap: 8px; flex-wrap: wrap; }
+.org-rename label { display: flex; flex-direction: column; gap: 4px; }
+.org-rename label span { font-size: 11px; color: var(--text-dim); }
+.org-rename input { padding: 6px 9px; border: 1px solid var(--border); border-radius: 6px; background: var(--bg); color: var(--text); font-size: 12px; min-width: 220px; }
+.org-rename input:focus { border-color: var(--watch); }
 .kv.kv-1 { grid-template-columns: minmax(0, 1fr); }
 .kv.kv-2 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 .bio-block { display: flex; flex-direction: column; gap: 6px; border-top: 1px solid var(--border); padding-top: 10px; }

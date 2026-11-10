@@ -440,6 +440,8 @@ const caForm = reactive<CaFormState>({
 })
 const caDefaults = ref<CaDefaults | null>(null)
 const caOrgReady = ref(false) // 有组织账号（可重算）
+/** 基础档不能重算（后端 recompute_day=0 兜底） */
+const caVipReady = computed(() => auth.user?.isVip === true || auth.org?.plan === 'vip')
 
 /* 第 4 项：参数来源（default / mine1 / mine2 / target） */
 const rcParamsSource = ref<'default' | 'mine1' | 'mine2' | 'target'>('default')
@@ -885,10 +887,11 @@ function doExport(kind: 'md' | 'html' | 'csv'): void {
         </div>
         <div v-show="caOpen" class="ca-body">
         <div class="ca-actions">
-          <button type="button" class="btn primary sm" :disabled="rcLoading || !caOrgReady" @click="runRecompute">
+          <button type="button" class="btn primary sm" :disabled="rcLoading || !caOrgReady || !caVipReady" @click="runRecompute">
             {{ rcLoading ? t('ca.recomputing') : t('ca.recompute') }}
           </button>
         </div>
+        <p v-if="caOrgReady && !caVipReady" class="note warn">{{ t('scr.vipOnly') }}</p>
         <p class="note">{{ t('ca.detailDesc') }}</p>
 
         <!-- 参数编辑（仅本次） -->

@@ -9,6 +9,7 @@ import { ensureFixedAccounts } from './db/fixedAccounts.js'
 import { ensurePlanSchema } from './db/planDb.js'
 import { ensureFetchSchema } from './db/fetchDb.js'
 import { startDailyFetchScheduler, parseDailyCron } from './jobs/dailyFetch.js'
+import { startStarlinkPullScheduler } from './services/pullStarlink.js'
 import { startDailyReportScheduler } from './jobs/dailyReport.js'
 
 const app = createApp()
@@ -29,6 +30,8 @@ app.listen(config.port, '0.0.0.0', () => {
     // 日更批次/版本化快照表（Epic C1）+ 每日调度器
     if (await ensureFetchSchema()) startDailyFetchScheduler()
     else console.warn('[fetch] schema not ready, daily-fetch scheduler not started')
+    // StarLink 星历拉取调度器（UTC 00:00，配置开启时才执行）
+    startStarlinkPullScheduler()
     // 日报调度器（Epic H2）：复用 'M H * * *' 解析；通知表由路由/job 内幂等建表
     startDailyReportScheduler(parseDailyCron, config.dailyReportCron)
     // 平台超管 bootstrap（Epic B1）：凭据来自 .env，首次启动创建

@@ -313,3 +313,50 @@ export function adminTriggerDailyFetch(): Promise<{
 }> {
   return cgiCall({ method: 'POST', url: '/jobs/daily-fetch', headers: headers() })
 }
+
+/* ------------------------- StarLink 星历拉取 ------------------------- */
+
+export type StarlinkFormat = 'OCM' | 'ITC'
+
+export interface StarlinkPullStatus {
+  running: boolean
+  startedAt: string | null
+  finishedAt: string | null
+  triggeredBy: string
+  format: StarlinkFormat
+  requested: number
+  added: number
+  updated: number
+  skipped: number
+  failed: number
+  errors: string[]
+}
+
+export interface StarlinkPullConfig {
+  enabled: boolean
+  count: number
+  format: StarlinkFormat
+  status: StarlinkPullStatus | null
+  running: boolean
+}
+
+export function adminStarlinkPullGet(): Promise<StarlinkPullConfig> {
+  return cgiCall({ method: 'GET', url: '/jobs/starlink-pull', headers: headers() })
+}
+
+export function adminStarlinkPullSave(payload: {
+  enabled: boolean
+  count: number
+  format: StarlinkFormat
+}): Promise<StarlinkPullConfig> {
+  return cgiCall({ method: 'PUT', url: '/jobs/starlink-pull', headers: headers(), data: payload })
+}
+
+export function adminStarlinkPullRun(): Promise<{
+  started: boolean
+  triggered_by: string
+  count: number
+  format: StarlinkFormat
+}> {
+  return cgiCall({ method: 'POST', url: '/jobs/starlink-pull/run', headers: headers() })
+}

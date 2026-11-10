@@ -22,7 +22,8 @@ export interface FeatureMeta {
 
 /**
  * 功能键语义：
- * - objects_max        目标数量上限（count）
+ * - claims_max         业主认领目标数上限（count，组织级共享）
+ * - watches_max        关注目标数上限（count，组织级共享）
  * - ephem_upload_day   每日星历上传次数（count/天）
  * - screen_day         每日筛查任务数（count/天）
  * - recompute_day      每日重算次数（count/天）
@@ -30,10 +31,11 @@ export interface FeatureMeta {
  * - system_cdm_days    系统 CDM 历史可查天数（days）
  * - pc_methods         可用 Pc 算法位图（bitmap：1=Foster 2=Chan 4=Alfano 8=官方CDM）
  * - api_keys_max       API Key 数量上限（count）
- * - members_max        组织成员数上限（count）
+ * - members_max        组织成员数上限（count，不含管理员本人）
  */
 export const FEATURE_KEYS: FeatureMeta[] = [
-  { key: 'objects_max', label: '目标数', unit: 'count' },
+  { key: 'claims_max', label: '业主认领目标数', unit: 'count' },
+  { key: 'watches_max', label: '关注目标数', unit: 'count' },
   { key: 'ephem_upload_day', label: '每日星历上传', unit: 'count' },
   { key: 'screen_day', label: '每日筛查任务', unit: 'count' },
   { key: 'recompute_day', label: '每日重算次数', unit: 'count' },
@@ -62,34 +64,42 @@ export const TLE_SAMPLE_LIMIT = 500
 /**
  * 档位默认限额（首次 seed 后可运营在库内调整，代码不再强约束）。
  * bitmap/scope 语义见 FEATURE_KEYS / TLE_SCOPE。
- * C3 口径：免费=样例窗+3 天 CDM 样例；普通=全库可搜+30 天；VIP=全量+365 天。
+ * 账号模型口径：
+ * - 基础（normal）：单人组织，不能认领、不能发起筛查/重算；关注上限 50
+ * - VIP：组织共享认领 100 / 关注 500，管理员 + 最多 2 名成员；可筛查/重算
+ * - free 档位保留但暂不使用
  */
 const PLAN_SEED: Record<'free' | 'normal' | 'vip', Record<string, number>> = {
   free: {
-    objects_max: 3,
-    ephem_upload_day: 5,
-    screen_day: 5,
-    recompute_day: 20,
-    system_tle_scope: TLE_SCOPE.SAMPLE,
-    system_cdm_days: 3,
-    pc_methods: PC_BIT.Foster | PC_BIT.Chan,
+    claims_max: 0,
+    watches_max: 0,
+    ephem_upload_day: 0,
+    screen_day: 0,
+    recompute_day: 0,
+    system_tle_scope: TLE_SCOPE.NONE,
+    system_cdm_days: 0,
+    pc_methods: 0,
     api_keys_max: 0,
-    members_max: 2
+    members_max: 0
   },
   normal: {
-    objects_max: 50,
+    claims_max: 0,
+    watches_max: 50,
     ephem_upload_day: 100,
-    screen_day: 100,
-    recompute_day: 500,
-    // C3：普通档编目检索与托管列表解耦，全库可搜；用量仍受 objects_max / screen_day 约束
+    // 基础用户不能发起筛查与重算
+    screen_day: 0,
+    recompute_day: 0,
+    // C3：普通档编目检索与托管列表解耦，全库可搜；用量仍受 watches_max 约束
     system_tle_scope: TLE_SCOPE.FULL,
     system_cdm_days: 30,
     pc_methods: PC_BIT.Foster | PC_BIT.Chan | PC_BIT.Alfano | PC_BIT.OfficialCDM,
     api_keys_max: 3,
-    members_max: 10
+    // 单人组织，不允许添加成员
+    members_max: 0
   },
   vip: {
-    objects_max: 500,
+    claims_max: 100,
+    watches_max: 500,
     ephem_upload_day: 1000,
     screen_day: 1000,
     recompute_day: 5000,
@@ -97,8 +107,8 @@ const PLAN_SEED: Record<'free' | 'normal' | 'vip', Record<string, number>> = {
     system_cdm_days: 365,
     pc_methods: PC_BIT.Foster | PC_BIT.Chan | PC_BIT.Alfano | PC_BIT.OfficialCDM,
     api_keys_max: 20,
-    // R2-30：组织管理员最多 3 名成员（不含管理员本人），VIP 档位默认同口径
-    members_max: 3
+    // 组织上限 3 人（管理员 + 最多 2 名成员），此处只计成员
+    members_max: 2
   }
 }
 
@@ -148,10 +158,8 @@ export function ensurePlanSchema(): Promise<boolean> {
             "UPDATE plan_defaults SET limit_value = ? WHERE plan = 'normal' AND feature_key = 'system_tle_scope' AND limit_value = ?",
             [TLE_SCOPE.FULL, TLE_SCOPE.MANAGED]
           )
-          // R2-30 一次性：VIP 档成员上限 50 → 3（改成 3 后不再命中）
-          await pool.query(
-            "UPDATE plan_defaults SET limit_value = 3 WHERE plan = 'vip' AND feature_key = 'members_max' AND limit_value = 50"
-          )
+          // 账号模型一次性迁移：objects_max 拆分为 claims_max / watches_max
+          await migrateQuotaKeys()
         }
         return true
       } catch (e) {
@@ -194,6 +202,42 @@ async function migrateScopeSemantics(): Promise<void> {
   console.log('[plan] migrated system_tle_scope semantics: free=sample(1) normal=managed(2) vip=full(3)')
 }
 
+/**
+ * 账号模型一次性迁移：把 objects_max（认领+关注合计）拆成 claims_max / watches_max，
+ * 并按新口径校正基础档（禁筛查/重算、无成员）与 VIP 成员上限（2）。
+ * 迁移后 plan_defaults 不再含 objects_max 且两个新键齐全，签名不再命中。
+ */
+async function migrateQuotaKeys(): Promise<void> {
+  const [rows] = await pool.query<RowDataPacket[]>(
+    `SELECT feature_key FROM plan_defaults WHERE feature_key IN ('objects_max','claims_max','watches_max')`
+  )
+  const keys = new Set(rows.map((r) => String(r.feature_key)))
+  if (!keys.has('objects_max') && keys.has('claims_max') && keys.has('watches_max')) return
+  // 补新键：INSERT IGNORE 保留运营已调整的值
+  for (const [plan, limits] of Object.entries(PLAN_SEED)) {
+    for (const key of ['claims_max', 'watches_max']) {
+      await pool.query(
+        'INSERT IGNORE INTO plan_defaults (plan, feature_key, limit_value) VALUES (?, ?, ?)',
+        [plan, key, limits[key]]
+      )
+    }
+  }
+  // 旧组织覆盖值迁移到 claims_max（认领是业主侧主要约束），再清理旧键
+  await pool.query(
+    `INSERT IGNORE INTO org_quota_overrides (org_id, feature_key, limit_value)
+     SELECT org_id, 'claims_max', limit_value FROM org_quota_overrides WHERE feature_key = 'objects_max'`
+  )
+  await pool.query("DELETE FROM org_quota_overrides WHERE feature_key = 'objects_max'")
+  await pool.query("DELETE FROM plan_defaults WHERE feature_key = 'objects_max'")
+  // 基础档：不能发起筛查/重算，单人组织不可加成员（仅旧默认值命中时改，避免覆盖运营调整）
+  await pool.query("UPDATE plan_defaults SET limit_value = 0 WHERE plan = 'normal' AND feature_key = 'screen_day' AND limit_value = 100")
+  await pool.query("UPDATE plan_defaults SET limit_value = 0 WHERE plan = 'normal' AND feature_key = 'recompute_day' AND limit_value = 500")
+  await pool.query("UPDATE plan_defaults SET limit_value = 0 WHERE plan = 'normal' AND feature_key = 'members_max' AND limit_value = 10")
+  // VIP 成员上限 3 → 2（管理员 + 2 名成员 = 组织 3 人）
+  await pool.query("UPDATE plan_defaults SET limit_value = 2 WHERE plan = 'vip' AND feature_key = 'members_max' AND limit_value IN (3, 50)")
+  console.log('[plan] migrated quota keys: claims_max/watches_max')
+}
+
 export interface EffectiveLimit {
   feature: string
   /** 生效限额（override ?? plan default） */
@@ -223,10 +267,18 @@ export async function getEffectiveLimits(orgId: number | null, plan: string | nu
 
 /** 用量计算器：业务表未建的键抛错 → 统一按 0 处理（后续 Epic 接入） */
 const usageComputers: Record<string, (orgId: number) => Promise<number>> = {
-  // Epic D1 建 objects 表后生效
-  objects_max: async (orgId) => {
+  // 业主认领目标数（含待审核，排除已驳回）
+  claims_max: async (orgId) => {
     const [rows] = await pool.query<RowDataPacket[]>(
-      'SELECT COUNT(*) AS n FROM objects WHERE org_id = ?',
+      "SELECT COUNT(*) AS n FROM objects WHERE org_id = ? AND claim_type = 'owner' AND claim_status <> 'rejected'",
+      [orgId]
+    )
+    return Number((rows[0] as { n: number }).n)
+  },
+  // 关注目标数（不含业主认领）
+  watches_max: async (orgId) => {
+    const [rows] = await pool.query<RowDataPacket[]>(
+      "SELECT COUNT(*) AS n FROM objects WHERE org_id = ? AND claim_type = 'normal' AND claim_status <> 'rejected'",
       [orgId]
     )
     return Number((rows[0] as { n: number }).n)

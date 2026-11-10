@@ -20,8 +20,12 @@ import {
 import { writeAudit } from '../db/adminDb.js'
 import { QUOTA_EXCEEDED } from '../middleware/plan.js'
 
-/** R2-30：组织管理员最多 3 名成员（不含管理员本人） */
-const MAX_ORG_MEMBERS = 3
+/** 组织成员数上限：读档位默认/组织覆盖（VIP 默认 2 = 管理员之外最多 2 人） */
+async function orgMembersMax(org: { id: number; plan: string }): Promise<number | null> {
+  if (!(await ensurePlanSchema())) return null
+  const limits = await getEffectiveLimits(org.id, org.plan)
+  return limits.find((l) => l.feature === 'members_max')?.limit ?? 0
+}
 
 const router = Router()
 
@@ -46,8 +50,8 @@ router.patch('/org', requireAuth, async (req: ScopedRequest, res) => {
     res.status(404).json(fail(404, '平台账号无所属组织'))
     return
   }
-  if (auth.user.role !== 'org_admin') {
-    res.status(403).json(fail(403, '仅组织管理员可修改组织资料'))
+  if (auth.user.role !== 'org_admin' || auth.org.plan !== 'vip') {
+    res.status(403).json(fail(403, '仅 VIP 组织管理员可修改组织资料'))
     return
   }
   const name = String((req.body || {}).name || '').trim()
@@ -125,7 +129,7 @@ router.get('/org/members', requireAuth, async (req: ScopedRequest, res) => {
     ok({
       items,
       usage: items.length,
-      max: MAX_ORG_MEMBERS,
+      max: (await orgMembersMax(req.auth!.org!)) ?? 0,
       can_manage: true
     })
   )
@@ -156,12 +160,17 @@ router.post('/org/members', requireAuth, async (req: ScopedRequest, res) => {
       res.status(409).json(fail(409, '该邮箱已被注册'))
       return
     }
+    const limit = await orgMembersMax(org)
+    if (limit === null) {
+      res.status(503).json(fail(503, '数据库不可用'))
+      return
+    }
     const usage = await countOrgMembers(org.id)
-    if (usage >= MAX_ORG_MEMBERS) {
+    if (usage >= limit) {
       res.status(403).json({
         code: QUOTA_EXCEEDED,
-        msg: `已达单位成员数上限（${usage}/${MAX_ORG_MEMBERS}），请先移除成员`,
-        data: { feature: 'members_max', usage, limit: MAX_ORG_MEMBERS }
+        msg: `已达单位成员数上限（${usage}/${limit}），请先移除成员`,
+        data: { feature: 'members_max', usage, limit }
       })
       return
     }

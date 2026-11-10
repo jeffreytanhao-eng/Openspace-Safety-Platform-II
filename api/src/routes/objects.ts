@@ -1,4 +1,4 @@
-﻿﻿﻿﻿﻿/**
+﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿/**
  * 目标路由（Epic D1）：组织认领 NORAD 目标并维护档案。
  * 全部 requireAuth；认领挂 checkQuota('objects_max')（免费档 3 个，超限 403 + 升级提示）。
  */
@@ -301,6 +301,12 @@ router.post('/objects', async (req: ScopedRequest, res) => {
   const cs = body.crossSectionM2 === undefined || body.crossSectionM2 === null || body.crossSectionM2 === '' ? null : Number(body.crossSectionM2)
   // R2-27：已关注的组织再发起业主认领 → 同行升级为 owner+pending，绝不插入第二行
   if (mine && mine.claim_status === 'claimed' && mine.claim_type === 'normal' && claimType === 'owner') {
+    // 升级为业主认领会占用组织认领额度（关注额度同时释放一行），先校验
+    const upgradeExceeded = await quotaExceeded('claims_max', req.auth!.org)
+    if (upgradeExceeded) {
+      res.status(upgradeExceeded.status).json(upgradeExceeded.body)
+      return
+    }
     const okUpgrade = await upgradeNormalToOwner(mine.id, {
       requestedByUserId: req.auth!.user.id,
       massKg: mass !== null && Number.isFinite(mass) ? mass : null,
@@ -322,7 +328,8 @@ router.post('/objects', async (req: ScopedRequest, res) => {
     )
     return
   }
-  const exceeded = await quotaExceeded('objects_max', req.auth!.org)
+  // 配额按类型拆分：业主认领 → claims_max；关注 → watches_max
+  const exceeded = await quotaExceeded(claimType === 'owner' ? 'claims_max' : 'watches_max', req.auth!.org)
   if (exceeded) {
     res.status(exceeded.status).json(exceeded.body)
     return
@@ -469,9 +476,10 @@ router.post('/objects/batch-claim', async (req: ScopedRequest, res) => {
     res.status(503).json(fail(503, '数据库不可用'))
     return
   }
+  // 批量认领即批量关注，占用组织关注额度
   const limits = await getEffectiveLimits(orgId, req.auth!.org!.plan)
-  const limit = limits.find((l) => l.feature === 'objects_max')?.limit ?? null
-  const usage = await getUsage(orgId, 'objects_max')
+  const limit = limits.find((l) => l.feature === 'watches_max')?.limit ?? null
+  const usage = await getUsage(orgId, 'watches_max')
   let remaining = limit == null ? Number.MAX_SAFE_INTEGER : Math.max(0, Number(limit) - Number(usage))
 
   const [satRows] = await pool.query<

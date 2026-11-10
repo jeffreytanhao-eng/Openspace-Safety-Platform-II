@@ -171,6 +171,14 @@ const visBusy = ref(false)
 const visMsg = ref('')
 const delBusy = ref(false)
 
+/** 仅超管与 VIP 组织账号可上传星历（基础用户不可上传，后端同样 403 兜底） */
+const canUpload = computed(
+  () =>
+    auth.user?.role === 'platform_super_admin' ||
+    auth.user?.isVip === true ||
+    auth.org?.plan === 'vip'
+)
+
 /** 当前登录用户是否为该星历上传业主 */
 function isMine(it: EphListItem | null | undefined): boolean {
   return !!it && it.ownerUserId != null && it.ownerUserId === auth.user?.id
@@ -224,6 +232,7 @@ async function removeSelected() {
 
 /** 逐文件顺序上传到服务端入库（MySQL 元数据 + 分片落盘），完成后刷新列表回第一页 */
 async function onFilesPicked(e: Event) {
+  if (!canUpload.value) return
   const input = e.target as HTMLInputElement
   const all = Array.from(input.files || [])
   input.value = ''
@@ -922,23 +931,24 @@ onMounted(() => {
       </div>
     </header>
 
-    <section class="upload-zone">
+    <section class="upload-zone" :class="{ disabled: !canUpload }">
       <div class="uz-row">
         <div class="uz-text">
           <div class="uz-title">导入星历文件 / 目录</div>
           <div class="uz-sub">支持 ITC（Starlink MEME）/ CCSDS OEM / OCM · 单文件 ≤ 12 MB · 目录导入自动跳过已导入文件（按文件名）</div>
-          <div class="uz-perm">权限：VIP 组织仅可上传本组织已认领目标的星历；超管可上传任意目标星历。上传后可在右侧切换「全平台可见 / 仅自己可见」。</div>
+          <div v-if="!canUpload" class="uz-perm warn">{{ t('eph.uploadDenied') }}</div>
+          <div v-else class="uz-perm">权限：VIP 组织仅可上传本组织已认领目标的星历；超管可上传任意目标星历。上传后可在右侧切换「全平台可见 / 仅自己可见」。</div>
         </div>
         <div class="uz-actions">
           <label v-if="auth.user" class="uz-vis">
             <span>可见性</span>
-            <select v-model="upVisibility">
+            <select v-model="upVisibility" :disabled="!canUpload">
               <option value="private">仅自己可见</option>
               <option value="public">全平台可见</option>
             </select>
           </label>
-          <button type="button" class="btn" :disabled="upBusy" @click="pickFiles">选择文件</button>
-          <button type="button" class="btn" :disabled="upBusy" @click="pickDir">选择目录</button>
+          <button type="button" class="btn" :disabled="upBusy || !canUpload" @click="pickFiles">选择文件</button>
+          <button type="button" class="btn" :disabled="upBusy || !canUpload" @click="pickDir">选择目录</button>
         </div>
       </div>
       <div v-if="upBusy" class="uz-progress">
@@ -980,6 +990,7 @@ onMounted(() => {
             <div class="row-meta">NORAD {{ it.norad }} · {{ it.size }}</div>
             <div class="row-tags">
               <span class="tg" :class="{ ocm: it.format === 'OCM' }">{{ it.format }}</span>
+              <span v-if="it.ownerUserId" class="tg up" :title="it.uploadedBy || ''">{{ t('eph.userUploaded') }}</span>
               <span v-if="it.maneuvers > 0" class="tg man">{{ it.maneuvers }} 处机动</span>
               <span class="tg" :class="{ cov: it.covariance }">{{ it.covariance ? '含协方差' : '无协方差' }}</span>
               <span v-if="it.visibility === 'private'" class="tg priv">仅自己可见</span>
@@ -1044,7 +1055,7 @@ onMounted(() => {
               <dd :class="{ ok: selected.covariance }">{{ selected.covariance ? `${t('eph.yes')}${selected.covFrame ? ' · ' + selected.covFrame : ''}` : t('eph.none') }}</dd>
             </div>
             <div><dt>{{ t('eph.updated') }}</dt><dd>{{ selected.updatedAt }}</dd></div>
-            <div class="span-all"><dt>来源</dt><dd>{{ selected.originator || '—' }}</dd></div>
+            <div class="span-all"><dt>来源</dt><dd>{{ selected.originator || '—' }}<span v-if="selected.ownerUserId" class="tg up" :title="selected.uploadedBy || ''">{{ t('eph.userUploaded') }}<template v-if="selected.uploadedBy"> · {{ selected.uploadedBy }}</template></span></dd></div>
             <div class="span-all"><dt>{{ t('eph.file') }}</dt><dd class="mono file-row"><span>{{ selected.file || '本机导入（IndexedDB）' }}</span><button v-if="selected.file" type="button" class="view-raw" :title="t('eph.viewRawTip')" @click="viewRawFile">{{ t('eph.viewRaw') }}</button></dd></div>
           </dl>
 
@@ -1190,6 +1201,9 @@ h1 { margin: 0; font-size: 16px; font-weight: 650; }
   background: rgba(74, 125, 154, 0.06);
 }
 .upload-zone:hover { border-color: var(--accent); }
+/* 基础用户不可上传：整块置灰（按钮/下拉均已禁用） */
+.upload-zone.disabled { opacity: 0.6; }
+.upload-zone.disabled:hover { border-color: var(--border-strong); }
 .uz-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
 .uz-actions { display: flex; gap: 6px; flex: none; }
 .uz-progress { margin-top: 10px; display: flex; align-items: center; gap: 10px; }
@@ -1200,6 +1214,7 @@ h1 { margin: 0; font-size: 16px; font-weight: 650; }
 .uz-title { font-size: 13px; font-weight: 600; color: var(--text); }
 .uz-sub { margin-top: 4px; font-size: 11px; color: var(--text-dim); }
 .uz-perm { margin-top: 6px; font-size: 11px; color: var(--text-muted); }
+.uz-perm.warn { color: #e0b45c; }
 .uz-vis { display: inline-flex; align-items: center; gap: 6px; font-size: 11px; color: var(--text-dim); }
 .uz-vis select {
   background: var(--bg-panel);
@@ -1284,6 +1299,8 @@ h1 { margin: 0; font-size: 16px; font-weight: 650; }
 .tg.cov { color: #6fe0c0; background: rgba(80, 220, 180, 0.12); border-color: rgba(80, 220, 180, 0.28); }
 .tg.priv { color: #c9a8ff; background: rgba(150, 110, 255, 0.14); border-color: rgba(150, 110, 255, 0.34); }
 .tg.vip { color: #e0b45c; background: rgba(224, 180, 92, 0.14); border-color: rgba(224, 180, 92, 0.34); }
+/* 用户上传标识（VIP 账号上传的星历） */
+.tg.up { color: #6fb7ff; background: rgba(80, 150, 255, 0.14); border-color: rgba(90, 160, 255, 0.36); }
 .prev-h { padding: 12px; border-bottom: 1px solid var(--border); }
 .h-title { font-size: 13px; font-weight: 650; }
 .h-sub { font-size: 11px; color: var(--text-dim); margin-top: 2px; }

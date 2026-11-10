@@ -64,13 +64,15 @@ const activeKey = computed(() => {
 
 /** 档位徽标：账号级 VIP 优先于组织档位；个人工作区不展示组织名而展示用户名称 */
 const planLabel = computed(() => {
-  if (auth.user?.isVip) return 'VIP'
-  return auth.org ? auth.org.plan.toUpperCase() : ''
+  if (auth.user?.isVip) return t('acct.plan.vip')
+  const plan = auth.org?.plan
+  return plan ? t(`acct.plan.${plan}` as MessageKey) : ''
 })
 const planClass = computed(() => (auth.user?.isVip ? 'vip' : auth.org?.plan || ''))
 const orgDisplayName = computed(() => {
   if (!auth.org) return ''
-  if (auth.org.personal) return auth.user?.displayName || auth.user?.email || ''
+  // 基础用户的单人组织不展示组织概念，直接显示用户名；升级 VIP 后按真实组织名展示（管理员可改名）
+  if (auth.org.personal && auth.org.plan !== 'vip') return auth.user?.displayName || auth.user?.email || ''
   return auth.org.name
 })
 

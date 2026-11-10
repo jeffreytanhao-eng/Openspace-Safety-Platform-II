@@ -1,10 +1,15 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import {
   adminDailyFetchStatus,
   adminTriggerDailyFetch,
+  adminStarlinkPullGet,
+  adminStarlinkPullSave,
+  adminStarlinkPullRun,
   type DailyFetchSourceResult,
-  type DailyFetchStatus
+  type DailyFetchStatus,
+  type StarlinkFormat,
+  type StarlinkPullStatus
 } from '@/api/admin'
 import {
   uploadEphemerisFile,
@@ -191,7 +196,108 @@ function skipConflict() {
   void runQueue(c.files, c.index + 1, false)
 }
 
-onMounted(load)
+/* ------------------------- StarLink 星历拉取 ------------------------- */
+
+const slEnabled = ref(false)
+const slCount = ref(50)
+const slFormat = ref<StarlinkFormat>('OCM')
+const slStatus = ref<StarlinkPullStatus | null>(null)
+const slRunning = ref(false)
+const slSaving = ref(false)
+const slMsg = ref('')
+const slErr = ref('')
+let slTimer: ReturnType<typeof setTimeout> | null = null
+
+const slBusy = computed(() => slSaving.value || slRunning.value || (slStatus.value?.running ?? false))
+
+function fmtIso(s: string | null): string {
+  if (!s) return '—'
+  const d = new Date(s)
+  return Number.isNaN(d.getTime()) ? s : d.toLocaleString('zh-CN', { hour12: false })
+}
+
+function applyStarlink(c: Awaited<ReturnType<typeof adminStarlinkPullGet>>) {
+  slEnabled.value = c.enabled
+  slCount.value = c.count
+  slFormat.value = c.format
+  slStatus.value = c.status
+  slRunning.value = c.running
+}
+
+async function loadStarlink() {
+  slErr.value = ''
+  try {
+    const c = await adminStarlinkPullGet()
+    applyStarlink(c)
+    if (c.running) scheduleSlPoll()
+  } catch (e) {
+    slErr.value = e instanceof AuthError ? e.message : String((e as Error).message || e)
+  }
+}
+
+function scheduleSlPoll() {
+  if (slTimer) clearTimeout(slTimer)
+  slTimer = setTimeout(async () => {
+    try {
+      const c = await adminStarlinkPullGet()
+      applyStarlink(c)
+      if (c.running) {
+        scheduleSlPoll()
+      } else {
+        slMsg.value = '拉取完成'
+        slErr.value = ''
+      }
+    } catch (e) {
+      slRunning.value = false
+      slErr.value = e instanceof AuthError ? e.message : String((e as Error).message || e)
+    }
+  }, 2000)
+}
+
+async function saveStarlink(): Promise<boolean> {
+  slSaving.value = true
+  slErr.value = ''
+  slMsg.value = ''
+  try {
+    const c = await adminStarlinkPullSave({
+      enabled: slEnabled.value,
+      count: Math.max(1, Math.min(500, Math.floor(slCount.value) || 50)),
+      format: slFormat.value
+    })
+    applyStarlink(c)
+    slMsg.value = '配置已保存'
+    return true
+  } catch (e) {
+    slErr.value = e instanceof AuthError ? e.message : String((e as Error).message || e)
+    return false
+  } finally {
+    slSaving.value = false
+  }
+}
+
+/** 手动拉取：先保存当前表单配置（服务端按已保存配置执行），再异步启动并轮询状态 */
+async function runStarlink() {
+  if (slBusy.value) return
+  slMsg.value = ''
+  if (!(await saveStarlink())) return
+  try {
+    const r = await adminStarlinkPullRun()
+    slRunning.value = true
+    slMsg.value = `已开始拉取：${r.format} × ${r.count}（${r.triggered_by}）`
+    scheduleSlPoll()
+  } catch (e) {
+    slErr.value = e instanceof AuthError ? e.message : String((e as Error).message || e)
+  }
+}
+
+onBeforeUnmount(() => {
+  if (slTimer) clearTimeout(slTimer)
+})
+
+onMounted(() => {
+  void load()
+  void loadStarlink()
+})
 </script>
 
 <template>
@@ -258,6 +364,57 @@ onMounted(load)
         </tbody>
       </table>
     </div>
+
+    <section class="upload-zone sl-zone">
+      <div class="uz-row">
+        <div class="uz-text">
+          <div class="uz-title">StarLink 星历拉取</div>
+          <div class="uz-sub">
+            来源 api.starlink.com 公开星历 · 清单 MANIFEST.txt · OCM 单颗约 5 MB · 下载后自动落盘入库（data/ephemerides/{ocm,itc}/）
+          </div>
+          <div class="uz-perm">
+            开启「每日拉取」后每日 UTC 00:00 自动执行一次；也可随时手动拉取。拉取内容为公开星历，全平台可见。
+          </div>
+        </div>
+        <div class="uz-actions">
+          <label class="uz-vis">
+            <span>每日拉取</span>
+            <select v-model="slEnabled" :disabled="slBusy">
+              <option :value="true">是</option>
+              <option :value="false">否</option>
+            </select>
+          </label>
+          <label class="uz-vis">
+            <span>拉取数量</span>
+            <input v-model.number="slCount" class="sl-num" type="number" min="1" max="500" :disabled="slBusy" />
+          </label>
+          <label class="uz-vis">
+            <span>文件类型</span>
+            <select v-model="slFormat" :disabled="slBusy">
+              <option value="OCM">OCM</option>
+              <option value="ITC">ITC</option>
+            </select>
+          </label>
+          <button type="button" class="btn" :disabled="slBusy" @click="saveStarlink">
+            {{ slSaving ? '保存中…' : '保存配置' }}
+          </button>
+          <button type="button" class="btn primary" :disabled="slBusy" @click="runStarlink">
+            {{ slRunning || (slStatus?.running ?? false) ? '拉取中…' : '手动拉取' }}
+          </button>
+        </div>
+      </div>
+      <p v-if="slErr" class="error inline">{{ slErr }}</p>
+      <p v-if="slMsg" class="uz-msg">{{ slMsg }}</p>
+      <p v-if="slStatus" class="sl-last">
+        最近一次：{{ fmtIso(slStatus.startedAt) }} 由 {{ slStatus.triggeredBy }} 触发 · {{ slStatus.format }} ×
+        {{ slStatus.requested }} → 新增 {{ slStatus.added }} · 更新 {{ slStatus.updated }} · 跳过
+        {{ slStatus.skipped }}<template v-if="slStatus.failed"> · 失败 {{ slStatus.failed }}</template>
+        <template v-if="slStatus.finishedAt"> · 完成于 {{ fmtIso(slStatus.finishedAt) }}</template>
+      </p>
+      <div v-if="slStatus?.errors?.length" class="sl-errors">
+        <div v-for="(e, i) in slStatus.errors" :key="i">{{ e }}</div>
+      </div>
+    </section>
 
     <section class="upload-zone">
       <div class="uz-row">
@@ -390,6 +547,31 @@ onMounted(load)
   color: var(--text-muted);
   font-size: 11px;
   padding: 4px 6px;
+}
+.uz-vis input.sl-num {
+  width: 64px;
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--text-muted);
+  font-size: 11px;
+  padding: 4px 6px;
+}
+.sl-zone { border-style: solid; }
+.sl-last {
+  margin: 8px 0 0;
+  font-size: 11px;
+  color: var(--text-muted);
+  line-height: 1.6;
+}
+.sl-errors {
+  margin-top: 6px;
+  max-height: 140px;
+  overflow: auto;
+  font-family: var(--mono);
+  font-size: 11px;
+  color: #e0b45c;
+  line-height: 1.6;
 }
 .uz-progress {
   margin-top: 10px;

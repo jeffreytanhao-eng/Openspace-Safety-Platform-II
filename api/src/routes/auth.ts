@@ -135,8 +135,8 @@ export async function requireAuth(req: Request, res: Response, next: NextFunctio
       await promotePersonalOrgToVip(user.id)
       org = (await findOrgById(org.id)) ?? org
     }
-    // 账号级 VIP 若尚无组织，自动补建个人 VIP 工作区（配额/成员与 VIP 账号页一致）
-    if (!org && Number(user.is_vip) === 1) {
+    // 基础/VIP 用户都应有所属组织：无组织的账号（历史数据）自动补建单人组织（组织名=用户名）
+    if (!org && user.role !== 'platform_super_admin' && user.role !== 'platform_ops') {
       const ws = await ensurePersonalWorkspace(user.id).catch(() => null)
       if (ws) {
         user = ws.user
@@ -183,7 +183,8 @@ router.post('/auth/register', async (req, res) => {
       passwordHash,
       displayName: displayName || email.split('@')[0]
     })
-    res.json(ok({ token: signToken(user), user: toSafeUser(user), org: null }))
+    const org = user.org_id ? await findOrgById(user.org_id) : null
+    res.json(ok({ token: signToken(user), user: toSafeUser(user), org: org ? toSafeOrg(org) : null }))
   } catch (e) {
     const msg = (e as Error).message || ''
     if (msg.includes('uk_user_email')) {
@@ -256,8 +257,8 @@ router.post('/auth/login', async (req, res) => {
       await promotePersonalOrgToVip(user.id)
       org = (await findOrgById(org.id)) ?? org
     }
-    // 账号级 VIP 若尚无组织，登录时自动补建个人 VIP 工作区
-    if (!org && Number(user.is_vip) === 1) {
+    // 无组织账号登录时补建单人组织（组织名=用户名），保证基础用户组织模型一致
+    if (!org && user.role !== 'platform_super_admin' && user.role !== 'platform_ops') {
       const ws = await ensurePersonalWorkspace(user.id).catch(() => null)
       if (ws) {
         user = ws.user

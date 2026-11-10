@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
+import { useI18n } from '@/composables/useI18n'
 import { AuthError } from '@/api/auth'
 import {
   adminCreateOrg,
@@ -11,6 +12,11 @@ import {
 } from '@/api/admin'
 
 const router = useRouter()
+const { t } = useI18n()
+/** 档位文案：中文「基础/免费/VIP」，英文「Basic/Free/VIP」 */
+function planText(plan: string): string {
+  return t(`acct.plan.${plan}` as Parameters<typeof t>[0])
+}
 const items = ref<AdminOrg[]>([])
 const loading = ref(false)
 const error = ref('')
@@ -136,7 +142,7 @@ onMounted(load)
           <tr v-for="o in items" :key="o.id">
             <td class="mono">{{ o.id }}</td>
             <td>{{ o.name }}</td>
-            <td><span class="chip plan" :class="o.plan">{{ o.plan.toUpperCase() }}</span></td>
+            <td><span class="chip plan" :class="o.plan">{{ planText(o.plan) }}</span></td>
             <td><span class="chip" :class="statusClass[o.status]">{{ statusText[o.status] || o.status }}</span></td>
             <td class="mono">{{ o.members ?? '—' }}</td>
             <td class="mono">{{ o.created_at }}</td>

@@ -9,6 +9,7 @@
  */
 import { pool } from './pool.js'
 import type { ResultSetHeader, RowDataPacket } from 'mysql2'
+import type { PoolConnection } from 'mysql2/promise'
 
 /** 组织行（password_hash 永不出库） */
 export interface OrgRow {
@@ -276,19 +277,44 @@ export async function createOrgForExistingUser(params: {
 }
 
 /**
- * R2-28：公开注册只建账号（org_id 为空、org_member、非 VIP），不建组织。
+ * 注册即基础用户：账号 + 单人组织（组织名=用户名，plan=normal，notes=auto:personal）。
+ * 基础用户不能操作组织（role 保持 org_member，组织信息在前端隐藏）。
  */
 export async function createUser(params: {
   email: string
   passwordHash: string
   displayName: string
 }): Promise<UserRow> {
-  const [r] = await pool.query<ResultSetHeader>(
-    `INSERT INTO users (org_id, email, display_name, role, is_vip, password_hash)
-     VALUES (NULL, ?, ?, 'org_member', 0, ?)`,
-    [params.email, params.displayName, params.passwordHash]
-  )
-  return (await findUserById(r.insertId)) as UserRow
+  const conn = await pool.getConnection()
+  try {
+    await conn.beginTransaction()
+    const [r] = await conn.query<ResultSetHeader>(
+      `INSERT INTO users (org_id, email, display_name, role, is_vip, password_hash)
+       VALUES (NULL, ?, ?, 'org_member', 0, ?)`,
+      [params.email, params.displayName, params.passwordHash]
+    )
+    const userId = Number(r.insertId)
+    const base = params.displayName.trim() || params.email.split('@')[0]
+    const name = await uniquePersonalOrgName(conn, base, userId)
+    const [org] = await conn.query<ResultSetHeader>(
+      "INSERT INTO organizations (name, plan, notes) VALUES (?, 'normal', 'auto:personal')",
+      [name]
+    )
+    await conn.query('UPDATE users SET org_id = ? WHERE id = ?', [Number(org.insertId), userId])
+    await conn.commit()
+    return (await findUserById(userId)) as UserRow
+  } catch (e) {
+    await conn.rollback()
+    throw e
+  } finally {
+    conn.release()
+  }
+}
+
+/** 组织名唯一（uk_org_name）：重名时追加 #用户id，保证「组织名=用户名」尽量原样 */
+async function uniquePersonalOrgName(conn: PoolConnection, base: string, userId: number): Promise<string> {
+  const [rows] = await conn.query<RowDataPacket[]>('SELECT id FROM organizations WHERE name = ? LIMIT 1', [base])
+  return rows.length ? `${base}#${userId}` : base
 }
 
 /**
@@ -333,14 +359,24 @@ export async function ensurePersonalWorkspace(
       const org = orgRows[0] as OrgRow | undefined
       return org ? { org, user } : null
     }
-    const name = `个人空间-${userId}`
+    const base = (user.display_name || '').trim() || `个人空间-${userId}`
     // 账号级 VIP 的个人工作区直接按 VIP 档位建，保证配额、成员等能力与 VIP 账号页一致
     const plan = Number(user.is_vip) === 1 ? 'vip' : 'normal'
+    const [dup] = await conn.query<RowDataPacket[]>(
+      'SELECT id FROM organizations WHERE name = ? LIMIT 1',
+      [base]
+    )
+    const name = dup.length ? `${base}#${userId}` : base
     const [r] = await conn.query<ResultSetHeader>(
       "INSERT INTO organizations (name, plan, notes) VALUES (?, ?, 'auto:personal')",
       [name, plan]
     )
-    await conn.query("UPDATE users SET org_id = ?, role = 'org_admin' WHERE id = ?", [r.insertId, userId])
+    // 基础用户不可操作组织（保持成员角色）；VIP 工作区由本人管理
+    await conn.query('UPDATE users SET org_id = ?, role = ? WHERE id = ?', [
+      r.insertId,
+      plan === 'vip' ? 'org_admin' : 'org_member',
+      userId
+    ])
     await conn.commit()
     const [org, fresh] = await Promise.all([findOrgById(r.insertId), findUserById(userId)])
     return org && fresh ? { org, user: fresh } : null
@@ -437,11 +473,17 @@ export async function approveUpgradeRequest(
       [reviewerId, id]
     )
     await conn.query('UPDATE users SET is_vip = 1 WHERE id = ?', [req.user_id])
-    // 已存在的个人工作区同步升到 VIP 档（与登录时补齐口径一致）
+    // 升级即接管原基础组织：档位升 VIP、本人成为组织管理员，组织名沿用原名称
     await conn.query(
       `UPDATE organizations o JOIN users u ON u.org_id = o.id
           SET o.plan = 'vip'
         WHERE u.id = ? AND o.notes LIKE 'auto:personal%'`,
+      [req.user_id]
+    )
+    await conn.query(
+      `UPDATE users u JOIN organizations o ON o.id = u.org_id
+          SET u.role = 'org_admin'
+        WHERE u.id = ? AND o.notes LIKE 'auto:personal%' AND o.plan = 'vip'`,
       [req.user_id]
     )
     await conn.commit()

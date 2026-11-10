@@ -163,8 +163,15 @@ const discPageAllPicked = computed(
 async function loadQuota() {
   try {
     const data = await getOrgQuota()
-    const item = data.items.find((x) => x.key === 'objects_max')
-    quotaChip.value = item && item.unit === 'count' && item.limit != null ? `${item.usage} / ${item.limit}` : ''
+    const pick = (key: string) => data.items.find((x) => x.key === key)
+    const watches = pick('watches_max')
+    const claims = pick('claims_max')
+    const fmt = (it: typeof watches) => (it && it.limit != null ? `${it.usage}/${it.limit}` : '—')
+    // 组织级共享用量：认领在前、关注在后，各占独立额度
+    quotaChip.value =
+      claims || watches
+        ? `${t('obj.quotaClaims')} ${fmt(claims)} · ${t('obj.quotaWatches')} ${fmt(watches)}`
+        : ''
   } catch {
     quotaChip.value = ''
   }
