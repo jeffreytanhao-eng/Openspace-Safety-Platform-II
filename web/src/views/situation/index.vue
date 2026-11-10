@@ -2,8 +2,8 @@
 /**
  * 态势主页面外壳（3D 地球 + UI 框架）
  */
-import { computed, ref, watch } from 'vue'
-import { useRoute } from 'vue-router'
+import { computed, onBeforeUnmount, ref, watch } from 'vue'
+import { onBeforeRouteLeave, useRoute } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import SceneCore from './SceneCore.vue'
 import SatListPanel from './SatListPanel.vue'
@@ -69,10 +69,38 @@ watch(
   { immediate: true }
 )
 
-function reloadSystem() {
-  // 初始化 = 回到最初状态：先清星历激活态（否则视口重建后 onViewportReady 会恢复轨道），右侧星历弹出窗一并收回
+/** 离开态势页时丢掉本次带入的星历/交会会话（模块单例不会随组件卸载而清）。不删 IndexedDB 里的星历文件。 */
+function resetSituationSession() {
   deactivateEphem()
   ephOpen.value = false
+  eventOn.value = false
+  eventLoading.value = false
+  eventRaw.value = []
+  eventItems.value = []
+  selEvent.value = null
+  pendingEventDeepLink = false
+  const now = Date.now()
+  simAnchorMs.value = now
+  simTimeMs.value = now
+  simSpeed.value = 1
+  simPlaying.value = true
+  sceneRef.value?.showEventCloud?.(null)
+  sceneRef.value?.clearUserEphemOrbit?.()
+  sceneRef.value?.focusEventCloud?.(null)
+}
+
+onBeforeRouteLeave((to) => {
+  if (to.name === 'situation') return
+  resetSituationSession()
+})
+
+onBeforeUnmount(() => {
+  resetSituationSession()
+})
+
+function reloadSystem() {
+  // 初始化 = 回到最初状态：先清星历激活态（否则视口重建后 onViewportReady 会恢复轨道），右侧星历弹出窗一并收回
+  resetSituationSession()
   void sceneRef.value?.reinitViewport()
   const now = Date.now()
   simAnchorMs.value = now
@@ -366,6 +394,9 @@ async function runPendingEventDeepLink() {
   const tcaMs = Number(route.query.tca) || 0
   if (!viewportReady.value || !conj) return
   pendingEventDeepLink = false
+  // 交会深链进入时清掉仍激活的星历轨道，避免和事件云叠在一起
+  deactivateEphem()
+  ephOpen.value = false
   if (!eventOn.value) {
     const ok = await toggleEventCloud()
     if (!ok) return

@@ -18,10 +18,10 @@
  *   · Cesium = WGS84 地固系（ECEF，米）；
  *   · 换算 = 先 Rz(GMST) 把 ECEF 转到 ECI，再做轴映射（两步均为正交变换，方向向量不缩放）。
  *
- * 离线数据（不使用 Cesium ion / token）：
- *   · 影像：configureEarthBase() 接离线瓦片包（xyz / tms / arcgis MapServer 三种形态），
- *     未配置时用 ArcGIS Online 公网服务兜底；两者都不可用时以 Cesium 自带的
- *     NaturalEarthII（public/cesium/Assets）作底层兜底，保证不会出现纯黑地球；
+ * 离线数据（不使用 Cesium ion / token；默认不请求境外底图，避免国内网络卡住启动）：
+ *   · 影像：configureEarthBase() 可接离线瓦片包（xyz / tms / arcgis MapServer 三种形态）；
+ *     未配置时直接用随包分发的 NaturalEarthII（public/cesium/Assets），不再回落到
+ *     ArcGIS Online；自定义瓦片不可用时同样退回 NaturalEarthII，保证不会出现纯黑地球；
  *   · 地形：自定义 OfflineHeightmap provider 读取 DEM 生成的离线 heightmap 地形包目录
  *     （由 scripts/build-terrain-tiles.mjs 生成，见 createTerrainProvider）。
  * ============================================================ */
@@ -73,40 +73,31 @@ export function configureEarthBase(cfg: EarthBaseConfig): void {
   Object.assign(baseCfg, cfg)
 }
 
-/** ArcGIS Online 世界影像（公网 MapServer，无需 token）：离线包未配置/未就绪时的兜底底图 */
-const FALLBACK_IMAGERY_URL =
-  'https://services.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer'
-
-/** 按配置创建底图图层（离线包优先，公网兜底）。失败返回 null，由内置离线底图兜底。 */
+/** 按配置创建自定义底图图层。未配置 imageryUrl 时返回 null，由内置 NaturalEarthII 兜底。 */
 async function createImageryLayer(): Promise<import('cesium').ImageryLayer | null> {
   const Cs = Cesium as CesiumModule
   const { imageryUrl, imageryKind, maximumLevel } = baseCfg
+  if (!imageryUrl) return null
   try {
-    if (imageryUrl) {
-      if (imageryKind === 'xyz') {
-        // XYZ 目录树瓦片（如 /tiles/{z}/{x}/{y}.png）
-        return new Cs.ImageryLayer(
-          new Cs.UrlTemplateImageryProvider({ url: imageryUrl, maximumLevel, credit: '' })
-        )
-      }
-      if (imageryKind === 'tms') {
-        // TMS 瓦片包（目录含 tilemapresource.xml；GDAL2Tiles / 切图转换产物常用此形态）
-        const provider = await Cs.TileMapServiceImageryProvider.fromUrl(
-          new Cs.Resource(imageryUrl),
-          { credit: '' }
-        )
-        return new Cs.ImageryLayer(provider)
-      }
-      // arcgis：MapServer REST（在线服务或静态托管的自建服务）
-      const provider = await Cs.ArcGisMapServerImageryProvider.fromUrl(imageryUrl, { credit: '' })
+    if (imageryKind === 'xyz') {
+      // XYZ 目录树瓦片（如 /tiles/{z}/{x}/{y}.png）
+      return new Cs.ImageryLayer(
+        new Cs.UrlTemplateImageryProvider({ url: imageryUrl, maximumLevel, credit: '' })
+      )
+    }
+    if (imageryKind === 'tms') {
+      // TMS 瓦片包（目录含 tilemapresource.xml；GDAL2Tiles / 切图转换产物常用此形态）
+      const provider = await Cs.TileMapServiceImageryProvider.fromUrl(
+        new Cs.Resource(imageryUrl),
+        { credit: '' }
+      )
       return new Cs.ImageryLayer(provider)
     }
-    const fallback = await Cs.ArcGisMapServerImageryProvider.fromUrl(FALLBACK_IMAGERY_URL, {
-      credit: ''
-    })
-    return new Cs.ImageryLayer(fallback)
+    // arcgis：MapServer REST（仅在显式配置了本地/自建地址时使用，不再默认访问公网）
+    const provider = await Cs.ArcGisMapServerImageryProvider.fromUrl(imageryUrl, { credit: '' })
+    return new Cs.ImageryLayer(provider)
   } catch (e) {
-    console.warn('[cesiumEarth] 在线/自定义影像不可用，改用内置离线底图：', e)
+    console.warn('[cesiumEarth] 自定义影像不可用，改用内置离线底图：', e)
     return null
   }
 }
@@ -313,8 +304,8 @@ export async function initCesium(container: HTMLElement, hooks?: CesiumInitHooks
     // 仅当在线影像不可用时才用离线底图兜底，避免整颗球纯黑。
     const baseLayer = await createImageryLayer()
     const offlineBase = baseLayer ? null : await createOfflineBaseLayer()
-    // 南极补丁（北极按旧项目原方案不打补丁，直接露 baseColor）
-    const southCap = await createSouthPolarCapLayer()
+    // 南极补丁只给 Web Mercator 类底图（极区缺口）；内置 NaturalEarthII 已覆盖两极，不再叠纯白帽
+    const southCap = baseLayer ? await createSouthPolarCapLayer() : null
 
     widget = new Cs.CesiumWidget(container, {
       baseLayer: baseLayer ?? false,
