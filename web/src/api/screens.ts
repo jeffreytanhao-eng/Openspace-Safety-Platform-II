@@ -39,9 +39,9 @@ export interface ScreenJob {
   progress_note: string | null
   /** R0-3：已请求取消（running 时等待执行侧终止） */
   cancel_requested: number
-  /** R2-8：主星状态源 tle | ephem */
+  /** R2-8：主星状态源 tle | ephem | aoe */
   primary_source: string
-  /** R2-8：副星/对照源 catalog | cdm */
+  /** R2-8：副星/对照源 catalog | cdm | aoe */
   secondary_source: string
 }
 
@@ -87,10 +87,10 @@ export function createScreen(payload: {
   paramsSource?: 'default' | 'mine1' | 'mine2' | 'target'
   /** R0-2：主星子集（本组织托管 NORAD），不传则全部目标 */
   primaryNorads?: number[]
-  /** R2-8：主星源 tle（系统池/组织快照）| ephem（已绑定精密星历） */
-  primarySource?: 'tle' | 'ephem'
-  /** R2-8：副星/对照源 catalog（编目 GP）| cdm（已入站 CDM 复核） */
-  secondarySource?: 'catalog' | 'cdm'
+  /** R2-8：主星源 tle（系统池/组织快照）| ephem（已绑定精密星历）| aoe（系统池 AOE 根数） */
+  primarySource?: 'tle' | 'ephem' | 'aoe'
+  /** R2-8：副星/对照源 catalog（编目 GP）| cdm（已入站 CDM 复核）| aoe（系统池 AOE 编目） */
+  secondarySource?: 'catalog' | 'cdm' | 'aoe'
 }): Promise<ScreenJob> {
   return cgiCall<ScreenJob>({ method: 'POST', url: '/screens', data: payload, headers: headers() })
 }

@@ -325,6 +325,8 @@ export interface StarlinkPullStatus {
   triggeredBy: string
   format: StarlinkFormat
   requested: number
+  processed?: number
+  current?: string | null
   added: number
   updated: number
   skipped: number

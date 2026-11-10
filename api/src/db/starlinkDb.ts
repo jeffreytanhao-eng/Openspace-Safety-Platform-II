@@ -21,6 +21,10 @@ export interface StarlinkPullStatus {
   triggeredBy: string
   format: StarlinkFormat
   requested: number
+  /** 已处理条数（成功 + 失败 + 跳过） */
+  processed: number
+  /** 当前正在下载的文件名 */
+  current: string | null
   added: number
   updated: number
   skipped: number
@@ -33,7 +37,7 @@ const STATUS_KEY = 'starlink.pull.status'
 
 export const DEFAULT_STARLINK_CONFIG: StarlinkPullConfig = {
   enabled: false,
-  count: 50,
+  count: 10,
   format: 'OCM'
 }
 

@@ -920,24 +920,24 @@ function doExport(kind: 'md' | 'html' | 'csv'): void {
           <label class="cf field">
             <span class="lbl">{{ caForm.hbrMode === 'both' ? `${t('ca.f.hbr')} (A / B)` : t('ca.f.hbr') }}</span>
             <span v-if="caForm.hbrMode === 'both'" class="row">
-              <input v-model.number="caForm.hbrAM" type="number" min="0.1" max="1000" step="0.1" :disabled="rcParamsSource !== 'default'" /> /
-              <input v-model.number="caForm.hbrBM" type="number" min="0.1" max="1000" step="0.1" :disabled="rcParamsSource !== 'default'" /> m
+              <OspNumberInput v-model="caForm.hbrAM" min="0.1" max="1000" step="0.1" :disabled="rcParamsSource !== 'default'" /> /
+              <OspNumberInput v-model="caForm.hbrBM" min="0.1" max="1000" step="0.1" :disabled="rcParamsSource !== 'default'" /> m
             </span>
             <span v-else class="row">
-              <input v-model.number="caForm.hbrM" type="number" min="1" max="1000" step="1" :disabled="rcParamsSource !== 'default'" /> m
+              <OspNumberInput v-model="caForm.hbrM" min="1" max="1000" step="1" :disabled="rcParamsSource !== 'default'" /> m
             </span>
           </label>
           <label class="cf field">
             <span class="lbl">{{ t('ca.f.acceptedPc') }}</span>
-            <span class="row"><input v-model.number="caForm.acceptedPc" type="number" min="1e-9" max="1" step="1e-5" :disabled="rcParamsSource !== 'default'" /></span>
+            <span class="row"><OspNumberInput v-model="caForm.acceptedPc" min="1e-9" max="1" step="1e-5" :disabled="rcParamsSource !== 'default'" /></span>
           </label>
           <label class="cf field">
             <span class="lbl">{{ t('ca.f.acceptedMiss') }}</span>
-            <span class="row"><input v-model.number="caForm.acceptedMissKm" type="number" min="0.01" max="100" step="0.1" :disabled="rcParamsSource !== 'default'" /> km</span>
+            <span class="row"><OspNumberInput v-model="caForm.acceptedMissKm" min="0.01" max="100" step="0.1" :disabled="rcParamsSource !== 'default'" /> km</span>
           </label>
           <label class="cf field">
             <span class="lbl">{{ t('ca.f.screenDist') }}</span>
-            <span class="row"><input v-model.number="caForm.screenDistanceKm" type="number" min="0.5" max="100" step="0.5" :disabled="rcParamsSource !== 'default'" /> km</span>
+            <span class="row"><OspNumberInput v-model="caForm.screenDistanceKm" min="0.5" max="100" step="0.5" :disabled="rcParamsSource !== 'default'" /> km</span>
           </label>
           <label class="cf field">
             <span class="lbl">{{ t('ca.f.covMode') }}</span>
@@ -960,8 +960,8 @@ function doExport(kind: 'md' | 'html' | 'csv'): void {
           <label class="cf field">
             <span class="lbl">{{ t('ca.f.windowStep') }}</span>
             <span class="row">
-              <input v-model.number="caForm.windowH" type="number" min="1" max="168" step="1" /> h /
-              <input v-model.number="caForm.stepS" type="number" min="1" max="3600" step="1" /> s
+              <OspNumberInput v-model="caForm.windowH" min="1" max="168" step="1" /> h /
+              <OspNumberInput v-model="caForm.stepS" min="1" max="3600" step="1" /> s
             </span>
           </label>
           <div class="cf field">
@@ -1237,13 +1237,18 @@ h1 {
 .cf-hint { grid-column: 1 / -1; font-size: 10px; color: var(--text-dim); line-height: 1.5; }
 .ca-form .lbl { font-size: 9px; color: var(--text-dim); text-transform: uppercase; letter-spacing: 0.03em; }
 .ca-form .row { display: flex; align-items: center; gap: 4px; font-size: 11px; color: var(--text-dim); flex-wrap: wrap; }
+.ca-form .osp-num,
 .ca-form input[type='number'],
 .ca-form select {
-  appearance: none; border: 1px solid var(--border); background: var(--bg-deep);
-  color: var(--text); border-radius: 4px; padding: 4px 6px; font-size: 11px;
+  appearance: none; background: var(--bg-deep);
+  color: var(--text); font-size: 11px;
   font-family: var(--mono); outline: none; width: 76px;
 }
-.ca-form input:focus, .ca-form select:focus { border-color: var(--accent); }
+.ca-form input[type='number'],
+.ca-form select {
+  border: 1px solid var(--border); border-radius: 4px; padding: 4px 6px;
+}
+.ca-form input:focus, .ca-form select:focus, .ca-form .osp-num:focus-within { border-color: var(--accent); }
 .radio { display: inline-flex; align-items: center; gap: 3px; font-size: 11px; color: var(--text-muted); }
 .org-link { gap: 8px; }
 .org-link a { color: var(--accent-strong); font-size: 11px; text-decoration: none; }

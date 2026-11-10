@@ -192,10 +192,11 @@ interface CatalogRow extends RowDataPacket {
   tle_line2: string | null
 }
 
-async function loadCatalog(): Promise<CatalogObject[]> {
+async function loadCatalog(source: 'tle' | 'aoe' = 'tle'): Promise<CatalogObject[]> {
+  const table = source === 'aoe' ? 'sat_aoe' : 'sat_tle'
   const [rows] = await pool.query<CatalogRow[]>(
     `SELECT norad_id, object_name, epoch, apogee, perigee, tle_line1, tle_line2
-     FROM sat_tle
+     FROM ${table}
       WHERE is_active = 1 AND tle_line1 IS NOT NULL AND tle_line1 <> '' AND tle_line2 IS NOT NULL AND tle_line2 <> ''`
   )
   const out: CatalogObject[] = []
@@ -221,7 +222,7 @@ async function loadCatalog(): Promise<CatalogObject[]> {
       line1: r.tle_line1 as string,
       line2: r.tle_line2 as string,
       epochMs: r.epoch.getTime(),
-      src: 'tle',
+      src: source,
       perigeeKm,
       apogeeKm
     })
@@ -257,12 +258,18 @@ const PRIMARY_STEP_MS = 60_000
 async function loadPrimaryTracks(
   norads: Array<{ objectId: number; noradId: number; name: string }>,
   windowH: number,
-  startMs?: number
+  startMs?: number,
+  source: 'tle' | 'aoe' = 'tle'
 ): Promise<EphTrack[]> {
   if (!norads.length) return []
   const ids = norads.map((n) => n.noradId)
+  const table = source === 'aoe' ? 'sat_aoe' : 'sat_tle'
+  const extra =
+    source === 'aoe'
+      ? ` AND is_active = 1 AND tle_line1 IS NOT NULL AND tle_line1 <> '' AND tle_line2 IS NOT NULL AND tle_line2 <> ''`
+      : ''
   const [rows] = await pool.query<CatalogRow[]>(
-    `SELECT norad_id, object_name, epoch, tle_line1, tle_line2 FROM sat_tle WHERE norad_id IN (?)`,
+    `SELECT norad_id, object_name, epoch, tle_line1, tle_line2 FROM ${table} WHERE norad_id IN (?)` + extra,
     [ids]
   )
   const byNorad = new Map(rows.map((r) => [Number(r.norad_id), r]))
@@ -279,7 +286,7 @@ async function loadPrimaryTracks(
       line1: r.tle_line1,
       line2: r.tle_line2,
       epochMs: r.epoch.getTime(),
-      src: 'tle',
+      src: source,
       perigeeKm: 0,
       apogeeKm: 0
     }
@@ -681,8 +688,8 @@ async function runJob(job: ScreenJobRow): Promise<void> {
   // Epic J 再筛查参数（params_json 扩展）：主星白名单 + 窗口起点；普通筛查两值为空
   let primaryNorads: number[] = []
   let startMs: number | undefined
-  let primarySource: 'tle' | 'ephem' = 'tle'
-  let secondarySource: 'catalog' | 'cdm' = 'catalog'
+  let primarySource: 'tle' | 'ephem' | 'aoe' = 'tle'
+  let secondarySource: 'catalog' | 'cdm' | 'aoe' = 'catalog'
   try {
     const p = job.params_json
       ? (JSON.parse(job.params_json) as {
@@ -696,14 +703,18 @@ async function runJob(job: ScreenJobRow): Promise<void> {
       primaryNorads = p!.primaryNorads!.map((x) => Number(x)).filter((x) => Number.isInteger(x) && x > 0)
     }
     if (p && Number.isFinite(Number(p.startMs)) && Number(p.startMs) > 0) startMs = Number(p.startMs)
-    if (p?.primarySource === 'ephem') primarySource = 'ephem'
-    if (p?.secondarySource === 'cdm') secondarySource = 'cdm'
+    if (p?.primarySource === 'ephem' || p?.primarySource === 'aoe') primarySource = p.primarySource
+    else if (job.primary_source === 'ephem' || job.primary_source === 'aoe') primarySource = job.primary_source
+    if (p?.secondarySource === 'cdm' || p?.secondarySource === 'aoe') secondarySource = p.secondarySource
+    else if (job.secondary_source === 'cdm' || job.secondary_source === 'aoe') secondarySource = job.secondary_source
   } catch {
-    /* params 解析失败按普通筛查处理 */
+    /* params 解析失败时回退到任务列 */
+    if (job.primary_source === 'ephem' || job.primary_source === 'aoe') primarySource = job.primary_source
+    if (job.secondary_source === 'cdm' || job.secondary_source === 'aoe') secondarySource = job.secondary_source
   }
 
   try {
-    // 目标（R2-8：主星源 tle | ephem；副星源 catalog | cdm）
+    // 目标（R2-8：主星源 tle | ephem | aoe；副星源 catalog | cdm | aoe）
     const [objs] = await pool.query<Array<RowDataPacket & { id: number; norad_id: number; name: string }>>(
       `SELECT id, norad_id, name FROM objects WHERE org_id = ? AND claim_status = 'claimed'${
         primaryNorads.length ? ' AND norad_id IN (?)' : ''
@@ -734,7 +745,8 @@ async function runJob(job: ScreenJobRow): Promise<void> {
       primaries = await loadPrimaryTracks(
         objs.map((o) => ({ objectId: Number(o.id), noradId: Number(o.norad_id), name: String(o.name ?? '') })),
         windowH,
-        startMs
+        startMs,
+        primarySource === 'aoe' ? 'aoe' : 'tle'
       )
     }
     if (!primaries.length) {
@@ -747,12 +759,20 @@ async function runJob(job: ScreenJobRow): Promise<void> {
         )
       }
       throw new Error(
-        `无可筛查的主星：目标 ${objs.length} 个，但系统池无可用两行根数（TLE 可能未同步，请等待日更或用「同步根数」重试）`
+        primarySource === 'aoe'
+          ? `无可筛查的主星：目标 ${objs.length} 个，但系统池 AOE 编目无可用两行根数（请等待 AOE 日更）`
+          : `无可筛查的主星：目标 ${objs.length} 个，但系统池无可用两行根数（TLE 可能未同步，请等待日更或用「同步根数」重试）`
       )
     }
 
-    const catalog = await loadCatalog()
-    if (!catalog.length) throw new Error('副星目录为空（sat_tle 无 is_active=1 的两行根数）')
+    const catalog = await loadCatalog(secondarySource === 'aoe' ? 'aoe' : 'tle')
+    if (!catalog.length) {
+      throw new Error(
+        secondarySource === 'aoe'
+          ? '副星目录为空（sat_aoe 无可用两行根数）'
+          : '副星目录为空（sat_tle 无 is_active=1 的两行根数）'
+      )
+    }
 
     const nowMs = Date.now()
     const windowStartMs = primaries[0].startMs

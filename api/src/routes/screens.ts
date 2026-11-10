@@ -179,20 +179,25 @@ router.post('/screens', requireOrg, async (req: ScopedRequest, res) => {
     if (!Number.isFinite(Number(body.hbrM))) hbrM = Math.min(1000, Math.max(1, base.hbr_m))
   }
 
-  // R2-8：数据源枚举（一单一源；AOE / Stargaze 本轮不提供可选项）
-  const primarySource = body.primarySource === 'ephem' ? 'ephem' : 'tle'
-  const secondarySource = body.secondarySource === 'cdm' ? 'cdm' : 'catalog'
-  if (body.primarySource !== undefined && !['tle', 'ephem'].includes(String(body.primarySource))) {
-    res.status(400).json(fail(400, 'primarySource 仅支持 tle | ephem'))
+  // R2-8：数据源枚举（一单一源；主星 tle|ephem|aoe，副星 catalog|cdm|aoe）
+  const rawPrimary =
+    body.primarySource === undefined || body.primarySource === null || body.primarySource === ''
+      ? 'tle'
+      : String(body.primarySource)
+  const rawSecondary =
+    body.secondarySource === undefined || body.secondarySource === null || body.secondarySource === ''
+      ? 'catalog'
+      : String(body.secondarySource)
+  if (!['tle', 'ephem', 'aoe'].includes(rawPrimary)) {
+    res.status(400).json(fail(400, 'primarySource 仅支持 tle | ephem | aoe'))
     return
   }
-  if (
-    body.secondarySource !== undefined &&
-    !['catalog', 'cdm'].includes(String(body.secondarySource))
-  ) {
-    res.status(400).json(fail(400, 'secondarySource 仅支持 catalog | cdm'))
+  if (!['catalog', 'cdm', 'aoe'].includes(rawSecondary)) {
+    res.status(400).json(fail(400, 'secondarySource 仅支持 catalog | cdm | aoe'))
     return
   }
+  const primarySource = rawPrimary as 'tle' | 'ephem' | 'aoe'
+  const secondarySource = rawSecondary as 'catalog' | 'cdm' | 'aoe'
 
   // 主星 = 精密星历：所选主星必须先绑定星历（否则明确失败，不静默回退 TLE）
   if (primarySource === 'ephem') {
@@ -208,6 +213,33 @@ router.post('/screens', requireOrg, async (req: ScopedRequest, res) => {
       res.status(400).json(
         fail(400, '所选主星未绑定精密星历：请先在「星历」页绑定，或改用 TLE 主星源')
       )
+      return
+    }
+  }
+
+  // 主星 = AOE：所选主星必须在系统池 sat_aoe 有可用两行根数（不静默回退 TLE）
+  if (primarySource === 'aoe') {
+    try {
+      const [aoeRows] = await pool.query<Array<RowDataPacket & { norad_id: number }>>(
+        `SELECT DISTINCT a.norad_id FROM sat_aoe a
+           JOIN objects o ON o.norad_id = a.norad_id
+          WHERE o.org_id = ? AND o.claim_status = 'claimed'
+            AND a.is_active = 1
+            AND a.epoch IS NOT NULL
+            AND a.tle_line1 IS NOT NULL AND a.tle_line1 <> ''
+            AND a.tle_line2 IS NOT NULL AND a.tle_line2 <> ''${
+              primaryNorads ? ' AND o.norad_id IN (?)' : ''
+            }`,
+        primaryNorads ? [org.id, primaryNorads] : [org.id]
+      )
+      if (!aoeRows.length) {
+        res.status(400).json(
+          fail(400, '所选主星在系统池 AOE 编目中无可用两行根数：请等待 AOE 日更，或改用 TLE 主星源')
+        )
+        return
+      }
+    } catch {
+      res.status(400).json(fail(400, 'AOE 编目表不可用，请等待 AOE 日更或改用 TLE 主星源'))
       return
     }
   }
@@ -228,6 +260,27 @@ router.post('/screens', requireOrg, async (req: ScopedRequest, res) => {
       }
     } catch {
       res.status(400).json(fail(400, 'CDM 表不可用，请改用编目 GP 副星源'))
+      return
+    }
+  }
+
+  // 副星 = AOE 编目：系统池需至少一条可用两行根数
+  if (secondarySource === 'aoe') {
+    try {
+      const [c] = await pool.query<Array<RowDataPacket & { n: number }>>(
+        `SELECT COUNT(*) AS n FROM sat_aoe
+          WHERE is_active = 1
+            AND tle_line1 IS NOT NULL AND tle_line1 <> ''
+            AND tle_line2 IS NOT NULL AND tle_line2 <> ''`
+      )
+      if (!Number(c[0]?.n ?? 0)) {
+        res.status(400).json(
+          fail(400, '系统池暂无可用 AOE 两行根数（请等待 AOE 日更），或改用编目 GP 副星源')
+        )
+        return
+      }
+    } catch {
+      res.status(400).json(fail(400, 'AOE 编目表不可用，请等待 AOE 日更或改用编目 GP 副星源'))
       return
     }
   }

@@ -64,7 +64,7 @@ router.get('/catalog/stats', optionalAuth, async (req, res) => {
   )
   const tle = Number(tleRows[0]?.c ?? 0)
   const cdm = Number(cdmRows[0]?.c ?? 0)
-  // R1-3：与 /cgi/health 同口径的日更状态（GP+CDM 为出门标准；AOE 暂不接入）
+  // R1-3：与 /cgi/health 同口径的日更状态（GP / CDM / AOE）
   let dailyFetch: unknown = null
   try {
     dailyFetch = await getDailyFetchStatus()

@@ -947,8 +947,8 @@ function lvLabel(v?: string | null): string {
                 </div>
               </template>
               <div class="form">
-                <label><span>{{ t('obj.mass') }}</span><input v-model="claimForm.massKg" type="number" min="0" step="any" /></label>
-                <label><span>{{ t('obj.crossSection') }}</span><input v-model="claimForm.crossSectionM2" type="number" min="0" step="any" /></label>
+                <label><span>{{ t('obj.mass') }}</span><OspNumberInput v-model="claimForm.massKg" min="0" step="any" /></label>
+                <label><span>{{ t('obj.crossSection') }}</span><OspNumberInput v-model="claimForm.crossSectionM2" min="0" step="any" /></label>
                 <label><span>{{ t('obj.propulsion') }}</span><input v-model="claimForm.propulsion" type="text" maxlength="60" /></label>
                 <p class="type-hint">{{ t('obj.ownerHint') }}</p>
                 <p class="type-hint">{{ t('obj.dimNote') }}</p>
@@ -1013,14 +1013,7 @@ function lvLabel(v?: string | null): string {
             <button type="button" class="btn" :disabled="discPage >= discPages || discLoading" @click="gotoDiscPage(discPage + 1)">
               {{ t('obj.pageNext') }}
             </button>
-            <input
-              v-model="discJump"
-              type="number"
-              min="1"
-              :max="discPages"
-              class="page-jump"
-              @keyup.enter="jumpDiscPage"
-            />
+            <OspNumberInput v-model="discJump" min="1" :max="discPages" class="page-jump" @keyup.enter="jumpDiscPage" />
             <button type="button" class="btn" :disabled="discLoading" @click="jumpDiscPage">
               {{ t('obj.pageJump') }}
             </button>
@@ -1083,11 +1076,11 @@ function lvLabel(v?: string | null): string {
             <div v-else-if="ownerFrozen" class="hint warn">{{ t('obj.ownerFrozen') }}</div>
             <div class="form">
               <label><span>{{ t('obj.col.name') }}</span><input v-model="editForm.name" type="text" maxlength="100" :disabled="!ownerEditable" /></label>
-              <label><span>{{ t('obj.mass') }}</span><input v-model="editForm.massKg" type="number" min="0" step="any" :disabled="!ownerEditable" /></label>
-              <label><span>{{ t('obj.crossSection') }}</span><input v-model="editForm.crossSectionM2" type="number" min="0" step="any" :disabled="!ownerEditable" /></label>
+              <label><span>{{ t('obj.mass') }}</span><OspNumberInput v-model="editForm.massKg" min="0" step="any" :disabled="!ownerEditable" /></label>
+              <label><span>{{ t('obj.crossSection') }}</span><OspNumberInput v-model="editForm.crossSectionM2" min="0" step="any" :disabled="!ownerEditable" /></label>
               <label><span>{{ t('obj.propulsion') }}</span><input v-model="editForm.propulsion" type="text" maxlength="60" :disabled="!ownerEditable" /></label>
-              <label><span>{{ t('obj.acceptedPc') }}</span><input v-model="editForm.acceptedPc" type="number" min="0" step="any" :disabled="!ownerEditable" /></label>
-              <label><span>{{ t('obj.acceptedMissKm') }}</span><input v-model="editForm.acceptedMissKm" type="number" min="0" step="any" :disabled="!ownerEditable" /></label>
+              <label><span>{{ t('obj.acceptedPc') }}</span><OspNumberInput v-model="editForm.acceptedPc" min="0" step="any" :disabled="!ownerEditable" /></label>
+              <label><span>{{ t('obj.acceptedMissKm') }}</span><OspNumberInput v-model="editForm.acceptedMissKm" min="0" step="any" :disabled="!ownerEditable" /></label>
             </div>
             <p class="type-hint">{{ t('obj.dimNote') }}</p>
             <div class="row-actions">
@@ -1115,14 +1108,14 @@ function lvLabel(v?: string | null): string {
                   <label class="radio"><input v-model="caForm.hbrMode" type="radio" value="both" :disabled="!ownerEditable" /> {{ t('ca.both') }}</label>
                 </span>
               </label>
-              <label v-if="caForm.hbrMode === 'single'"><span>{{ t('ca.f.hbr') }} (m)</span><input v-model.number="caForm.hbrM" type="number" min="1" max="1000" step="1" :disabled="!ownerEditable" /></label>
+              <label v-if="caForm.hbrMode === 'single'"><span>{{ t('ca.f.hbr') }} (m)</span><OspNumberInput v-model="caForm.hbrM" min="1" max="1000" step="1" :disabled="!ownerEditable" /></label>
               <template v-else>
-                <label><span>HBR A (m)</span><input v-model.number="caForm.hbrAM" type="number" min="0.1" max="1000" step="0.1" :disabled="!ownerEditable" /></label>
-                <label><span>HBR B (m)</span><input v-model.number="caForm.hbrBM" type="number" min="0.1" max="1000" step="0.1" :disabled="!ownerEditable" /></label>
+                <label><span>HBR A (m)</span><OspNumberInput v-model="caForm.hbrAM" min="0.1" max="1000" step="0.1" :disabled="!ownerEditable" /></label>
+                <label><span>HBR B (m)</span><OspNumberInput v-model="caForm.hbrBM" min="0.1" max="1000" step="0.1" :disabled="!ownerEditable" /></label>
               </template>
-              <label><span>{{ t('ca.f.acceptedPc') }}</span><input v-model.number="caForm.acceptedPc" type="number" min="1e-9" max="1" step="1e-5" :disabled="!ownerEditable" /></label>
-              <label><span>{{ t('ca.f.acceptedMiss') }} (km)</span><input v-model.number="caForm.acceptedMissKm" type="number" min="0.01" max="100" step="0.1" :disabled="!ownerEditable" /></label>
-              <label><span>{{ t('ca.f.screenDist') }} (km)</span><input v-model.number="caForm.screenDistanceKm" type="number" min="0.5" max="100" step="0.5" :disabled="!ownerEditable" /></label>
+              <label><span>{{ t('ca.f.acceptedPc') }}</span><OspNumberInput v-model="caForm.acceptedPc" min="1e-9" max="1" step="1e-5" :disabled="!ownerEditable" /></label>
+              <label><span>{{ t('ca.f.acceptedMiss') }} (km)</span><OspNumberInput v-model="caForm.acceptedMissKm" min="0.01" max="100" step="0.1" :disabled="!ownerEditable" /></label>
+              <label><span>{{ t('ca.f.screenDist') }} (km)</span><OspNumberInput v-model="caForm.screenDistanceKm" min="0.5" max="100" step="0.5" :disabled="!ownerEditable" /></label>
               <label><span>{{ t('ca.f.covMode') }}</span>
                 <select v-model="caForm.covarianceMode" :disabled="!ownerEditable">
                   <option value="tle-age">{{ t('ca.covTleAge') }}</option>
@@ -1137,8 +1130,8 @@ function lvLabel(v?: string | null): string {
               </label>
               <label><span>{{ t('ca.f.windowStep') }}</span>
                 <span class="inline-pair">
-                  <input v-model.number="caForm.windowH" type="number" min="1" max="168" step="1" :disabled="!ownerEditable" /> h /
-                  <input v-model.number="caForm.stepS" type="number" min="1" max="3600" step="1" :disabled="!ownerEditable" /> s
+                  <OspNumberInput v-model="caForm.windowH" min="1" max="168" step="1" :disabled="!ownerEditable" /> h /
+                  <OspNumberInput v-model="caForm.stepS" min="1" max="3600" step="1" :disabled="!ownerEditable" /> s
                 </span>
               </label>
               <label>
@@ -1247,7 +1240,7 @@ function lvLabel(v?: string | null): string {
             <div v-if="mvFormOpen" class="form mv-form">
               <label><span>{{ t('mv.winStart') }}</span><input v-model="mvForm.windowStart" type="datetime-local" /></label>
               <label><span>{{ t('mv.winEnd') }}</span><input v-model="mvForm.windowEnd" type="datetime-local" /></label>
-              <label><span>{{ t('mv.dv') }}</span><input v-model="mvForm.dvMs" type="number" min="0" step="any" /></label>
+              <label><span>{{ t('mv.dv') }}</span><OspNumberInput v-model="mvForm.dvMs" min="0" step="any" /></label>
               <label><span>{{ t('mv.direction') }}</span>
                 <select v-model="mvForm.direction">
                   <option value="">—</option>
@@ -1465,7 +1458,8 @@ tbody tr:hover { background: var(--bg-hover); }
 }
 .pager .spacer { flex: 1; }
 .pager .btn { padding: 4px 8px; font-size: 11px; }
-.pager .page-jump { width: 54px; padding: 4px 6px; text-align: center; }
+.pager .page-jump { width: 54px; }
+.pager .page-jump :deep(input) { text-align: center; padding: 4px 6px; }
 .disc-list li {
   display: grid;
   grid-template-columns: 16px 1fr auto auto;
@@ -1524,7 +1518,8 @@ tbody tr:hover { background: var(--bg-hover); }
 .radio-row .radio { display: inline-flex; align-items: center; gap: 4px; font-size: 12px; }
 .radio-row input { width: auto; }
 .inline-pair { display: inline-flex; align-items: center; gap: 4px; }
-.inline-pair input[type='number'] { width: 68px; }
+.inline-pair input[type='number'],
+.inline-pair .osp-num { width: 68px; }
 ul { margin: 0; padding: 0; list-style: none; }
 li {
   padding: 8px 0; border-bottom: 1px solid var(--border); display: flex; flex-direction: column; gap: 2px;

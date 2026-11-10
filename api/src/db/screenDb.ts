@@ -30,9 +30,9 @@ export interface ScreenJobRow {
   heartbeat_at: string | null
   /** R0-3 取消请求标记（1 = 执行侧应尽快终止） */
   cancel_requested: number
-  /** R2-8 主星状态源：tle（系统池/组织快照）| ephem（已绑定精密星历） */
+  /** R2-8 主星状态源：tle（系统池/组织快照）| ephem（已绑定精密星历）| aoe（系统池 AOE 两行根数） */
   primary_source: string
-  /** R2-8 副星/对照源：catalog（编目 GP）| cdm（已入站 CDM 复核） */
+  /** R2-8 副星/对照源：catalog（编目 GP）| cdm（已入站 CDM 复核）| aoe（系统池 AOE 编目） */
   secondary_source: string
   queued_at: string
   started_at: string | null
@@ -91,8 +91,8 @@ CREATE TABLE IF NOT EXISTS \`screening_jobs\` (
   \`progress_note\` varchar(200) NULL COMMENT 'R0-3 阶段说明',
   \`heartbeat_at\`  datetime(3) NULL COMMENT 'R0-3 心跳（僵死看门狗）',
   \`cancel_requested\` tinyint NOT NULL DEFAULT 0 COMMENT 'R0-3 取消请求标记',
-  \`primary_source\` varchar(16) NOT NULL DEFAULT 'tle' COMMENT 'R2-8 主星源 tle|ephem',
-  \`secondary_source\` varchar(16) NOT NULL DEFAULT 'catalog' COMMENT 'R2-8 副星/对照源 catalog|cdm',
+  \`primary_source\` varchar(16) NOT NULL DEFAULT 'tle' COMMENT 'R2-8 主星源 tle|ephem|aoe',
+  \`secondary_source\` varchar(16) NOT NULL DEFAULT 'catalog' COMMENT 'R2-8 副星/对照源 catalog|cdm|aoe',
   \`error_message\` varchar(1000) NULL,
   \`queued_at\`     datetime(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
   \`started_at\`    datetime(3) NULL,
@@ -161,8 +161,8 @@ async function ensureJobColumns(): Promise<void> {
     "ADD COLUMN `progress_note` varchar(200) NULL COMMENT 'R0-3 阶段说明'",
     "ADD COLUMN `heartbeat_at` datetime(3) NULL COMMENT 'R0-3 心跳（僵死看门狗）'",
     "ADD COLUMN `cancel_requested` tinyint NOT NULL DEFAULT 0 COMMENT 'R0-3 取消请求标记'",
-    "ADD COLUMN `primary_source` varchar(16) NOT NULL DEFAULT 'tle' COMMENT 'R2-8 主星源 tle|ephem'",
-    "ADD COLUMN `secondary_source` varchar(16) NOT NULL DEFAULT 'catalog' COMMENT 'R2-8 副星/对照源 catalog|cdm'"
+    "ADD COLUMN `primary_source` varchar(16) NOT NULL DEFAULT 'tle' COMMENT 'R2-8 主星源 tle|ephem|aoe'",
+    "ADD COLUMN `secondary_source` varchar(16) NOT NULL DEFAULT 'catalog' COMMENT 'R2-8 副星/对照源 catalog|cdm|aoe'"
   ]
   for (const c of cols) {
     try {
@@ -203,13 +203,15 @@ export async function createScreenJob(input: {
   primaryNorads?: number[]
   /** Epic J 再筛查：窗口起点 ms（缺省 = 当前时刻对齐分钟） */
   startMs?: number
-  /** R2-8 主星源：tle | ephem */
+  /** R2-8 主星源：tle | ephem | aoe */
   primarySource?: string
-  /** R2-8 副星/对照源：catalog | cdm */
+  /** R2-8 副星/对照源：catalog | cdm | aoe */
   secondarySource?: string
 }): Promise<number> {
-  const primarySource = input.primarySource === 'ephem' ? 'ephem' : 'tle'
-  const secondarySource = input.secondarySource === 'cdm' ? 'cdm' : 'catalog'
+  const primarySource =
+    input.primarySource === 'ephem' || input.primarySource === 'aoe' ? input.primarySource : 'tle'
+  const secondarySource =
+    input.secondarySource === 'cdm' || input.secondarySource === 'aoe' ? input.secondarySource : 'catalog'
   const params = JSON.stringify({
     windowH: input.windowH,
     missMaxKm: input.missMaxKm,

@@ -14,6 +14,7 @@ import {
   getStarlinkPullConfig,
   getStarlinkPullStatus,
   saveStarlinkPullConfig,
+  saveStarlinkPullStatus,
   type StarlinkFormat
 } from '../db/starlinkDb.js'
 import { runStarlinkPull, isStarlinkPullRunning } from '../services/pullStarlink.js'
@@ -62,7 +63,19 @@ router.get('/jobs/starlink-pull', requireAuth, requireSuperAdmin, async (_req, r
     return
   }
   const [config, status] = await Promise.all([getStarlinkPullConfig(), getStarlinkPullStatus()])
-  res.json(ok({ ...config, status, running: isStarlinkPullRunning() || (status?.running ?? false) }))
+  const live = isStarlinkPullRunning()
+  // 进程重启会中断拉取但状态仍是 running：以内存标志为准，顺手把陈旧状态收尾
+  if (status && status.running && !live) {
+    status.running = false
+    status.current = null
+    if (!status.finishedAt) status.finishedAt = new Date().toISOString()
+    try {
+      await saveStarlinkPullStatus(status)
+    } catch {
+      /* 忽略落库失败 */
+    }
+  }
+  res.json(ok({ ...config, status, running: live }))
 })
 
 /** 保存配置：每日拉取开关 / 拉取数量 / 文件类型 */

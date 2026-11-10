@@ -62,6 +62,7 @@ async function submit() {
 
 <template>
   <div class="login">
+    <div class="brand">{{ t('auth.platformName') }}</div>
     <div class="card">
       <div class="badge">{{ t('auth.badge') }}</div>
       <h1>{{ mode === 'login' ? t('auth.titleLogin') : t('auth.titleRegister') }}</h1>
@@ -173,19 +174,49 @@ async function submit() {
 
 <style scoped lang="scss">
 .login {
+  position: relative;
   width: 100%;
-  height: 100%;
-  display: grid;
-  place-items: center;
-  background: var(--bg-deep);
+  min-height: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: clamp(44px, 8.5vh, 80px);
   padding: 24px;
+  background: var(--bg-deep) url('/login-bg.jpg') center / cover no-repeat;
+  overflow-y: auto;
+}
+/* 黑色透明图层：压暗背景图，保证文字与表单可读 */
+.login::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.7);
+  pointer-events: none;
+}
+.brand {
+  position: relative;
+  z-index: 1;
+  color: #fff;
+  font-size: clamp(22px, 5.4vw, 44px);
+  font-weight: 600;
+  letter-spacing: 0.16em;
+  text-indent: 0.16em;
+  white-space: nowrap;
+  text-shadow: 0 2px 18px rgba(0, 0, 0, 0.65);
 }
 .card {
+  position: relative;
+  z-index: 1;
   width: min(440px, 100%);
   background: var(--bg-panel);
   border: 1px solid var(--border);
   border-radius: 8px;
   padding: 24px;
+}
+@media (max-height: 760px) {
+  .login { padding: 20px; gap: clamp(26px, 5.5vh, 44px); }
+  .brand { font-size: clamp(20px, 4.8vw, 32px); }
 }
 .badge {
   display: inline-block;

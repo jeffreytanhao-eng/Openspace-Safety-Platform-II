@@ -114,8 +114,8 @@ async function runSyncTle() {
 
 /* --------------------- R2-8：数据源（一单一源） --------------------- */
 
-const primarySource = ref<'tle' | 'ephem'>('tle')
-const secondarySource = ref<'catalog' | 'cdm'>('catalog')
+const primarySource = ref<'tle' | 'ephem' | 'aoe'>('tle')
+const secondarySource = ref<'catalog' | 'cdm' | 'aoe'>('catalog')
 
 /** 当前主星范围内已绑定星历的目标数（决定「精密星历」选项是否可选） */
 const ephemBoundCount = computed(() => {
@@ -131,8 +131,14 @@ watch(ephemBoundCount, (n) => {
 })
 
 function sourceLabel(j: ScreenJob): string {
-  const p = j.primary_source === 'ephem' ? t('scr.tagEphem') : t('scr.tagTle')
-  const s = j.secondary_source === 'cdm' ? t('scr.tagCdm') : t('scr.tagCatalog')
+  const p =
+    j.primary_source === 'ephem' ? t('scr.tagEphem') : j.primary_source === 'aoe' ? t('scr.tagAoe') : t('scr.tagTle')
+  const s =
+    j.secondary_source === 'cdm'
+      ? t('scr.tagCdm')
+      : j.secondary_source === 'aoe'
+        ? t('scr.tagAoe')
+        : t('scr.tagCatalog')
   return `${p} × ${s}`
 }
 
@@ -377,34 +383,38 @@ function pcSourceLabel(e: ScreenEvent): string {
               </div>
               <label class="field">
                 <span class="lbl">{{ t('scr.window') }}</span>
-                <input v-model.number="windowH" type="number" min="1" max="168" step="1" :disabled="paramsSource !== 'default'" />
+                <OspNumberInput v-model="windowH" min="1" max="168" step="1" :disabled="paramsSource !== 'default'" />
               </label>
               <label class="field">
                 <span class="lbl">{{ t('scr.missMax') }}</span>
-                <input v-model.number="missMaxKm" type="number" min="0.5" max="50" step="0.5" :disabled="paramsSource !== 'default'" />
+                <OspNumberInput v-model="missMaxKm" min="0.5" max="50" step="0.5" :disabled="paramsSource !== 'default'" />
               </label>
               <label class="field">
                 <span class="lbl">{{ t('scr.hbr') }}</span>
-                <input v-model.number="hbrM" type="number" min="1" max="1000" step="1" :disabled="paramsSource !== 'default'" />
+                <OspNumberInput v-model="hbrM" min="1" max="1000" step="1" :disabled="paramsSource !== 'default'" />
               </label>
 
-              <!-- R2-8：数据源（一单一源；AOE / Stargaze 本轮不提供） -->
+              <!-- R2-8：数据源（一单一源；主星 tle|ephem|aoe，副星 catalog|cdm|aoe） -->
               <label class="field">
                 <span class="lbl">{{ t('scr.primarySource') }}</span>
                 <select v-model="primarySource">
                   <option value="tle">{{ t('scr.srcTle') }}</option>
                   <option value="ephem" :disabled="!ephemBoundCount">{{ t('scr.srcEphem') }}</option>
+                  <option value="aoe">{{ t('scr.srcAoe') }}</option>
                 </select>
               </label>
               <div v-if="primarySource === 'ephem'" class="pick-hint">{{ t('scr.ephemHint') }}</div>
+              <div v-if="primarySource === 'aoe'" class="pick-hint">{{ t('scr.aoePrimaryHint') }}</div>
               <label class="field">
                 <span class="lbl">{{ t('scr.secondarySource') }}</span>
                 <select v-model="secondarySource">
                   <option value="catalog">{{ t('scr.srcCatalog') }}</option>
                   <option value="cdm">{{ t('scr.srcCdm') }}</option>
+                  <option value="aoe">{{ t('scr.srcAoeCatalog') }}</option>
                 </select>
               </label>
               <div v-if="secondarySource === 'cdm'" class="pick-hint">{{ t('scr.cdmHint') }}</div>
+              <div v-if="secondarySource === 'aoe'" class="pick-hint">{{ t('scr.aoeSecondaryHint') }}</div>
 
               <!-- R0-2：主星范围（目标超过单任务上限时分批选择） -->
               <div class="picker">
@@ -682,6 +692,13 @@ function pcSourceLabel(e: ScreenEvent): string {
   outline: none;
 }
 .field input:focus { border-color: var(--accent); }
+.field .osp-num {
+  font-size: 12px;
+  font-family: var(--mono);
+  align-self: start;
+  min-width: 90px;
+}
+.field .osp-num:focus-within { border-color: var(--accent); }
 .field select {
   appearance: none;
   border: 1px solid var(--border);

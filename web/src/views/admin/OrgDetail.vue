@@ -396,14 +396,7 @@ onMounted(load)
               <td class="mono">{{ displayDefault(q) }}</td>
               <td>
                 <div class="quota-edit">
-                  <input
-                    v-model="quotaInputs[q.feature]"
-                    type="number"
-                    min="0"
-                    step="1"
-                    :placeholder="`留空 = 用默认（${q.default}）`"
-                    :disabled="busyQuota === q.feature"
-                  />
+                  <OspNumberInput v-model="quotaInputs[q.feature]" min="0" step="1" :placeholder="`留空 = 用默认（${q.default}）`" :disabled="busyQuota === q.feature" />
                   <button
                     type="button"
                     class="btn small primary"

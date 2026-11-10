@@ -1010,14 +1010,7 @@ onMounted(() => {
           <span class="pager-info">共 {{ totalCountView }} 条 · 第 {{ page }}/{{ totalPagesView }} 页</span>
           <div class="pager-jump">
             <span>跳至</span>
-            <input
-              v-model="jumpInput"
-              type="number"
-              min="1"
-              :max="totalPagesView"
-              placeholder="页码"
-              @keyup.enter="jumpPage"
-            />
+            <OspNumberInput v-model="jumpInput" min="1" :max="totalPagesView" placeholder="页码" @keyup.enter="jumpPage" />
             <span>/ {{ totalPagesView }} 页</span>
             <button type="button" @click="jumpPage">跳转</button>
           </div>
@@ -1260,14 +1253,12 @@ h1 { margin: 0; font-size: 16px; font-weight: 650; }
 .pager-ell { color: var(--text-dim); padding: 0 1px; }
 .pager-info { white-space: nowrap; }
 .pager-jump { display: flex; align-items: center; gap: 4px; white-space: nowrap; }
-.pager-jump input {
-  width: 52px; appearance: none; -moz-appearance: textfield; border: 1px solid var(--border);
-  background: var(--bg-deep); color: var(--text); border-radius: 3px; padding: 4px 6px;
-  font-size: 10px; outline: none;
+.pager-jump .osp-num {
+  width: 64px;
+  font-size: 10px;
+  background: var(--bg-deep);
 }
-.pager-jump input::-webkit-outer-spin-button,
-.pager-jump input::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
-.pager-jump input:focus { border-color: rgba(74, 125, 154, 0.5); }
+.pager-jump .osp-num:focus-within { border-color: rgba(74, 125, 154, 0.5); }
 .row {
   appearance: none; text-align: left; border: 1px solid transparent; background: transparent;
   color: var(--text); border-radius: 6px; padding: 8px 10px; cursor: pointer;

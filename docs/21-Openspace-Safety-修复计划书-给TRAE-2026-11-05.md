@@ -17,7 +17,7 @@
 
 > **产品约束（续 · 2026-11-05）**  
 > 1. **AI 左侧栏**：暂作占位**保留**，本轮修复**不要删除**侧栏 AI 入口。  
-> 2. **AOE**：因账号问题**暂时不介入**——不配 `AOE_TOKEN`、不做 AOE 日更闭环、验收不要求 AOE `last_success`。日更出门标准以 **GP(TLE)+CDM** 为准。  
+> 2. **AOE**：系统池日更编目（两行根数）；筛查任务可将 AOE 选为主星源或副星编目。日更包含 **GP(TLE)+CDM+AOE**。  
 > 3. **总览报告**：首页「总览」增加**报告选择与下载**（可选报告类型/时间窗等 → 下载），作为本轮产品补强。  
 > 4. **态势交会选中 UX**：底栏文案「事件云」→「**交会事件**」；开启后显示黄/橙/红交会点；**跟踪/点选红点**时镜头放大，效果对齐旧项目交会选中——渲染**交会双方 3D 模型 + 双方轨道**；交会点外围**白圈**需**缓慢自转 + 呼吸缩放**。参考仓库 [`jeffreytanhao-eng/Opensapce-Safety-Platform`](https://github.com/jeffreytanhao-eng/Opensapce-Safety-Platform)（`BaseScene` 选中交会：`selectHeatPair` / 热力选中轨道组 + TCA 模型；近距离机位）。  
 > 5. **总览「数据源」分段**：现网为 Stage 1 mock，**不驱动** KPI/关注事件。按用户决定：**从总览移除**，能力迁到**筛查页任务参数**——主星用 **TLE / 星历**，副星用 **编目 / CDM** 等（一单一源，受档位与凭证约束）。总览只保留「数据源健康」。  
@@ -28,10 +28,10 @@
 把现网从「能登录、能看系统池 CDM、能点红云」推进到：
 
 1. **运营商作业链可跑通**：认领目标 → 系统池 TLE 可用 → 筛查产出事件 → 黄橙红云 → 详情深链。  
-2. **安全与运维达标**：受保护 API 鉴权、审计落库、日更 **GP+CDM** + cron、健康字段一致（AOE 暂缓）。  
+2. **安全与运维达标**：受保护 API 鉴权、审计落库、日更 **GP+CDM+AOE** + cron、健康字段一致。  
 3. **产品对齐**：AI 侧栏占位保留；命名与危险色一致；通用编目发现与批量认领；**总览报告选择与下载**；总览去掉假数据源切换、筛查任务带主/副星数据源参数；态势「交会事件」选中放大 + 去掉「安全热力图」。
 
-**刻意不做（本轮）**：完整机动引擎（仍 P3）；计费；推倒 Cesium/Three；把竞赛 `server.jsc` 拷入；**AOE 接入**（账号未就绪）；**删除 AI 侧栏**（暂留占位）。
+**刻意不做（本轮）**：完整机动引擎（仍 P3）；计费；推倒 Cesium/Three；把竞赛 `server.jsc` 拷入；**删除 AI 侧栏**（暂留占位）。
 
 ---
 
@@ -40,7 +40,7 @@
 | 批次 | 主题 | 出门标准 |
 |---|---|---|
 | **R0（立刻）** | 安全 + 筛查阻塞 + 僵死任务 | 匿名 events 401；托管目标筛查能出事件；可 cancel |
-| **R1** | 危险等级/多 Pc/日更/健康字段 | 黄橙红数据齐全；official Pc 正确；GP+CDM cron；stats=health（AOE 暂缓） |
+| **R1** | 危险等级/多 Pc/日更/健康字段 | 黄橙红数据齐全；official Pc 正确；GP+CDM cron；stats=health |
 | **R2** | 产品对齐 + 筛查数据源参数 + 态势交会选中 | AI 侧栏占位保留；去 Stage1 文案与总览假数据源条；筛查主/副星源参数；总览报告下载；态势「交会事件」+ 双方模型/轨道 + 白圈；**去掉安全热力图** |
 | **R3（增强）** | 开源生态能力增强 | 见 §5（OrbVeil/SatGuard/caspy/CelesTrak 等） |
 
@@ -101,13 +101,13 @@
 | **做什么** | official 行直接读取事件关联 CDM 的 Pc；无 CDM 时显示「无官方 Pc」而非 0；Foster/Chan/Alfano 保持独立 |
 | **验收** | 对已知 CDM 事件重算，official 列与详情主 Pc 同量级 |
 
-### R1-3 日更：GP+CDM + cron + 健康字段统一（**AOE 暂缓**）
+### R1-3 日更：GP+CDM + cron + 健康字段统一
 
 | 项 | 内容 |
 |---|---|
-| **问题** | 仅 manual；`catalog/stats` 停在 10-28 sidecar 文案；AOE 因账号问题本轮不做 |
-| **做什么** | 1）确保 Space-Track GP/CDM 凭证可用。<br>2）启用 `DAILY_FETCH_CRON`（每日 1 次 GP+CDM），失败告警/退避。<br>3）`catalog/stats` 的 lastGp/Cdm **改为读** `daily_fetch` / `orbital_fetch_batches`，删除过期 sidecar 文案；AOE 字段可显示「暂未接入」。<br>4）超管 `/admin` 增加「日更状态 + 手动触发」（GP/CDM）。<br>5）**明确跳过** `AOE_TOKEN` 配置与 AOE 同步，直至账号就绪（另开任务）。 |
-| **验收** | health：GP/CDM 有 last_success；AOE 可为 null/跳过且文案诚实；cron batch 存在；stats 与 health 同日 |
+| **问题** | 仅 manual；`catalog/stats` 停在 10-28 sidecar 文案 |
+| **做什么** | 1）确保 Space-Track GP/CDM 凭证可用。<br>2）启用 `DAILY_FETCH_CRON`（每日 1 次 GP+CDM），失败告警/退避。<br>3）`catalog/stats` 的 lastGp/Cdm **改为读** `daily_fetch` / `orbital_fetch_batches`，删除过期 sidecar 文案；AOE 字段显示日更状态。<br>4）超管 `/admin` 增加「日更状态 + 手动触发」（GP/CDM/AOE）。 |
+| **验收** | health：GP/CDM 有 last_success；AOE 在已配置时有 last_success；cron batch 存在；stats 与 health 同日 |
 
 ### R1-4 总览 KPI 组织化
 
@@ -173,10 +173,10 @@
 | 项 | 内容 |
 |---|---|
 | **问题** | 总览顶栏「TLE 外推 / Space-Track CDM / 精密星历 / AOE+星历 / 光学·Stargaze」为 Stage 1 mock：切换几乎不改变真实 KPI/关注事件/筛查/态势；与底栏「数据源健康」概念冲突。 |
-| **总览** | **删除** `DataSourceBar`（及 `useDataSource` 全局选源若仅服务总览）。总览只保留 **数据源健康**（GP/CDM 日更；AOE 本轮可诚实灰显/失败）。去掉「Stage 1 mock」相关提示。 |
-| **筛查页 · 新建/编辑任务参数** | 每条筛查任务显式选择：<br>1）**主星状态源**：`TLE（系统池/组织快照）` \| `精密星历（已关联该 object 的星历版本）`；无星历时星历选项灰显并提示去星历页关联。<br>2）**副星 / 对照源**：`编目 GP（系统池，受档位裁剪）` \| `Space-Track CDM 关联事件`（以已入站 CDM 作对照/复核，而非假装在线切源）\| 后续可扩展 `客户凭证拉数`（走 org_credential，计配额）。<br>3）**AOE / 光学·Stargaze**：本轮 **不做可选项**（AOE 暂缓；Stargaze 未接）——UI 勿再挂灰按钮假装可切。 |
+| **总览** | **删除** `DataSourceBar`（及 `useDataSource` 全局选源若仅服务总览）。总览只保留 **数据源健康**（GP/CDM/AOE 日更）。去掉「Stage 1 mock」相关提示。 |
+| **筛查页 · 新建/编辑任务参数** | 每条筛查任务显式选择：<br>1）**主星状态源**：`TLE（系统池/组织快照）` \| `精密星历（已关联该 object 的星历版本）` \| `AOE 根数`；无星历时星历选项灰显并提示去星历页关联。<br>2）**副星 / 对照源**：`编目 GP（系统池，受档位裁剪）` \| `Space-Track CDM 关联事件`（以已入站 CDM 作对照/复核，而非假装在线切源）\| `AOE 编目` \| 后续可扩展 `客户凭证拉数`（走 org_credential，计配额）。<br>3）**主星 / 副星可选择 AOE 编目**（系统池日更两行根数，SGP4 外推）；**光学·Stargaze** 不做可选项——UI 勿再挂灰按钮假装可切。 |
 | **API** | `POST /cgi/screens`（或等价）body 增加 `primarySource`、`secondarySource`（枚举）；worker 按枚举取数；响应与任务详情回显所选源；超额/无凭证按商用边界拒绝。 |
-| **验收** | 总览无数据源分段条；筛查发起页可见主星 TLE/星历、副星编目/CDM；选星历但未绑定时不能提交或明确失败；任务详情可看见当时选用的源；切换总览不再影响任何列表。 |
+| **验收** | 总览无数据源分段条；筛查发起页可见主星 TLE/星历/AOE、副星编目/CDM/AOE；选星历但未绑定时不能提交或明确失败；选 AOE 但系统池无可用根数时明确失败（不回退 TLE）；任务详情可看见当时选用的源；切换总览不再影响任何列表。 |
 
 ### R2-9 态势去掉「安全热力图」按钮
 
@@ -230,7 +230,7 @@
 4. **R0-4** 清队列 + 若干已托管目标冒烟筛查  
 5. **R1-1** 黄橙红等级  
 6. **R1-2** official Pc  
-7. **R1-3** GP+CDM cron + stats + admin 日更面板（AOE 暂缓）  
+7. **R1-3** GP+CDM cron + stats + admin 日更面板  
 8. **R1-4** 总览组织化 / 去 mock 文案  
 9. **R2-1～R2-6** 侧栏（AI 占位保留）、通用认领、总览报告下载、审计、杂项  
 10. **R2-7** 态势「交会事件」文案 + 选中放大（双方模型/轨道 + 白圈旋转呼吸）  
@@ -251,7 +251,7 @@
 - [ ] 态势底栏文案为「交会事件」（非「事件云」）；点选/跟踪交会点可见双方 3D 模型与双方轨道；白圈缓慢旋转+呼吸  
 - [ ] 交会详情「打开态势」深链稳定并进入上述选中放大态  
 - [ ] 重算 official Pc 与 CDM 一致（有 CDM 时）  
-- [ ] health：GP/CDM 有 last_success；AOE 本轮可跳过并文案诚实；存在 cron batch  
+- [ ] health：GP/CDM 有 last_success；存在 cron batch  
 - [ ] catalog/stats 时间与 health 一致  
 - [ ] 侧栏 AI 占位仍在；无 Stage1 mock 生产文案  
 - [ ] 按编目标签/名称可发现并批量认领（通用，非某一模拟星座）  

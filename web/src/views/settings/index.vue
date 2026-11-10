@@ -1,4 +1,4 @@
-﻿﻿﻿﻿﻿﻿﻿﻿<script setup lang="ts">
+﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿<script setup lang="ts">
 import { computed, onMounted, reactive, ref } from 'vue'
 import { useI18n } from '@/composables/useI18n'
 import { useAuthStore } from '@/stores/auth'
@@ -719,11 +719,11 @@ function srcName(s: string): string {
                 </td>
                 <td class="edit-col">
                   <template v-if="form.hbr_mode === 'single'">
-                    <input v-model.number="form.hbr_m" type="number" min="1" max="1000" step="1" :disabled="!canEdit" @input="onEdit" /> m
+                    <OspNumberInput v-model="form.hbr_m" min="1" max="1000" step="1" :disabled="!canEdit" @input="onEdit" /> m
                   </template>
                   <template v-else>
-                    <input v-model.number="form.hbr_a_m" type="number" min="0.1" max="1000" step="0.1" :disabled="!canEdit" @input="onEdit" /> (A)
-                    <input v-model.number="form.hbr_b_m" type="number" min="0.1" max="1000" step="0.1" :disabled="!canEdit" @input="onEdit" /> (B) m
+                    <OspNumberInput v-model="form.hbr_a_m" min="0.1" max="1000" step="0.1" :disabled="!canEdit" @input="onEdit" /> (A)
+                    <OspNumberInput v-model="form.hbr_b_m" min="0.1" max="1000" step="0.1" :disabled="!canEdit" @input="onEdit" /> (B) m
                     <span class="why">{{ t('ca.hbrCombine') }}</span>
                   </template>
                 </td>
@@ -737,7 +737,7 @@ function srcName(s: string): string {
                   <div class="why">{{ sugReason('accepted_pc') }}</div>
                 </td>
                 <td class="edit-col">
-                  <input v-model.number="form.accepted_pc" type="number" min="1e-9" max="1" step="1e-5" :disabled="!canEdit" @input="onEdit" />
+                  <OspNumberInput v-model="form.accepted_pc" min="1e-9" max="1" step="1e-5" :disabled="!canEdit" @input="onEdit" />
                 </td>
               </tr>
               <!-- 接受最小脱靶 -->
@@ -749,7 +749,7 @@ function srcName(s: string): string {
                   <div class="why">{{ sugReason('accepted_miss_km') }}</div>
                 </td>
                 <td class="edit-col">
-                  <input v-model.number="form.accepted_miss_km" type="number" min="0.01" max="100" step="0.1" :disabled="!canEdit" @input="onEdit" /> km
+                  <OspNumberInput v-model="form.accepted_miss_km" min="0.01" max="100" step="0.1" :disabled="!canEdit" @input="onEdit" /> km
                 </td>
               </tr>
               <!-- 筛查距离阈值 -->
@@ -761,7 +761,7 @@ function srcName(s: string): string {
                   <div class="why">{{ sugReason('screen_distance_km') }}</div>
                 </td>
                 <td class="edit-col">
-                  <input v-model.number="form.screen_distance_km" type="number" min="0.5" max="100" step="0.5" :disabled="!canEdit" @input="onEdit" /> km
+                  <OspNumberInput v-model="form.screen_distance_km" min="0.5" max="100" step="0.5" :disabled="!canEdit" @input="onEdit" /> km
                 </td>
               </tr>
               <!-- 协方差模式 -->
@@ -803,8 +803,8 @@ function srcName(s: string): string {
                   <div class="why">{{ sugReason('window_h') }}；{{ sugReason('step_s') }}</div>
                 </td>
                 <td class="edit-col">
-                  <input v-model.number="form.window_h" type="number" min="1" max="168" step="1" :disabled="!canEdit" @input="onEdit" /> h /
-                  <input v-model.number="form.step_s" type="number" min="1" max="3600" step="1" :disabled="!canEdit" @input="onEdit" /> s
+                  <OspNumberInput v-model="form.window_h" min="1" max="168" step="1" :disabled="!canEdit" @input="onEdit" /> h /
+                  <OspNumberInput v-model="form.step_s" min="1" max="3600" step="1" :disabled="!canEdit" @input="onEdit" /> s
                 </td>
               </tr>
               <!-- Pc 方法勾选 -->
@@ -880,24 +880,24 @@ function srcName(s: string): string {
             <label class="slot-row">
               <span>{{ t('ca.f.hbr') }}</span>
               <span v-if="slotForm.hbr_mode === 'single'">
-                <input v-model.number="slotForm.hbr_m" type="number" min="1" max="1000" step="1" /> m
+                <OspNumberInput v-model="slotForm.hbr_m" min="1" max="1000" step="1" /> m
               </span>
               <span v-else>
-                <input v-model.number="slotForm.hbr_a_m" type="number" min="0.1" max="1000" step="0.1" /> (A) /
-                <input v-model.number="slotForm.hbr_b_m" type="number" min="0.1" max="1000" step="0.1" /> (B) m
+                <OspNumberInput v-model="slotForm.hbr_a_m" min="0.1" max="1000" step="0.1" /> (A) /
+                <OspNumberInput v-model="slotForm.hbr_b_m" min="0.1" max="1000" step="0.1" /> (B) m
               </span>
             </label>
             <label class="slot-row">
               <span>{{ t('ca.f.acceptedPc') }}</span>
-              <span><input v-model.number="slotForm.accepted_pc" type="number" min="1e-9" max="1" step="1e-5" /></span>
+              <span><OspNumberInput v-model="slotForm.accepted_pc" min="1e-9" max="1" step="1e-5" /></span>
             </label>
             <label class="slot-row">
               <span>{{ t('ca.f.acceptedMiss') }}</span>
-              <span><input v-model.number="slotForm.accepted_miss_km" type="number" min="0.01" max="100" step="0.1" /> km</span>
+              <span><OspNumberInput v-model="slotForm.accepted_miss_km" min="0.01" max="100" step="0.1" /> km</span>
             </label>
             <label class="slot-row">
               <span>{{ t('ca.f.screenDist') }}</span>
-              <span><input v-model.number="slotForm.screen_distance_km" type="number" min="0.5" max="100" step="0.5" /> km</span>
+              <span><OspNumberInput v-model="slotForm.screen_distance_km" min="0.5" max="100" step="0.5" /> km</span>
             </label>
             <label class="slot-row">
               <span>{{ t('ca.f.covMode') }}</span>
@@ -916,8 +916,8 @@ function srcName(s: string): string {
             <label class="slot-row">
               <span>{{ t('ca.f.windowStep') }}</span>
               <span>
-                <input v-model.number="slotForm.window_h" type="number" min="1" max="168" step="1" /> h /
-                <input v-model.number="slotForm.step_s" type="number" min="1" max="3600" step="1" /> s
+                <OspNumberInput v-model="slotForm.window_h" min="1" max="168" step="1" /> h /
+                <OspNumberInput v-model="slotForm.step_s" min="1" max="3600" step="1" /> s
               </span>
             </label>
             <label class="slot-row">
@@ -1390,18 +1390,22 @@ td:first-child { color: var(--text); font-weight: 600; white-space: nowrap; }
 .sug { font-family: var(--mono); color: var(--text); }
 .why { margin-top: 2px; font-size: 10px; color: var(--text-dim); max-width: 260px; }
 .edit-col { white-space: nowrap; }
+.edit-col .osp-num,
 .edit-col input[type='number'],
 .edit-col select {
   appearance: none;
-  border: 1px solid var(--border);
   background: var(--bg-deep);
   color: var(--text);
-  border-radius: 4px;
-  padding: 4px 6px;
   font-size: 11px;
   font-family: var(--mono);
   outline: none;
   width: 90px;
+}
+.edit-col input[type='number'],
+.edit-col select {
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 4px 6px;
 }
 .edit-col input:focus, .edit-col select:focus { border-color: var(--accent); }
 .edit-col input:disabled, .edit-col select:disabled { opacity: 0.6; }
@@ -1478,7 +1482,8 @@ td:first-child { color: var(--text); font-weight: 600; white-space: nowrap; }
   color: var(--text-muted);
 }
 .slot-row > span:first-child { white-space: nowrap; }
-.slot-row input[type='number'] { width: 76px; }
+.slot-row input[type='number'],
+.slot-row .osp-num { width: 76px; }
 .slot-row select { min-width: 120px; }
 .slot-row .radio { display: inline-flex; align-items: center; gap: 4px; margin-right: 8px; font-size: 12px; }
 .slot-actions { display: flex; gap: 8px; margin-top: 12px; }

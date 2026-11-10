@@ -25,11 +25,11 @@ const error = ref('')
 const result = ref<Record<string, DailyFetchSourceResult> | null>(null)
 const triggeredBy = ref('')
 
-/** 出门标准以 GP + CDM 为准；AOE 本轮暂不接入（只展示状态，不作为验收项） */
+/** 系统日更：Space-Track GP（TLE）、CDM 与 AOE 编目 */
 const SOURCES: Array<{ key: string; label: string; note?: string }> = [
   { key: 'spacetrack_gp', label: 'Space-Track GP（TLE）' },
   { key: 'spacetrack_cdm', label: 'Space-Track CDM（交会报文）' },
-  { key: 'aoe', label: 'AOE（预留）', note: '本轮不接入，不计入出门标准' }
+  { key: 'aoe', label: 'AOE 编目' }
 ]
 
 const busy = computed(() => running.value || (st.value?.running ?? false))
@@ -199,7 +199,7 @@ function skipConflict() {
 /* ------------------------- StarLink 星历拉取 ------------------------- */
 
 const slEnabled = ref(false)
-const slCount = ref(50)
+const slCount = ref(10)
 const slFormat = ref<StarlinkFormat>('OCM')
 const slStatus = ref<StarlinkPullStatus | null>(null)
 const slRunning = ref(false)
@@ -209,6 +209,9 @@ const slErr = ref('')
 let slTimer: ReturnType<typeof setTimeout> | null = null
 
 const slBusy = computed(() => slSaving.value || slRunning.value || (slStatus.value?.running ?? false))
+const slOk = computed(
+  () => (slStatus.value?.added ?? 0) + (slStatus.value?.updated ?? 0) + (slStatus.value?.skipped ?? 0)
+)
 
 function fmtIso(s: string | null): string {
   if (!s) return '—'
@@ -261,7 +264,7 @@ async function saveStarlink(): Promise<boolean> {
   try {
     const c = await adminStarlinkPullSave({
       enabled: slEnabled.value,
-      count: Math.max(1, Math.min(500, Math.floor(slCount.value) || 50)),
+      count: Math.max(1, Math.min(500, Math.floor(slCount.value) || 10)),
       format: slFormat.value
     })
     applyStarlink(c)
@@ -306,7 +309,7 @@ onMounted(() => {
       <div>
         <h1>数据运维 · 日更</h1>
         <p class="sub">
-          每日定时采集 Space-Track GP（TLE）与 CDM；出门标准以 GP + CDM 的上次成功时间为准，AOE 本轮不接入。
+          每日定时采集 Space-Track GP（TLE）、CDM 与系统池 AOE 编目。
         </p>
       </div>
       <div class="actions">
@@ -369,9 +372,6 @@ onMounted(() => {
       <div class="uz-row">
         <div class="uz-text">
           <div class="uz-title">StarLink 星历拉取</div>
-          <div class="uz-sub">
-            来源 api.starlink.com 公开星历 · 清单 MANIFEST.txt · OCM 单颗约 5 MB · 下载后自动落盘入库（data/ephemerides/{ocm,itc}/）
-          </div>
           <div class="uz-perm">
             开启「每日拉取」后每日 UTC 00:00 自动执行一次；也可随时手动拉取。拉取内容为公开星历，全平台可见。
           </div>
@@ -386,7 +386,7 @@ onMounted(() => {
           </label>
           <label class="uz-vis">
             <span>拉取数量</span>
-            <input v-model.number="slCount" class="sl-num" type="number" min="1" max="500" :disabled="slBusy" />
+            <OspNumberInput v-model="slCount" class="sl-num" min="1" max="500" :disabled="slBusy" />
           </label>
           <label class="uz-vis">
             <span>文件类型</span>
@@ -405,10 +405,14 @@ onMounted(() => {
       </div>
       <p v-if="slErr" class="error inline">{{ slErr }}</p>
       <p v-if="slMsg" class="uz-msg">{{ slMsg }}</p>
-      <p v-if="slStatus" class="sl-last">
+      <p v-if="slStatus?.running" class="sl-last sl-progress">
+        拉取中：{{ slStatus.processed ?? 0 }}/{{ slStatus.requested }} · 成功 {{ slOk }} · 失败
+        {{ slStatus.failed }}<template v-if="slStatus.current"> · 当前 {{ slStatus.current }}</template>
+      </p>
+      <p v-else-if="slStatus" class="sl-last">
         最近一次：{{ fmtIso(slStatus.startedAt) }} 由 {{ slStatus.triggeredBy }} 触发 · {{ slStatus.format }} ×
-        {{ slStatus.requested }} → 新增 {{ slStatus.added }} · 更新 {{ slStatus.updated }} · 跳过
-        {{ slStatus.skipped }}<template v-if="slStatus.failed"> · 失败 {{ slStatus.failed }}</template>
+        {{ slStatus.requested }}（完成 {{ slStatus.processed ?? 0 }}）→ 新增 {{ slStatus.added }} · 更新
+        {{ slStatus.updated }} · 跳过 {{ slStatus.skipped }}<template v-if="slStatus.failed"> · 失败 {{ slStatus.failed }}</template>
         <template v-if="slStatus.finishedAt"> · 完成于 {{ fmtIso(slStatus.finishedAt) }}</template>
       </p>
       <div v-if="slStatus?.errors?.length" class="sl-errors">
@@ -548,14 +552,11 @@ onMounted(() => {
   font-size: 11px;
   padding: 4px 6px;
 }
-.uz-vis input.sl-num {
-  width: 64px;
+.uz-vis .sl-num {
+  width: 76px;
   background: var(--bg-panel);
-  border: 1px solid var(--border);
-  border-radius: 4px;
   color: var(--text-muted);
   font-size: 11px;
-  padding: 4px 6px;
 }
 .sl-zone { border-style: solid; }
 .sl-last {
@@ -564,6 +565,7 @@ onMounted(() => {
   color: var(--text-muted);
   line-height: 1.6;
 }
+.sl-progress { color: #6fb7ff; }
 .sl-errors {
   margin-top: 6px;
   max-height: 140px;

@@ -3,11 +3,12 @@
  * - 清单：https://api.starlink.com/public-files/ephemerides/MANIFEST.txt（每行一个 ITC/MEME 文件名）
  * - ITC ：同域直接下载清单中的 MEME_…txt
  * - OCM ：按清单中的 STARLINK-<编号> 拼 https://api.starlink.com/public-files/ephemerides/STARLINK-<编号>.txt
- *   （注意：starlink.com 主站同路径返回站点 HTML，必须用 api.starlink.com）
  * 下载后统一交给 ingestUploadFile 落盘到 data/ephemerides/{ocm,itc}/<分片>/ 并入库。
  *
  * 手动：POST /cgi/jobs/starlink-pull/run（异步启动，页面轮询状态）
  * 自动：配置 enabled=true 时，UTC 每日 00:00 执行一次
+ *
+ * 下载：对 GCS gzip 对象分段并行拉取（见 starlinkDownload.ts），再与入库流水线并行。
  */
 import { ephemDbUp } from '../ephem/ephemDb.js'
 import { ingestUploadFile } from '../ephem/ingest.js'
@@ -18,26 +19,18 @@ import {
   type StarlinkFormat,
   type StarlinkPullStatus
 } from '../db/starlinkDb.js'
+import {
+  FILE_CONCURRENCY,
+  downloadPublicFile,
+  looksLikeHtml
+} from './starlinkDownload.js'
 
 const BASE = 'https://api.starlink.com/public-files/ephemerides'
 const MANIFEST_URL = `${BASE}/MANIFEST.txt`
-const UA = 'openspace-safety-api/2.0'
 
 let running = false
 export function isStarlinkPullRunning(): boolean {
   return running
-}
-
-async function fetchBuffer(url: string, timeoutMs = 120_000): Promise<Buffer> {
-  const ctrl = new AbortController()
-  const timer = setTimeout(() => ctrl.abort(), timeoutMs)
-  try {
-    const r = await fetch(url, { headers: { 'User-Agent': UA, Accept: '*/*' }, signal: ctrl.signal })
-    if (!r.ok) throw new Error(`HTTP ${r.status}`)
-    return Buffer.from(await r.arrayBuffer())
-  } finally {
-    clearTimeout(timer)
-  }
 }
 
 interface PullTarget {
@@ -72,7 +65,7 @@ function pickTargets(manifest: string, format: StarlinkFormat, count: number): P
   return targets
 }
 
-/** 执行一次拉取（串行下载，单条失败不中断整批） */
+/** 执行一次拉取（多文件并行；单条失败不中断整批） */
 export async function runStarlinkPull(opts: {
   count: number
   format: StarlinkFormat
@@ -82,7 +75,7 @@ export async function runStarlinkPull(opts: {
   if (!(await ensureStarlinkSchema())) throw new Error('数据库不可用')
   if (!(await ephemDbUp())) throw new Error('星历元数据库不可用')
 
-  const count = Math.max(1, Math.min(500, Math.floor(opts.count) || 50))
+  const count = Math.max(1, Math.min(500, Math.floor(opts.count) || 10))
   const status: StarlinkPullStatus = {
     running: true,
     startedAt: new Date().toISOString(),
@@ -90,6 +83,8 @@ export async function runStarlinkPull(opts: {
     triggeredBy: opts.triggeredBy,
     format: opts.format,
     requested: count,
+    processed: 0,
+    current: null,
     added: 0,
     updated: 0,
     skipped: 0,
@@ -100,20 +95,30 @@ export async function runStarlinkPull(opts: {
   await saveStarlinkPullStatus(status)
 
   try {
-    const manifest = (await fetchBuffer(MANIFEST_URL, 90_000)).toString('utf8')
+    const manifest = (await downloadPublicFile(MANIFEST_URL, 90_000)).toString('utf8')
     const targets = pickTargets(manifest, opts.format, count)
     if (!targets.length) throw new Error('MANIFEST 中没有可拉取条目')
     console.log(`[starlink] pull start: format=${opts.format} count=${targets.length} by=${opts.triggeredBy}`)
 
-    // OCM 单文件约 5 MB，串行下载过慢：固定 3 并发（单条失败不影响整批）
+    const persist = async (): Promise<void> => {
+      try {
+        await saveStarlinkPullStatus(status)
+      } catch (e) {
+        console.error('[starlink] save progress failed:', (e as Error).message)
+      }
+    }
+
     let cursor = 0
+    const inflight = new Set<string>()
     const worker = async (): Promise<void> => {
       while (cursor < targets.length) {
         const t = targets[cursor++]
+        inflight.add(t.file)
+        status.current = t.file
+        await persist()
         try {
-          const buf = await fetchBuffer(`${BASE}/${encodeURIComponent(t.file)}`)
-          const head = buf.subarray(0, 256).toString('utf8').trimStart()
-          if (head.startsWith('<')) throw new Error('返回 HTML（非星历文件）')
+          const buf = await downloadPublicFile(`${BASE}/${encodeURIComponent(t.file)}`)
+          if (looksLikeHtml(buf)) throw new Error('返回 HTML（非星历文件）')
           const r = await ingestUploadFile(t.file, buf, opts.triggeredBy, { overwriteSameName: true })
           if (r.action === 'added') status.added++
           else if (r.action === 'updated') status.updated++
@@ -122,15 +127,21 @@ export async function runStarlinkPull(opts: {
           status.failed++
           if (status.errors.length < 20) status.errors.push(`${t.file}: ${(e as Error).message}`)
         }
+        inflight.delete(t.file)
+        status.current = inflight.size ? Array.from(inflight).pop() ?? null : null
+        status.processed++
+        await persist()
       }
     }
-    await Promise.all(Array.from({ length: Math.min(3, targets.length) }, () => worker()))
+    const parallel = Math.min(FILE_CONCURRENCY, targets.length)
+    await Promise.all(Array.from({ length: parallel }, () => worker()))
   } catch (e) {
     status.failed++
     if (status.errors.length < 20) status.errors.push((e as Error).message)
   } finally {
     running = false
     status.running = false
+    status.current = null
     status.finishedAt = new Date().toISOString()
     try {
       await saveStarlinkPullStatus(status)
