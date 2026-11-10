@@ -136,7 +136,7 @@ const STATE_LABEL: Record<string, I18nKey> = {
 
 /* ------------------------------ R2-6 报告选择与下载 ------------------------------ */
 
-type ReportKind = 'summary' | 'events' | 'health'
+type ReportKind = 'summary' | 'events'
 const reportKind = ref<ReportKind>('summary')
 const reportWindow = ref<'24h' | '3d' | '7d'>('7d')
 const reportBusy = ref(false)
@@ -206,23 +206,6 @@ async function exportReport() {
         'text/csv',
         '\uFEFF' + rows.map((r) => r.map(csvCell).join(',')).join('\r\n')
       )
-      reportMsg.value = t('ov.reportDone')
-    } else {
-      const lines = [
-        `# ${t('ov.srcHealth')}`,
-        '',
-        `- plan: ${s?.org?.plan ?? '—'}`,
-        `- generated_at: ${new Date().toISOString()}`,
-        '',
-        '| source | state | last_success | duration_ms |',
-        '|---|---|---|---|'
-      ]
-      for (const src of s?.sources ?? []) {
-        lines.push(
-          `| ${t((SRC_LABEL[src.source] ?? src.source) as I18nKey)} | ${src.state} | ${src.last_success ?? '—'} | ${src.duration_ms ?? '—'} |`
-        )
-      }
-      downloadText(`osp-source-health-${stamp()}.md`, 'text/markdown', lines.join('\n'))
       reportMsg.value = t('ov.reportDone')
     }
   } catch (e) {
@@ -320,7 +303,6 @@ async function exportReport() {
               <select v-model="reportKind">
                 <option value="summary">{{ t('ov.reportSummary') }}</option>
                 <option value="events">{{ t('ov.reportEvents') }}</option>
-                <option value="health">{{ t('ov.reportHealth') }}</option>
               </select>
               <select v-if="reportKind === 'events'" v-model="reportWindow">
                 <option value="24h">24h</option>

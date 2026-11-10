@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
 import { useI18n } from '@/composables/useI18n'
 import type { MessageKey } from '@/i18n/messages'
 import {
@@ -18,6 +19,8 @@ import { useAuthStore } from '@/stores/auth'
 
 const { t } = useI18n()
 const auth = useAuthStore()
+const route = useRoute()
+const router = useRouter()
 /** 平台账号（无组织）：全平台只读视图 */
 const isPlatform = computed(() => !auth.org)
 /** 基础档不能发起筛查（后端 screen_day=0 兜底），前端直接禁用并提示升级 */
@@ -219,8 +222,18 @@ async function loadJobs() {
   }
 }
 
+function routeJobId(): number | null {
+  const raw = route.params.id
+  const s = Array.isArray(raw) ? raw[0] : raw
+  const n = Number(s)
+  return Number.isInteger(n) && n > 0 ? n : null
+}
+
 async function selectJob(id: number) {
   selectedId.value = id
+  if (routeJobId() !== id) {
+    await router.replace({ name: 'screens', params: { id: String(id) } })
+  }
   detailLoading.value = true
   try {
     detail.value = await getScreen(id)
@@ -236,7 +249,9 @@ async function loadAll() {
   try {
     await Promise.all([loadJobs(), loadManaged()])
     void prefillFromOrgDefaults()
-    if (!selectedId.value && jobs.value.length) await selectJob(jobs.value[0].id)
+    const fromRoute = routeJobId()
+    if (fromRoute) await selectJob(fromRoute)
+    else if (!selectedId.value && jobs.value.length) await selectJob(jobs.value[0].id)
   } finally {
     loading.value = false
   }
@@ -282,6 +297,14 @@ function tickPoll() {
   void loadJobs()
   if (selectedId.value) void selectJob(selectedId.value)
 }
+
+watch(
+  () => route.params.id,
+  (id) => {
+    const n = Number(Array.isArray(id) ? id[0] : id)
+    if (Number.isInteger(n) && n > 0 && n !== selectedId.value) void selectJob(n)
+  }
+)
 
 onMounted(() => {
   void loadAll()

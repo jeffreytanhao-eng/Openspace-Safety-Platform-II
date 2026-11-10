@@ -20,6 +20,7 @@ import {
   type AccuracyCompareResult,
   type AccuracyKind
 } from '@/api/ephemerides'
+import AccuracyResidualCharts from '@/components/AccuracyResidualCharts.vue'
 import { parseEphemeris } from '@/views/situation/ephem/parse'
 import {
   activateEphem,
@@ -859,13 +860,6 @@ async function runCompare() {
   }
 }
 
-/** RMS 展示：<1 km 用 m，否则 km */
-function fmtKm(km: number): string {
-  if (!Number.isFinite(km)) return '—'
-  if (Math.abs(km) < 1) return `${(km * 1000).toFixed(1)} m`
-  return `${km.toFixed(3)} km`
-}
-
 /** CSV 完整时间戳（含年份，UTC） */
 function accIso(ms: number): string {
   return new Date(ms).toISOString().replace('T', ' ').replace(/\.\d+Z$/, 'Z')
@@ -889,10 +883,30 @@ function downloadAccCsv() {
   if (r.warnings.length) {
     for (const w of r.warnings) lines.push(`# Warning: ${w}`)
   }
-  lines.push('# t(UTC),radial_km,along_km,cross_km,dist_km')
+  const hasSigma = r.points.some((p) => p.sigmaRadialKm != null || p.sigmaAlongKm != null || p.sigmaCrossKm != null)
+  if (r.covarianceModel === 'tle-age' || hasSigma) {
+    lines.push('# Covariance: tle-age (screening age-based sigma; not independent truth)')
+  }
+  if (r.a.startMs || r.b.startMs) {
+    lines.push(`# A start=${r.a.startMs ? accIso(r.a.startMs) : 'NA'} · B start=${r.b.startMs ? accIso(r.b.startMs) : 'NA'}`)
+  }
+  lines.push(
+    hasSigma
+      ? '# t(UTC),radial_km,along_km,cross_km,dist_km,sigma_radial_km,sigma_along_km,sigma_cross_km,maha_radial,maha_along,maha_cross'
+      : '# t(UTC),radial_km,along_km,cross_km,dist_km'
+  )
+  const maha = (err: number, sig: number | undefined): string => {
+    if (sig === undefined || !(sig > 0) || !Number.isFinite(err)) return ''
+    return (Math.abs(err) / sig).toExponential(6)
+  }
   for (const p of r.points) {
+    const base = `${accIso(p.tMs)},${p.radialKm.toExponential(6)},${p.alongKm.toExponential(6)},${p.crossKm.toExponential(6)},${p.distKm.toExponential(6)}`
+    if (!hasSigma) {
+      lines.push(base)
+      continue
+    }
     lines.push(
-      `${accIso(p.tMs)},${p.radialKm.toExponential(6)},${p.alongKm.toExponential(6)},${p.crossKm.toExponential(6)},${p.distKm.toExponential(6)}`
+      `${base},${p.sigmaRadialKm ?? ''},${p.sigmaAlongKm ?? ''},${p.sigmaCrossKm ?? ''},${maha(p.radialKm, p.sigmaRadialKm)},${maha(p.alongKm, p.sigmaAlongKm)},${maha(p.crossKm, p.sigmaCrossKm)}`
     )
   }
   const csv = '\uFEFF' + lines.join('\r\n') + '\r\n'
@@ -1136,21 +1150,11 @@ onMounted(() => {
               <p v-if="accLoading && !accResult" class="ver-none">{{ t('acc.running') }}</p>
               <p v-else-if="accErr" class="ver-err">{{ accErr }}</p>
               <template v-else-if="accResult">
-                <div class="acc-meta">
-                  <span>{{ t('acc.overlap') }}：<span class="mono">{{ accIso(accResult.overlap.startMs) }} → {{ accIso(accResult.overlap.stopMs) }}</span></span>
-                  <span>{{ t('acc.samples') }}：{{ accResult.samples }}</span>
-                </div>
-                <div class="acc-kpis">
-                  <div class="acc-kpi"><span>{{ t('acc.rmsR') }}</span><b>{{ fmtKm(accResult.rms.radialKm) }}</b></div>
-                  <div class="acc-kpi"><span>{{ t('acc.rmsT') }}</span><b>{{ fmtKm(accResult.rms.alongKm) }}</b></div>
-                  <div class="acc-kpi"><span>{{ t('acc.rmsN') }}</span><b>{{ fmtKm(accResult.rms.crossKm) }}</b></div>
-                  <div class="acc-kpi"><span>{{ t('acc.rmsTotal') }}</span><b>{{ fmtKm(accResult.rms.totalKm) }}</b></div>
-                  <div class="acc-kpi"><span>{{ t('acc.max') }}</span><b>{{ fmtKm(accResult.rms.maxKm) }}</b></div>
-                  <div class="acc-kpi"><span>{{ t('acc.mean') }}</span><b>{{ fmtKm(accResult.rms.meanKm) }}</b></div>
-                </div>
+                <AccuracyResidualCharts :result="accResult" />
                 <p v-for="(w, i) in accResult.warnings" :key="i" class="acc-warn">{{ w }}</p>
                 <button type="button" class="ver-btn" :disabled="accBusy" @click="downloadAccCsv">{{ t('acc.csv') }}</button>
                 <p class="acc-note">{{ t('acc.note') }}</p>
+                <p class="acc-note">{{ t('acc.chartNote') }}</p>
               </template>
               <p v-else class="ver-none">—</p>
             </template>

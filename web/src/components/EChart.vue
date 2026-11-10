@@ -22,6 +22,10 @@ echarts.use([
 
 const props = withDefaults(defineProps<{ option: EChartsCoreOption; height?: number }>(), { height: 220 })
 
+const emit = defineEmits<{
+  chartClick: [payload: { dataIndex: number; data: unknown }]
+}>()
+
 const el = ref<HTMLDivElement | null>(null)
 const chart = shallowRef<echarts.ECharts | null>(null)
 
@@ -29,10 +33,20 @@ function resize() {
   chart.value?.resize()
 }
 
+type ClickParams = {
+  componentType?: string
+  dataIndex?: number
+  data?: unknown
+}
+
 onMounted(() => {
   if (!el.value) return
   chart.value = echarts.init(el.value, undefined, { renderer: 'canvas' })
   chart.value.setOption(props.option)
+  chart.value.on('click', (params: ClickParams) => {
+    if (params.componentType !== 'series' || params.data == null) return
+    emit('chartClick', { dataIndex: params.dataIndex ?? -1, data: params.data })
+  })
   window.addEventListener('resize', resize)
 })
 

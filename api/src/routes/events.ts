@@ -28,7 +28,13 @@ import { encounterPlane, foster2D } from '../screen/pc.js'
 import { alfano1D, chan2D } from '../screen/pcMethods.js'
 import { norm3, uvwBasis, dot } from '../screen/frames.js'
 import type { CatalogObject, Vec3 } from '../screen/types.js'
-import { levelOfEvent, LEVEL_RANK, type EventLevel, type LevelBasis } from '../screen/levels.js'
+import { levelOfEvent, LEVEL_RANK, PC_YELLOW, type EventLevel, type LevelBasis } from '../screen/levels.js'
+import {
+  ensureScreenSchema,
+  listOrgScreenEvents,
+  countDoneScreenJobs,
+  type OrgScreenEventRow
+} from '../db/screenDb.js'
 import {
   ensureCaSchema,
   getCaDefaults,
@@ -125,6 +131,8 @@ export interface ConjunctionEvent {
   relSpeedKmS: number | null
   sources: string[] // 成员来源去重
   dataSource: 'system_pool' | 'org_credential' // C3：含客户上传成员 → org_credential
+  /** 筛查事件：产出该事件的 screening_jobs.id；前端跳 /screens/{jobId} */
+  jobId?: number
 }
 
 const GAP_MS = 3 * 3600 * 1000
@@ -259,6 +267,102 @@ function findIsland(rows: CdmRow[], a: number, b: number, firstTcaMs: number): C
   return null
 }
 
+
+const SCREEN_ISLAND_MS = 5 * 60 * 1000
+
+function passesWatchFloor(e: ConjunctionEvent): boolean {
+  if (e.pc === null || !Number.isFinite(e.pc)) return true
+  if (e.pc >= PC_YELLOW) return true
+  // 稀释关注：筛查已按 Pc 口径标为黄/橙/红，即使中心 Pc < 1e-7 也保留
+  if (e.levelBasis === 'pc' && LEVEL_RANK[e.level] > 0) return true
+  return false
+}
+
+/** 同一无序星对 + 数分钟内 TCA 视为同一交会，保留最高 Pc，其次最新 job */
+function dedupScreenEvents(rows: OrgScreenEventRow[]): OrgScreenEventRow[] {
+  const groups = new Map<string, OrgScreenEventRow[]>()
+  for (const r of rows) {
+    const a = Math.min(Number(r.primary_norad), Number(r.secondary_norad))
+    const b = Math.max(Number(r.primary_norad), Number(r.secondary_norad))
+    const k = `${a}:${b}`
+    const g = groups.get(k)
+    if (g) g.push(r)
+    else groups.set(k, [r])
+  }
+  const out: OrgScreenEventRow[] = []
+  const pick = (island: OrgScreenEventRow[]): OrgScreenEventRow => {
+    return [...island].sort((x, y) => {
+      const px = x.pc == null ? null : Number(x.pc)
+      const py = y.pc == null ? null : Number(y.pc)
+      const pxOk = px != null && Number.isFinite(px)
+      const pyOk = py != null && Number.isFinite(py)
+      if (pxOk && pyOk && px !== py) return (py as number) - (px as number)
+      if (pxOk && !pyOk) return -1
+      if (!pxOk && pyOk) return 1
+      return Number(y.job_id) - Number(x.job_id)
+    })[0]
+  }
+  for (const items of groups.values()) {
+    items.sort((x, y) => new Date(x.tca).getTime() - new Date(y.tca).getTime())
+    let island: OrgScreenEventRow[] = []
+    const flush = (): void => {
+      if (!island.length) return
+      out.push(pick(island))
+      island = []
+    }
+    for (const it of items) {
+      if (!island.length) {
+        island = [it]
+        continue
+      }
+      const prev = new Date(island[island.length - 1].tca).getTime()
+      const cur = new Date(it.tca).getTime()
+      if (cur - prev > SCREEN_ISLAND_MS) flush()
+      island.push(it)
+    }
+    flush()
+  }
+  return out
+}
+
+function screenRowsToEvents(
+  rows: OrgScreenEventRow[],
+  primarySource: 'tle' | 'ephem' | 'aoe'
+): ConjunctionEvent[] {
+  const events: ConjunctionEvent[] = []
+  for (const e of dedupScreenEvents(rows)) {
+    const pc = e.pc != null && Number.isFinite(Number(e.pc)) ? Number(e.pc) : null
+    const missKm = e.miss_km != null && Number.isFinite(Number(e.miss_km)) ? Number(e.miss_km) : null
+    const pcMax = e.pc_max != null && Number.isFinite(Number(e.pc_max)) ? Number(e.pc_max) : null
+    const graded = levelOfEvent(pc, missKm, pcMax)
+    const stored = String(e.level)
+    const level: EventLevel =
+      stored === 'red' || stored === 'orange' || stored === 'yellow' ? stored : graded.level
+    events.push({
+      key: `scr-${e.job_id}-${e.id}`,
+      jobId: Number(e.job_id),
+      noradA: Number(e.primary_norad),
+      noradB: Number(e.secondary_norad),
+      nameA: e.primary_name || '',
+      nameB: e.secondary_name || '',
+      tca: toIso(e.tca as unknown as Date | string | null),
+      tcaSpanH: 0,
+      cdmCount: e.cdm_id ? 1 : 0,
+      level,
+      levelBasis: graded.basis,
+      pc,
+      pcSource: `screen-${primarySource}`,
+      missKm,
+      relSpeedKmS:
+        e.rel_speed_kms != null && Number.isFinite(Number(e.rel_speed_kms)) ? Number(e.rel_speed_kms) : null,
+      sources: [`screen-${primarySource}`],
+      dataSource: 'system_pool'
+    })
+  }
+  events.sort((x, y) => LEVEL_RANK[y.level] - LEVEL_RANK[x.level] || x.tca.localeCompare(y.tca))
+  return events
+}
+
 /* ------------------------------ 路由 ------------------------------- */
 
 router.use('/events', async (_req, _res, next) => {
@@ -347,22 +451,61 @@ router.post('/events/import', requireAuth, async (req: ScopedRequest, res) => {
 })
 
 /** 事件聚合列表（R0-1 登录可读，C3 按档裁剪）：window=24h|3d|7d|all，level/q 前端过滤即可；
+ *  eventSource=cdm|tle|ephem|aoe（缺省 cdm）。CDM 走 sat_cdm；tle/ephem/aoe 走本组织已完成筛查。
  *  客户上传 CDM（source=customer）仅上传组织可见；all 窗口回看深度按档 system_cdm_days。
- *  平台超管（无所属组织）仅可见系统池行，不跨组织泄露客户上传。
- *  scope=mine 时只返回本组织关注/认领（claim_status=claimed）目标参与的星对。 */
+ *  平台超管（无所属组织）仅可见系统池 CDM，筛查源因无组织而返回空（不跨组织泄露）。
+ *  scope=mine 时只返回本组织关注/认领（claim_status=claimed）目标参与的星对。
+ *  列表过滤 Pc < 1e-7 的事件（无 Pc 仍可按脱靶距离保留）；不删除库内 CDM。 */
 router.get('/events', requireAuth, async (req: ScopedRequest, res) => {
   const org = req.auth?.org ?? null
   const policy = await resolvePoolPolicy(org)
   const { from, to } = windowRange(String(req.query.window ?? ''), policy.cdmDays)
+  const rawSource = String(req.query.eventSource ?? 'cdm').trim().toLowerCase()
+  const eventSource = rawSource || 'cdm'
+  const windowMeta = { from: from.toISOString(), to: to.toISOString() }
+  const scope = String(req.query.scope ?? '')
+
+  if (eventSource === 'tle' || eventSource === 'ephem' || eventSource === 'aoe') {
+    if (!(await ensureScreenSchema())) {
+      res.status(503).json(fail(503, '数据库不可用'))
+      return
+    }
+    if (!org) {
+      res.json(ok({ events: [], hasScreenJobs: false, window: windowMeta, pool: poolBadge(policy) }))
+      return
+    }
+    const jobCount = await countDoneScreenJobs(org.id, eventSource)
+    const rows = await listOrgScreenEvents({
+      orgId: org.id,
+      primarySource: eventSource,
+      from,
+      to,
+      claimedOnly: scope === 'mine'
+    })
+    res.json(
+      ok({
+        events: screenRowsToEvents(rows, eventSource).filter(passesWatchFloor),
+        hasScreenJobs: jobCount > 0,
+        window: windowMeta,
+        pool: poolBadge(policy)
+      })
+    )
+    return
+  }
+
+  if (eventSource !== 'cdm') {
+    res.json(ok({ events: [], hasScreenJobs: false, window: windowMeta, pool: poolBadge(policy) }))
+    return
+  }
+
   // 客户 CDM 组织隔离：登录组织额外可见自己上传的行；超管/无组织只见系统池
   const isoSql = org ? `AND (source <> 'customer' OR org_id = ?)` : `AND source <> 'customer'`
   const params: unknown[] = org ? [from, to, org.id] : [from, to]
   // 只看关注/认领目标：无组织账号（平台超管）没有关注目标，直接返回空列表
-  const scope = String(req.query.scope ?? '')
   let scopeSql = ''
   if (scope === 'mine') {
     if (!org) {
-      res.json(ok({ events: [], window: { from: from.toISOString(), to: to.toISOString() }, pool: poolBadge(policy) }))
+      res.json(ok({ events: [], hasScreenJobs: false, window: windowMeta, pool: poolBadge(policy) }))
       return
     }
     scopeSql = `AND (norad_a IN (SELECT norad_id FROM objects WHERE org_id = ? AND claim_status = 'claimed')
@@ -380,8 +523,9 @@ router.get('/events', requireAuth, async (req: ScopedRequest, res) => {
   )
   res.json(
     ok({
-      events: aggregateEvents(rows),
-      window: { from: from.toISOString(), to: to.toISOString() },
+      events: aggregateEvents(rows).filter(passesWatchFloor),
+      hasScreenJobs: false,
+      window: windowMeta,
       pool: poolBadge(policy)
     })
   )

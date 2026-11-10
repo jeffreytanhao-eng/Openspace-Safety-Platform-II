@@ -1,20 +1,26 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
+import { useRouter } from 'vue-router'
 import { useI18n } from '@/composables/useI18n'
 
 const { t } = useI18n()
 import DataSourceBar from '@/components/DataSourceBar.vue'
-import { useDataSource } from '@/composables/useDataSource'
+import PcTcaChart from '@/components/PcTcaChart.vue'
+import { EVENT_SOURCE_BY_DS, useDataSource, type DataSourceId } from '@/composables/useDataSource'
 import { useAuthStore } from '@/stores/auth'
 import {
+  eventDetailPath,
+  isBelowWatchPc,
   listEvents,
   importCdm,
   type ConjunctionEvent,
   type EventLevel
 } from '@/api/events'
+import type { MessageKey } from '@/i18n/messages'
 
-const { current } = useDataSource()
+const { selected } = useDataSource()
 const auth = useAuthStore()
+const router = useRouter()
 
 const windowTab = ref<'24h' | '3d' | '7d' | 'all'>('3d')
 const scope = ref<'all' | 'mine'>('all')
@@ -25,6 +31,7 @@ const q = ref('')
 const loading = ref(false)
 const error = ref('')
 const allEvents = ref<ConjunctionEvent[]>([])
+const hasScreenJobs = ref(false)
 
 /** 导入弹层 */
 const showImport = ref(false)
@@ -33,15 +40,34 @@ const importing = ref(false)
 const importMsg = ref('')
 const importErr = ref('')
 
+const SHORT_KEY: Record<DataSourceId, MessageKey> = {
+  tle: 'ds.short.tle',
+  'space-track-cdm': 'ds.short.cdm',
+  'ephem-sim': 'ds.short.ephem',
+  'aoe-ephem': 'ds.short.aoe',
+  stargaze: 'ds.short.optical'
+}
+
+const currentShort = computed(() => t(SHORT_KEY[selected.value] || SHORT_KEY['space-track-cdm']))
+
 async function load(): Promise<void> {
+  const src = EVENT_SOURCE_BY_DS[selected.value]
+  if (src == null) {
+    allEvents.value = []
+    hasScreenJobs.value = false
+    error.value = ''
+    return
+  }
   loading.value = true
   error.value = ''
   try {
-    const resp = await listEvents(windowTab.value, scope.value)
+    const resp = await listEvents(windowTab.value, scope.value, src)
     allEvents.value = resp.events ?? []
+    hasScreenJobs.value = Boolean(resp.hasScreenJobs)
   } catch (e) {
     error.value = e instanceof Error ? e.message : String(e)
     allEvents.value = []
+    hasScreenJobs.value = false
   } finally {
     loading.value = false
   }
@@ -50,6 +76,10 @@ async function load(): Promise<void> {
 onMounted(() => {
   void load()
   void auth.init()
+})
+
+watch(selected, () => {
+  void load()
 })
 
 function switchWindow(w: '24h' | '3d' | '7d' | 'all'): void {
@@ -76,7 +106,13 @@ function levelLabel(lv: EventLevel): string {
 }
 
 function srcLabel(s: string): string {
-  return s === 'customer' ? t('conj.src.customer') : t('conj.src.system')
+  if (s === 'customer') return t('conj.src.customer')
+  if (s === 'system') return t('conj.src.system')
+  if (s === 'screen-tle') return t('conj.src.screenTle')
+  if (s === 'screen-ephem') return t('conj.src.screenEphem')
+  if (s === 'screen-aoe') return t('conj.src.screenAoe')
+  if (s === 'screen' || s === 'screening') return t('conj.src.screen')
+  return s
 }
 
 function fmtPc(pc: number | null): string {
@@ -87,6 +123,7 @@ function fmtPc(pc: number | null): string {
 
 const rows = computed(() => {
   const list = allEvents.value.filter((e) => {
+    if (isBelowWatchPc(e)) return false
     if (levelFilter.value !== 'all' && e.level !== levelFilter.value) return false
     const s = q.value.trim().toLowerCase()
     if (!s) return true
@@ -112,6 +149,18 @@ const rows = computed(() => {
   }
   return list
 })
+
+const emptyHint = computed(() => {
+  const src = EVENT_SOURCE_BY_DS[selected.value]
+  if (src === 'tle') return hasScreenJobs.value ? t('conj.empty.screenNone') : t('conj.empty.screenTle')
+  if (src === 'ephem') return hasScreenJobs.value ? t('conj.empty.screenNone') : t('conj.empty.screenEphem')
+  if (src === 'aoe') return hasScreenJobs.value ? t('conj.empty.screenNone') : t('conj.empty.screenAoe')
+  return t('pcTca.empty')
+})
+
+function openEvent(e: ConjunctionEvent): void {
+  void router.push(eventDetailPath(e))
+}
 
 /** 表头点击：同列再次点击切换顺序/倒序，第三次恢复默认（风险优先） */
 function toggleSort(key: 'tca' | 'pc'): void {
@@ -193,12 +242,19 @@ function fmtTca(iso: string): string {
         <button type="button" :class="{ on: levelFilter === 'yellow' }" @click="levelFilter = 'yellow'">{{ t('conj.watch') }}</button>
         <button type="button" :class="{ on: levelFilter === 'low' }" @click="levelFilter = 'low'">{{ t('conj.low') }}</button>
       </div>
-      <span class="hint">Showing {{ rows.length }} / {{ allEvents.length }} · context {{ current.short }}</span>
+      <span class="hint">Showing {{ rows.length }} / {{ allEvents.length }} · context {{ currentShort }}</span>
     </section>
 
     <section v-if="error" class="state error">{{ error }}</section>
     <section v-else-if="loading" class="state">{{ t('obj.loading') }}</section>
-    <section v-else-if="!rows.length" class="state">—</section>
+    <template v-else>
+    <section class="chart-panel">
+      <div class="chart-h">
+        <span class="chart-title">{{ t('pcTca.title') }}</span>
+      </div>
+      <PcTcaChart :events="rows" :height="156" />
+    </section>
+    <section v-if="!rows.length" class="state">{{ emptyHint }}</section>
 
     <section v-else class="table-wrap">
       <table>
@@ -223,7 +279,7 @@ function fmtTca(iso: string): string {
             v-for="e in rows"
             :key="e.key"
             :class="e.level"
-            @click="$router.push(`/conjunctions/${encodeURIComponent(e.key)}`)"
+            @click="openEvent(e)"
           >
             <td>
               <span
@@ -245,6 +301,7 @@ function fmtTca(iso: string): string {
         </tbody>
       </table>
     </section>
+    </template>
 
     <!-- CDM 导入弹层 -->
     <div v-if="showImport" class="modal-mask" @click.self="showImport = false">
@@ -303,10 +360,16 @@ th.sortable { cursor: pointer; user-select: none; }
 th.sortable:hover { color: var(--text); }
 .sarrow { margin-left: 3px; font-size: 10px; opacity: 0.7; }
 .hint { font-size: 11px; color: var(--text-dim); margin-left: auto; }
+.chart-panel {
+  flex: 0 0 auto; background: var(--bg-panel); border: 1px solid var(--border);
+  border-radius: 8px; padding: 6px 12px 4px;
+}
+.chart-h { display: flex; flex-direction: column; gap: 0; margin-bottom: 2px; }
+.chart-title { font-size: 13px; font-weight: 650; color: var(--text); }
 .state {
   flex: 1; min-height: 120px; display: flex; align-items: center; justify-content: center;
   background: var(--bg-panel); border: 1px solid var(--border); border-radius: 8px;
-  color: var(--text-dim); font-size: 12px;
+  color: var(--text-dim); font-size: 12px; text-align: center; padding: 16px 24px;
 }
 .state.error { color: var(--danger); }
 .table-wrap {

@@ -400,6 +400,58 @@ export async function listJobEvents(jobId: number, limit = 200): Promise<ScreenE
   return rows
 }
 
+/** 交会总览：已完成筛查任务产出的事件（按主星源）。 */
+export interface OrgScreenEventRow extends ScreenEventRow {
+  primary_source: string
+}
+
+const ORG_SCREEN_LIST_LIMIT = 5000
+
+export async function countDoneScreenJobs(
+  orgId: number,
+  primarySource: 'tle' | 'ephem' | 'aoe'
+): Promise<number> {
+  const [rows] = await pool.query<Array<RowDataPacket & { n: number }>>(
+    `SELECT COUNT(*) AS n FROM screening_jobs
+      WHERE org_id = ? AND status = 'done' AND primary_source = ?`,
+    [orgId, primarySource]
+  )
+  return Number(rows[0]?.n) || 0
+}
+
+export async function listOrgScreenEvents(input: {
+  orgId: number
+  primarySource: 'tle' | 'ephem' | 'aoe'
+  from: Date
+  to: Date
+  claimedOnly?: boolean
+  limit?: number
+}): Promise<OrgScreenEventRow[]> {
+  const limit = Math.min(ORG_SCREEN_LIST_LIMIT, Math.max(1, input.limit ?? ORG_SCREEN_LIST_LIMIT))
+  const params: unknown[] = [input.orgId, input.orgId, input.primarySource, input.from, input.to]
+  let scopeSql = ''
+  if (input.claimedOnly) {
+    scopeSql = `AND (e.primary_norad IN (SELECT norad_id FROM objects WHERE org_id = ? AND claim_status = 'claimed')
+                  OR e.secondary_norad IN (SELECT norad_id FROM objects WHERE org_id = ? AND claim_status = 'claimed'))`
+    params.push(input.orgId, input.orgId)
+  }
+  const [rows] = await pool.query<Array<RowDataPacket & OrgScreenEventRow>>(
+    `SELECT e.*, j.primary_source AS primary_source
+       FROM conjunction_events e
+       INNER JOIN screening_jobs j ON j.id = e.job_id
+      WHERE e.org_id = ?
+        AND j.org_id = ?
+        AND j.status = 'done'
+        AND j.primary_source = ?
+        AND e.tca IS NOT NULL AND e.tca >= ? AND e.tca <= ?
+        ${scopeSql}
+      ORDER BY e.tca ASC
+      LIMIT ${limit}`,
+    params
+  )
+  return rows
+}
+
 /** 总览（D2）：今日已完成筛查次数；orgId=null 表示平台账号口径（全平台） */
 export async function countScreensToday(orgId: number | null): Promise<number> {
   if (orgId == null) {

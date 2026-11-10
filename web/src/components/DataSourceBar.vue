@@ -10,7 +10,7 @@ const props = withDefaults(
 )
 
 const { t } = useI18n()
-const { selected, current, sources, setSource } = useDataSource()
+const { selected, sources, setSource } = useDataSource()
 
 const LABEL_KEY: Record<DataSourceId, MessageKey> = {
   tle: 'ds.tle',
@@ -26,18 +26,28 @@ const DESC_KEY: Record<DataSourceId, MessageKey> = {
   'aoe-ephem': 'ds.aoeDesc',
   stargaze: 'ds.opticalDesc'
 }
+const SHORT_KEY: Record<DataSourceId, MessageKey> = {
+  tle: 'ds.short.tle',
+  'space-track-cdm': 'ds.short.cdm',
+  'ephem-sim': 'ds.short.ephem',
+  'aoe-ephem': 'ds.short.aoe',
+  stargaze: 'ds.short.optical'
+}
 
 const localized = computed(() =>
   sources.map((s) => ({
     ...s,
     label: t(LABEL_KEY[s.id]),
-    desc: t(DESC_KEY[s.id])
+    short: t(SHORT_KEY[s.id]),
+    desc: s.disabled ? t('ds.unavailable') : t(DESC_KEY[s.id])
   }))
 )
 const currentLoc = computed(() => localized.value.find((d) => d.id === selected.value) || localized.value[0])
 const barLabel = computed(() => props.label ?? t('ds.label'))
 
 function onPick(id: DataSourceId) {
+  const opt = sources.find((s) => s.id === id)
+  if (!opt || opt.disabled) return
   setSource(id)
 }
 </script>
@@ -51,8 +61,9 @@ function onPick(id: DataSourceId) {
         :key="s.id"
         type="button"
         class="seg"
-        :class="{ on: selected === s.id }"
-        :title="s.desc"
+        :class="{ on: selected === s.id, disabled: s.disabled }"
+        :disabled="s.disabled"
+        :title="s.disabled ? t('ds.unavailable') : s.desc"
         @click="onPick(s.id)"
       >
         {{ compact ? s.short : s.label }}
@@ -104,6 +115,17 @@ function onPick(id: DataSourceId) {
   color: var(--text);
   background: var(--accent-soft);
   border-color: rgba(74, 125, 154, 0.45);
+}
+.seg:disabled,
+.seg.disabled {
+  opacity: 0.42;
+  cursor: not-allowed;
+  color: var(--text-dim);
+}
+.seg:disabled:hover,
+.seg.disabled:hover {
+  color: var(--text-dim);
+  border-color: var(--border);
 }
 .ds-hint {
   font-size: 10px;

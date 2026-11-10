@@ -22,6 +22,7 @@ import { EPH_ROOT } from '../ephem/ingest.js'
 import { parseOcmPv, pvAt, type PvState } from '../ephem/parsePv.js'
 import { buildSatrec, propagateJ2000 } from '../screen/coarse.js'
 import type { Vec3 } from '../screen/types.js'
+import { tleSigmaT } from '../screen/covariance.js'
 import fs from 'node:fs'
 import zlib from 'node:zlib'
 import path from 'node:path'
@@ -241,12 +242,18 @@ export interface ComparePoint {
   alongKm: number
   crossKm: number
   distKm: number
+  /** 龄期模型给出的 1σ（km）；仅当至少一端是 TLE/AOE 时存在 */
+  sigmaRadialKm?: number
+  sigmaAlongKm?: number
+  sigmaCrossKm?: number
 }
 
 export interface CompareResult {
   norad: string
-  a: { kind: CompareKind; id: string; label: string; epochMs: number }
-  b: { kind: CompareKind; id: string; label: string; epochMs: number }
+  a: { kind: CompareKind; id: string; label: string; epochMs: number; startMs: number }
+  b: { kind: CompareKind; id: string; label: string; epochMs: number; startMs: number }
+  /** tle-age：沿用筛查的根数龄期 σ 模型；无 TLE/AOE 端时为 null */
+  covarianceModel: 'tle-age' | null
   overlap: { startMs: number; stopMs: number }
   samples: number
   rms: {
@@ -264,6 +271,22 @@ export interface CompareResult {
 function dot3(a: Vec3, b: Vec3): number {
   return a[0] * b[0] + a[1] * b[1] + a[2] * b[2]
 }
+
+/** 与 screen/covariance.ts 的 TLE/AOE 龄期模型一致：σ_T 分段线性，σ_R = σ_N = max(0.2, 0.1·σ_T) km */
+function ageSigmas(epochMs: number, tMs: number): { sigmaRadialKm: number; sigmaAlongKm: number; sigmaCrossKm: number } {
+  const ageHours = Math.max(0, (tMs - epochMs) / 3_600_000)
+  const sigmaT = tleSigmaT(ageHours)
+  const sigmaR = Math.max(0.2, 0.1 * sigmaT)
+  return { sigmaRadialKm: sigmaR, sigmaAlongKm: sigmaT, sigmaCrossKm: sigmaR }
+}
+
+function rootEpochMs(a: LoadedSource, b: LoadedSource): number | null {
+  const roots = [a, b].filter((s) => s.kind === 'tle' || s.kind === 'aoe')
+  if (!roots.length) return null
+  const picked = roots.reduce((p, s) => (s.epochMs <= p.epochMs ? s : p))
+  return picked.epochMs > 0 ? picked.epochMs : null
+}
+
 
 /** 两源对比主入口；maxPoints 缺省 240（曲线/CSV 都不需要更密） */
 export async function compareSources(
@@ -300,6 +323,9 @@ export async function compareSources(
       times.push(startMs + ((stopMs - startMs) * i) / (cap - 1))
     }
   }
+
+  const covEpoch = rootEpochMs(a, b)
+  const covarianceModel: 'tle-age' | null = covEpoch === null ? null : 'tle-age'
 
   const points: ComparePoint[] = []
   let sumR = 0
@@ -338,7 +364,9 @@ export async function compareSources(
     const along = dot3([dx, dy, dz], tv)
     const cross = dot3([dx, dy, dz], w)
 
-    points.push({ tMs: t, radialKm: radial, alongKm: along, crossKm: cross, distKm: dist })
+    const point: ComparePoint = { tMs: t, radialKm: radial, alongKm: along, crossKm: cross, distKm: dist }
+    if (covEpoch !== null) Object.assign(point, ageSigmas(covEpoch, t))
+    points.push(point)
     sumR += radial * radial
     sumA += along * along
     sumC += cross * cross
@@ -354,8 +382,9 @@ export async function compareSources(
 
   return {
     norad: String(noradNum),
-    a: { kind: a.kind, id: aDesc.id || a.kind, label: a.label, epochMs: a.epochMs },
-    b: { kind: b.kind, id: bDesc.id || b.kind, label: b.label, epochMs: b.epochMs },
+    a: { kind: a.kind, id: aDesc.id || a.kind, label: a.label, epochMs: a.epochMs, startMs: a.windowStartMs },
+    b: { kind: b.kind, id: bDesc.id || b.kind, label: b.label, epochMs: b.epochMs, startMs: b.windowStartMs },
+    covarianceModel,
     overlap: { startMs, stopMs },
     samples: n,
     rms: {

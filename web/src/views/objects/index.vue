@@ -39,6 +39,7 @@ import {
 } from '@/api/maneuvers'
 import { AuthError } from '@/api/auth'
 import { getCaProfiles, type CaParams } from '@/api/ca'
+import PcTcaChart from '@/components/PcTcaChart.vue'
 
 const { t } = useI18n()
 
@@ -1157,6 +1158,12 @@ function lvLabel(v?: string | null): string {
               <span class="bt">{{ t('obj.sec.recentConj') }}</span>
               <span v-if="relWorst" class="lv" :class="`lv-${relWorst}`">{{ lvLabel(relWorst) }}</span>
             </div>
+            <PcTcaChart
+              v-if="!relLoading && relEvents.length"
+              class="rel-chart"
+              :events="relEvents"
+              :height="200"
+            />
             <p v-if="relLoading" class="empty">{{ t('obj.loading') }}</p>
             <ul v-else-if="relEvents.length" class="rel-list">
               <li v-for="e in relEvents" :key="e.key">
@@ -1420,6 +1427,7 @@ tbody tr:hover { background: var(--bg-hover); }
   position: absolute; inset: 0; background: rgba(0, 0, 0, 0.35);
   display: flex; justify-content: flex-end; z-index: 40;
 }
+.rel-chart { margin: 8px 0 10px; }
 .drawer-panel {
   width: min(440px, 100%); height: 100%; background: var(--bg-panel);
   border-left: 1px solid var(--border); padding: 14px; overflow: auto;

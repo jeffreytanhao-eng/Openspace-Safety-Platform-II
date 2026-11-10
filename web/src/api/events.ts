@@ -34,6 +34,31 @@ export interface ConjunctionEvent {
   sources: string[]
   /** C3：含客户上传成员 → org_credential，否则 system_pool */
   dataSource?: 'system_pool' | 'org_credential'
+  /** 筛查事件：产出该事件的 screening_jobs.id；详情跳转到 /screens/{jobId} */
+  jobId?: number
+}
+
+/** 交会列表数据源：CDM 走 sat_cdm；tle/ephem/aoe 走本组织已完成筛查任务 */
+export type EventSource = 'cdm' | 'tle' | 'ephem' | 'aoe'
+
+/** 关注阈值（与 api/src/screen/levels.ts PC_YELLOW 一致）；低于此且非稀释关注档的事件不进总览 */
+export const PC_WATCH = 1e-7
+
+export function isBelowWatchPc(e: Pick<ConjunctionEvent, 'pc' | 'level' | 'levelBasis'>): boolean {
+  if (e.pc === null || !Number.isFinite(e.pc)) return false
+  if (e.pc >= PC_WATCH) return false
+  // 稀释关注：中心 Pc 低于 1e-7 但已按 Pc 口径标为黄/橙/红，保留
+  if (e.levelBasis === 'pc' && (e.level === 'yellow' || e.level === 'orange' || e.level === 'red')) {
+    return false
+  }
+  return true
+}
+
+export function eventDetailPath(e: Pick<ConjunctionEvent, 'key' | 'jobId'>): string {
+  if (e.jobId != null && Number.isFinite(e.jobId) && e.jobId > 0) {
+    return `/screens/${e.jobId}`
+  }
+  return `/conjunctions/${encodeURIComponent(e.key)}`
 }
 
 /** 成员 CDM（不含原文） */
@@ -72,11 +97,12 @@ export interface TleProfile {
 /** scope=all 全部交会；mine 仅本组织关注/认领目标参与的星对 */
 export function listEvents(
   window: '24h' | '3d' | '7d' | 'all',
-  scope: 'all' | 'mine' = 'all'
-): Promise<{ events: ConjunctionEvent[] }> {
-  return cgiCall<{ events: ConjunctionEvent[] }>({
+  scope: 'all' | 'mine' = 'all',
+  eventSource: EventSource = 'cdm'
+): Promise<{ events: ConjunctionEvent[]; hasScreenJobs?: boolean }> {
+  return cgiCall<{ events: ConjunctionEvent[]; hasScreenJobs?: boolean }>({
     method: 'GET',
-    url: `/events?window=${encodeURIComponent(window)}&scope=${encodeURIComponent(scope)}`,
+    url: `/events?window=${encodeURIComponent(window)}&scope=${encodeURIComponent(scope)}&eventSource=${encodeURIComponent(eventSource)}`,
     headers: authHeaders()
   })
 }

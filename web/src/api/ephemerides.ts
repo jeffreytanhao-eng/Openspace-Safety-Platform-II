@@ -339,12 +339,16 @@ export interface AccuracyPoint {
   alongKm: number
   crossKm: number
   distKm: number
+  sigmaRadialKm?: number
+  sigmaAlongKm?: number
+  sigmaCrossKm?: number
 }
 
 export interface AccuracyCompareResult {
   norad: string
-  a: { kind: AccuracyKind; id: string; label: string; epochMs: number }
-  b: { kind: AccuracyKind; id: string; label: string; epochMs: number }
+  a: { kind: AccuracyKind; id: string; label: string; epochMs: number; startMs?: number }
+  b: { kind: AccuracyKind; id: string; label: string; epochMs: number; startMs?: number }
+  covarianceModel?: 'tle-age' | null
   overlap: { startMs: number; stopMs: number }
   samples: number
   rms: {
