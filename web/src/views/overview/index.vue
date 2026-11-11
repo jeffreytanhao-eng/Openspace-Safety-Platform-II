@@ -6,6 +6,7 @@ import { getOverviewSummary, type OverviewSummary, type OwnedCdmItem } from '@/a
 import { listObjects, type ManagedObject } from '@/api/objects'
 import { listEvents } from '@/api/events'
 import { AuthError } from '@/api/auth'
+import { saveReportDocument } from '@/api/documents'
 
 const router = useRouter()
 const { t } = useI18n()
@@ -140,6 +141,7 @@ type ReportKind = 'summary' | 'events'
 const reportKind = ref<ReportKind>('summary')
 const reportWindow = ref<'24h' | '3d' | '7d'>('7d')
 const reportBusy = ref(false)
+const reportAction = ref<'download' | 'save' | ''>('')
 const reportMsg = ref('')
 const canExport = computed(() => !!summary.value?.org)
 
@@ -158,60 +160,83 @@ function downloadText(name: string, mime: string, text: string) {
 const csvCell = (v: unknown) => `"${(v == null ? '' : String(v)).replace(/"/g, '""')}"`
 const stamp = () => new Date().toISOString().slice(0, 19).replace(/[:T]/g, '')
 
+async function buildReportText(): Promise<{ text: string; mime: string } | null> {
+  const s = summary.value
+  if (reportKind.value === 'summary') {
+    const rows: string[][] = [
+      ['KPI', 'value', 'unit'],
+      ['owned_objects', String(s?.owned ?? ''), 'objects'],
+      ['cdm_next_24h', String(s?.cdm.orgNext24h ?? 0), 'CDM'],
+      ['cdm_next_7d', String(s?.cdm.orgNext7d ?? 0), 'CDM'],
+      ['screens_today', String(s?.screensToday ?? 0), 'runs'],
+      ['ephemeris_fresh', `${s?.ephem.fresh ?? 0}/${s?.ephem.total ?? 0}`, 'files']
+    ]
+    return { mime: 'text/csv', text: '\uFEFF' + rows.map((r) => r.map(csvCell).join(',')).join('\r\n') }
+  }
+  const { events: list } = await listEvents(reportWindow.value)
+  if (!list.length) {
+    reportMsg.value = t('ov.reportEmpty')
+    return null
+  }
+  const rows: string[][] = [
+    ['key', 'level', 'tca', 'norad_a', 'name_a', 'norad_b', 'name_b', 'pc', 'miss_km', 'rel_speed_kms', 'cdm_count'],
+    ...list.map((e) => [
+      e.key,
+      e.level,
+      e.tca,
+      String(e.noradA),
+      e.nameA,
+      String(e.noradB),
+      e.nameB,
+      e.pc == null ? '' : String(e.pc),
+      e.missKm == null ? '' : String(e.missKm),
+      e.relSpeedKmS == null ? '' : String(e.relSpeedKmS),
+      String(e.cdmCount)
+    ])
+  ]
+  return { mime: 'text/csv', text: '\uFEFF' + rows.map((r) => r.map(csvCell).join(',')).join('\r\n') }
+}
+
 async function exportReport() {
   if (!canExport.value || reportBusy.value) return
   reportBusy.value = true
+  reportAction.value = 'download'
   reportMsg.value = ''
   try {
-    const s = summary.value
-    if (reportKind.value === 'summary') {
-      const rows: string[][] = [
-        ['KPI', 'value', 'unit'],
-        ['owned_objects', String(s?.owned ?? ''), 'objects'],
-        ['cdm_next_24h', String(s?.cdm.orgNext24h ?? 0), 'CDM'],
-        ['cdm_next_7d', String(s?.cdm.orgNext7d ?? 0), 'CDM'],
-        ['screens_today', String(s?.screensToday ?? 0), 'runs'],
-        ['ephemeris_fresh', `${s?.ephem.fresh ?? 0}/${s?.ephem.total ?? 0}`, 'files']
-      ]
-      downloadText(
-        `osp-org-summary-${stamp()}.csv`,
-        'text/csv',
-        '\uFEFF' + rows.map((r) => r.map(csvCell).join(',')).join('\r\n')
-      )
-      reportMsg.value = t('ov.reportDone')
-    } else if (reportKind.value === 'events') {
-      const { events: list } = await listEvents(reportWindow.value)
-      if (!list.length) {
-        reportMsg.value = t('ov.reportEmpty')
-        return
-      }
-      const rows: string[][] = [
-        ['key', 'level', 'tca', 'norad_a', 'name_a', 'norad_b', 'name_b', 'pc', 'miss_km', 'rel_speed_kms', 'cdm_count'],
-        ...list.map((e) => [
-          e.key,
-          e.level,
-          e.tca,
-          String(e.noradA),
-          e.nameA,
-          String(e.noradB),
-          e.nameB,
-          e.pc == null ? '' : String(e.pc),
-          e.missKm == null ? '' : String(e.missKm),
-          e.relSpeedKmS == null ? '' : String(e.relSpeedKmS),
-          String(e.cdmCount)
-        ])
-      ]
-      downloadText(
-        `osp-events-${reportWindow.value}-${stamp()}.csv`,
-        'text/csv',
-        '\uFEFF' + rows.map((r) => r.map(csvCell).join(',')).join('\r\n')
-      )
-      reportMsg.value = t('ov.reportDone')
-    }
+    const built = await buildReportText()
+    if (!built) return
+    const name = reportKind.value === 'summary'
+      ? `osp-org-summary-${stamp()}.csv`
+      : `osp-events-${reportWindow.value}-${stamp()}.csv`
+    downloadText(name, built.mime, built.text)
+    reportMsg.value = t('ov.reportDone')
   } catch (e) {
     reportMsg.value = e instanceof Error ? e.message : String(e)
   } finally {
     reportBusy.value = false
+    reportAction.value = ''
+  }
+}
+
+async function saveReport() {
+  if (!canExport.value || reportBusy.value) return
+  reportBusy.value = true
+  reportAction.value = 'save'
+  reportMsg.value = ''
+  try {
+    const built = await buildReportText()
+    if (!built) return
+    const saved = await saveReportDocument({
+      kind: reportKind.value,
+      window: reportKind.value === 'events' ? reportWindow.value : undefined,
+      content: built.text
+    })
+    reportMsg.value = `${t('ov.reportSaved')} · ${saved.title}`
+  } catch (e) {
+    reportMsg.value = e instanceof Error ? e.message : String(e)
+  } finally {
+    reportBusy.value = false
+    reportAction.value = ''
   }
 }
 </script>
@@ -309,8 +334,11 @@ async function exportReport() {
                 <option value="3d">3d</option>
                 <option value="7d">7d</option>
               </select>
+              <button type="button" class="ghost" :disabled="!canExport || reportBusy" @click="saveReport">
+                {{ reportAction === 'save' ? t('ov.reportSaving') : t('ov.reportSave') }}
+              </button>
               <button type="button" class="ghost" :disabled="!canExport || reportBusy" @click="exportReport">
-                {{ reportBusy ? t('ov.reportBusy') : t('ov.reportDownload') }}
+                {{ reportAction === 'download' ? t('ov.reportBusy') : t('ov.reportDownload') }}
               </button>
             </div>
             <div v-if="!canExport" class="empty">{{ t('ov.reportNoOrg') }}</div>

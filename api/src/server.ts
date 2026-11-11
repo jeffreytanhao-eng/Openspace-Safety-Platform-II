@@ -11,6 +11,7 @@ import { ensureFetchSchema } from './db/fetchDb.js'
 import { startDailyFetchScheduler, parseDailyCron } from './jobs/dailyFetch.js'
 import { startStarlinkPullScheduler } from './services/pullStarlink.js'
 import { startDailyReportScheduler } from './jobs/dailyReport.js'
+import { ensureUserDocsSchema } from './db/userDocsDb.js'
 
 const app = createApp()
 
@@ -27,6 +28,7 @@ app.listen(config.port, config.listenHost, () => {
     // 档位默认限额：001_init.sql 建表后表内为空，必须启动即 seed，
     // 否则新组织在访问运营页面前配额为 unlimited（objects_max/screen_day 等失效）
     if (!(await ensurePlanSchema())) console.warn('[plan] schema not ready (db down?)')
+    if (!(await ensureUserDocsSchema())) console.warn('[docs] schema not ready (db down?)')
     // 日更批次/版本化快照表（Epic C1）+ 每日调度器
     if (await ensureFetchSchema()) startDailyFetchScheduler()
     else console.warn('[fetch] schema not ready, daily-fetch scheduler not started')

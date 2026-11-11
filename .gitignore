@@ -32,3 +32,7 @@ Thumbs.db
 Temp/
 osp-starlink-src/
 api/_probe*.mjs
+
+# 用户文档运行期存储（上传正文按 UUID 落盘，不入库）
+data/user-documents/*
+!data/user-documents/.gitkeep

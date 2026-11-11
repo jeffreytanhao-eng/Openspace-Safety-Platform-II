@@ -20,6 +20,7 @@ import {
   type AccuracyCompareResult,
   type AccuracyKind
 } from '@/api/ephemerides'
+import { saveEphemerisDocument } from '@/api/documents'
 import AccuracyResidualCharts from '@/components/AccuracyResidualCharts.vue'
 import { parseEphemeris } from '@/views/situation/ephem/parse'
 import {
@@ -534,6 +535,27 @@ function viewRawFile() {
   window.open(`/cgi/ephemerides/file?path=${encodeURIComponent(f)}`, '_blank', 'noopener')
 }
 
+const saveDocsBusy = ref(false)
+const saveDocsMsg = ref('')
+
+async function saveToMyDocs() {
+  const row = selected.value
+  if (!row?.file) {
+    saveDocsMsg.value = t('eph.saveDocsNoFile')
+    return
+  }
+  saveDocsBusy.value = true
+  saveDocsMsg.value = ''
+  try {
+    const saved = await saveEphemerisDocument({ path: row.file, name: row.name })
+    saveDocsMsg.value = t('eph.saveDocsDone', { name: saved.title })
+  } catch (e) {
+    saveDocsMsg.value = e instanceof Error ? e.message : String(e)
+  } finally {
+    saveDocsBusy.value = false
+  }
+}
+
 async function openInSituation() {
   const row = selected.value
   if (!row) return
@@ -748,6 +770,7 @@ async function fetchVersions() {
 watch(selected, () => {
   verPage.value = 1
   verMsg.value = ''
+  saveDocsMsg.value = ''
   void fetchVersions()
   void fetchAccSources()
 })
@@ -1063,7 +1086,7 @@ onMounted(() => {
             </div>
             <div><dt>{{ t('eph.updated') }}</dt><dd>{{ selected.updatedAt }}</dd></div>
             <div class="span-all"><dt>来源</dt><dd>{{ selected.originator || '—' }}<span v-if="selected.ownerUserId" class="tg up" :title="selected.uploadedBy || ''">{{ t('eph.userUploaded') }}<template v-if="selected.uploadedBy"> · {{ selected.uploadedBy }}</template></span></dd></div>
-            <div class="span-all"><dt>{{ t('eph.file') }}</dt><dd class="mono file-row"><span>{{ selected.file || '本机导入（IndexedDB）' }}</span><button v-if="selected.file" type="button" class="view-raw" :title="t('eph.viewRawTip')" @click="viewRawFile">{{ t('eph.viewRaw') }}</button></dd></div>
+            <div class="span-all"><dt>{{ t('eph.file') }}</dt><dd class="mono file-row"><span>{{ selected.file || '本机导入（IndexedDB）' }}</span><span class="file-actions"><button v-if="selected.file" type="button" class="view-raw" :disabled="saveDocsBusy" @click="saveToMyDocs">{{ saveDocsBusy ? t('eph.saveDocsBusy') : t('eph.saveToDocs') }}</button><button v-if="selected.file" type="button" class="view-raw" :title="t('eph.viewRawTip')" @click="viewRawFile">{{ t('eph.viewRaw') }}</button></span></dd><p v-if="saveDocsMsg" class="save-docs-msg">{{ saveDocsMsg }}</p></div>
           </dl>
 
           <div class="man-block">
@@ -1328,7 +1351,9 @@ h1 { margin: 0; font-size: 16px; font-weight: 650; }
 .kv dd.ok { color: var(--ok); }
 /* 文件行：路径文本 + 右侧「查看原文件」小按钮 */
 .kv dd.file-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
-.kv dd.file-row span { flex: 1; min-width: 0; }
+.kv dd.file-row > span:first-child { flex: 1; min-width: 0; }
+.file-actions { display: flex; align-items: center; gap: 8px; flex: none; }
+.save-docs-msg { margin: 6px 0 0; font-size: 11px; font-weight: 500; color: var(--text-muted); }
 .view-raw {
   flex: none;
   padding: 3px 10px;

@@ -90,4 +90,6 @@ systemctl status openspace-api --no-pager
 
 ---
 
+后续「我的文档」实现说明见 `docs/31-Openspace-Safety-我的文档-2026-11-11.md`。
+
 **文档结束（30 · 2026-11-11）**

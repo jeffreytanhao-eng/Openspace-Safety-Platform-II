@@ -19,7 +19,7 @@ const router = createRouter({
         { path: 'ephemerides', name: 'ephemerides', component: () => import('@/views/ephemerides/index.vue'), meta: { title: 'Ephemerides' } },
         { path: 'simulation', redirect: '/situation' },
         { path: 'ai', name: 'ai', component: () => import('@/views/ai/index.vue'), meta: { title: 'AI' } },
-        { path: 'docs', name: 'docs', component: () => import('@/views/docs/index.vue'), meta: { title: 'Docs' } },
+        { path: 'docs', name: 'docs', component: () => import('@/views/docs/index.vue'), meta: { title: 'My Documents', requiresAuth: true } },
         { path: 'situation/:type?', name: 'situation', component: () => import('@/views/situation/index.vue'), meta: { title: 'Situation' } }
       ]
     },
