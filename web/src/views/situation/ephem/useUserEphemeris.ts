@@ -656,7 +656,7 @@ function normName(s: string): string {
  * 内置样本文件名里的数字是 Starlink 生产编号（如 STARLINK-38123），不是编目号，
  * 直接拿它查 TLE 会命中毫无关系的在轨物体；上传文件通常带真实 NORAD，按 NORAD 命中。
  */
-async function resolveCatalogNorad(set: EphemSet): Promise<{ norad: number; byName: boolean } | null> {
+export async function resolveCatalogNorad(set: EphemSet): Promise<{ norad: number; byName: boolean } | null> {
   const cat = await loadCatalog()
   const name = normName(set.name)
   if (name) {

@@ -44,6 +44,13 @@ function medianStep(set: EphemSet): number {
   return diffs[Math.floor(diffs.length / 2)]
 }
 
+/** True when norad is just the STARLINK-##### production / serial suffix, not a catalog NORAD. */
+function noradLooksLikeStarlinkProduction(name: string | undefined, norad: number | undefined): boolean {
+  if (!norad) return false
+  const m = /STARLINK-(\d+)/i.exec(name || '')
+  return !!(m && Number(m[1]) === Number(norad))
+}
+
 /**
  * 星历统一入口：识别格式 → 调对应解析器 → 补齐 id / stepSec / 名称与 NORAD 兜底。
  */
@@ -64,7 +71,9 @@ export function parseEphemeris(
   }
 
   const nameHint = hint?.name?.trim() || extractNameFromFileName(hint?.fileName)
-  const noradHint = hint?.norad ?? extractNoradFromFileName(hint?.fileName)
+  // 调用方显式传入的编号（服务端列表 / 内置样本）已与编目交叉验证，优先于文件名兜底
+  const listNorad = hint?.norad
+  const noradHint = listNorad ?? extractNoradFromFileName(hint?.fileName)
 
   let res: ParseResult
   if (fmt === 'itc') {
@@ -80,6 +89,10 @@ export function parseEphemeris(
 
   if (nameHint && (!set.name || set.name === 'UNKNOWN')) set.name = nameHint
   if (!set.norad && noradHint) set.norad = noradHint
+  else if (listNorad && noradLooksLikeStarlinkProduction(set.name, set.norad) && listNorad !== set.norad) {
+    // OCM 常把 STARLINK-38123 的生产号写成 norad，不能压过列表里的编目号 66955
+    set.norad = listNorad
+  }
 
   const step = medianStep(set)
   if (step > 0) set.stepSec = step

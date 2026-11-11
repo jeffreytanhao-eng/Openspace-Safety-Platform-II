@@ -6,6 +6,7 @@ import { useAuthStore } from '@/stores/auth'
 import {
   listLocalEphemerides,
   fetchEphemerisText,
+  fetchEphemerisVersionContent,
   uploadEphemerisFile,
   patchEphemerisVisibility,
   deleteEphemeris,
@@ -528,11 +529,72 @@ function attachMansFromIndex(set: EphemSet, epochs: { t: number; dvMps?: number;
   return set
 }
 
+function previewAuthError(e: unknown, action: string): string {
+  const raw = e instanceof Error ? e.message : String(e)
+  if (/\b401\b/.test(raw) || /未登录/.test(raw)) {
+    return `${action}失败：未登录或登录已过期，请重新登录后再试`
+  }
+  if (/\b403\b/.test(raw) || /无权|没有权限|权限不足/.test(raw)) {
+    return `${action}失败：没有访问权限`
+  }
+  if (/\b404\b/.test(raw)) {
+    return `${action}失败：文件不存在`
+  }
+  return `${action}失败：${raw}`
+}
+
+function fileNameFromPath(path: string): string {
+  const base = path.split(/[\\/]/).pop() || 'ephemeris.txt'
+  return base.replace(/\.gz$/i, '') || 'ephemeris.txt'
+}
+
+/** 把已认证拉取的明文放到新标签预览；同步打开空白页避免拦截，仍被拦则改为下载 */
+function openPreviewText(text: string, filename: string, tab: Window | null): 'tab' | 'download' {
+  const blob = new Blob([text], { type: 'text/plain;charset=utf-8' })
+  const url = URL.createObjectURL(blob)
+  const laterRevoke = () => { setTimeout(() => URL.revokeObjectURL(url), 60_000) }
+  if (tab && !tab.closed) {
+    try { tab.opener = null } catch { /* ignore */ }
+    tab.location.replace(url)
+    laterRevoke()
+    return 'tab'
+  }
+  const fallback = window.open(url, '_blank')
+  if (fallback) {
+    try { fallback.opener = null } catch { /* ignore */ }
+    laterRevoke()
+    return 'tab'
+  }
+  const a = document.createElement('a')
+  a.href = url
+  a.download = filename
+  a.rel = 'noopener'
+  document.body.appendChild(a)
+  a.click()
+  a.remove()
+  laterRevoke()
+  return 'download'
+}
+
 function viewRawFile() {
   const f = selected.value?.file
   if (!f) return
-  // 新标签打开服务端解压后的明文（.gz 自动 gunzip，text/plain 浏览器直接渲染；浏览器沙箱无法调起系统默认应用）
-  window.open(`/cgi/ephemerides/file?path=${encodeURIComponent(f)}`, '_blank', 'noopener')
+  // 接口需登录：同步打开空白标签，拉完带凭证的明文后再换成 blob: 预览（token 不进 URL）
+  const tab = window.open('', '_blank')
+  saveDocsMsg.value = ''
+  void (async () => {
+    try {
+      const body = await fetchEphemerisText(f)
+      const name = fileNameFromPath(f)
+      const how = openPreviewText(body, name, tab)
+      if (how === 'download') {
+        saveDocsMsg.value = `浏览器拦截了新标签，已改为下载「${name}」`
+      }
+    } catch (e) {
+      if (tab && !tab.closed) tab.close()
+      saveDocsMsg.value = previewAuthError(e, '查看原文件')
+    }
+  })()
 }
 
 const saveDocsBusy = ref(false)
@@ -779,9 +841,23 @@ watch(verPage, () => {
   void fetchVersions()
 })
 
-/** 新标签回放该版本全文（服务端 gunzip，与「查看原文件」同模式） */
+/** 新标签回放该版本全文（服务端 gunzip，与「查看原文件」同模式；带登录凭证，token 不进 URL） */
 function viewVer(v: EphVersion) {
-  window.open(`/cgi/ephemerides/versions/${v.id}/content`, '_blank', 'noopener')
+  const tab = window.open('', '_blank')
+  verMsg.value = ''
+  void (async () => {
+    try {
+      const body = await fetchEphemerisVersionContent(v.id)
+      const name = `ephemeris-version-${v.id}.txt`
+      const how = openPreviewText(body, name, tab)
+      if (how === 'download') {
+        verMsg.value = `浏览器拦截了新标签，已改为下载「${name}」`
+      }
+    } catch (e) {
+      if (tab && !tab.closed) tab.close()
+      verMsg.value = previewAuthError(e, '查看版本')
+    }
+  })()
 }
 
 /** 软删版本（行与文件均保留；需登录，未登录时报 401 提示） */

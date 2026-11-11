@@ -404,38 +404,42 @@ function pcSourceLabel(e: ScreenEvent): string {
                     : '使用你在设置页保存的自定义参数组，本页窗长/筛查距离/HBR 输入将不再生效。'
                 }}
               </div>
-              <label class="field">
-                <span class="lbl">{{ t('scr.window') }}</span>
-                <OspNumberInput v-model="windowH" min="1" max="168" step="1" :disabled="paramsSource !== 'default'" />
-              </label>
-              <label class="field">
-                <span class="lbl">{{ t('scr.missMax') }}</span>
-                <OspNumberInput v-model="missMaxKm" min="0.5" max="50" step="0.5" :disabled="paramsSource !== 'default'" />
-              </label>
-              <label class="field">
-                <span class="lbl">{{ t('scr.hbr') }}</span>
-                <OspNumberInput v-model="hbrM" min="1" max="1000" step="1" :disabled="paramsSource !== 'default'" />
-              </label>
+              <div class="form-row form-row-3">
+                <label class="field">
+                  <span class="lbl">{{ t('scr.window') }}</span>
+                  <OspNumberInput v-model="windowH" min="1" max="168" step="1" :disabled="paramsSource !== 'default'" />
+                </label>
+                <label class="field">
+                  <span class="lbl">{{ t('scr.missMax') }}</span>
+                  <OspNumberInput v-model="missMaxKm" min="0.5" max="50" step="0.5" :disabled="paramsSource !== 'default'" />
+                </label>
+                <label class="field">
+                  <span class="lbl">{{ t('scr.hbr') }}</span>
+                  <OspNumberInput v-model="hbrM" min="1" max="1000" step="1" :disabled="paramsSource !== 'default'" />
+                </label>
+              </div>
 
               <!-- R2-8：数据源（一单一源；主星 tle|ephem|aoe，副星 catalog|cdm|aoe） -->
-              <label class="field">
-                <span class="lbl">{{ t('scr.primarySource') }}</span>
-                <select v-model="primarySource">
-                  <option value="tle">{{ t('scr.srcTle') }}</option>
-                  <option value="ephem" :disabled="!ephemBoundCount">{{ t('scr.srcEphem') }}</option>
-                  <option value="aoe">{{ t('scr.srcAoe') }}</option>
-                </select>
-              </label>
+              <div class="form-row form-row-2">
+                <label class="field">
+                  <span class="lbl">{{ t('scr.primarySource') }}</span>
+                  <select v-model="primarySource">
+                    <option value="tle">{{ t('scr.srcTle') }}</option>
+                    <option value="ephem" :disabled="!ephemBoundCount">{{ t('scr.srcEphem') }}</option>
+                    <option value="aoe">{{ t('scr.srcAoe') }}</option>
+                  </select>
+                </label>
+                <label class="field">
+                  <span class="lbl">{{ t('scr.secondarySource') }}</span>
+                  <select v-model="secondarySource">
+                    <option value="catalog">{{ t('scr.srcCatalog') }}</option>
+                    <option value="cdm">{{ t('scr.srcCdm') }}</option>
+                    <option value="aoe">{{ t('scr.srcAoeCatalog') }}</option>
+                  </select>
+                </label>
+              </div>
               <div v-if="primarySource === 'ephem'" class="pick-hint">{{ t('scr.ephemHint') }}</div>
               <div v-if="primarySource === 'aoe'" class="pick-hint">{{ t('scr.aoePrimaryHint') }}</div>
-              <label class="field">
-                <span class="lbl">{{ t('scr.secondarySource') }}</span>
-                <select v-model="secondarySource">
-                  <option value="catalog">{{ t('scr.srcCatalog') }}</option>
-                  <option value="cdm">{{ t('scr.srcCdm') }}</option>
-                  <option value="aoe">{{ t('scr.srcAoeCatalog') }}</option>
-                </select>
-              </label>
               <div v-if="secondarySource === 'cdm'" class="pick-hint">{{ t('scr.cdmHint') }}</div>
               <div v-if="secondarySource === 'aoe'" class="pick-hint">{{ t('scr.aoeSecondaryHint') }}</div>
 
@@ -701,6 +705,20 @@ function pcSourceLabel(e: ScreenEvent): string {
   flex-direction: column;
   gap: 8px;
 }
+.form-row {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+}
+.form-row-3 { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.form-row-2 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.form-row .field { min-width: 0; }
+.form-row .osp-num {
+  min-width: 0;
+  width: 100%;
+  align-self: stretch;
+}
+.form-row .field select { width: 100%; min-width: 0; }
 .field { display: flex; flex-direction: column; gap: 3px; }
 .lbl { font-size: 10px; color: var(--text-dim); }
 .field input {

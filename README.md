@@ -16,6 +16,7 @@
 | 交会 | `/conjunctions` | 即将交会总览（Pc–TCA 散点 + 事件列表），支持 CDM / TLE / Ephem / AOE 四种数据源、TCA 与 Pc 排序、范围筛选 |
 | 筛查 | `/screens`、`/screens/:id` | 发起主星 × 副星碰撞筛查任务，查看进度、事件与取消 |
 | 星历 | `/ephemerides` | ITC / OCM 星历上传、分页检索、版本归档、OCM × TLE/AOE 精度比对 |
+| 我的文档 | `/docs` | 文档库：上传 / 正文预览 / 删除（需登录） |
 | 态势 | `/situation` | Cesium + Three 双引擎三维地球，卫星、轨道、碎片与交会云 |
 | 账号 | `/account` | 组织信息、档位与配额、成员管理、升级申请 |
 | 设置 | `/settings` | 认领/关注参数、Pc 算法、通知设置 |
@@ -61,14 +62,15 @@ Nginx ── 静态资源 ──▶ /opt/openspace/web/dist（Vue 打包产物�
 │  ├─ src/api/                   # 前端接口封装
 │  └─ public/                    # Cesium 运行时、离线底图、模型、登录背景
 ├─ api/                          # 后端
-│  ├─ src/routes/                # /cgi 路由（auth、objects、events、screens、ephemerides、admin…）
+│  ├─ src/routes/                # /cgi 路由（auth、objects、events、screens、ephemerides、documents、admin…）
 │  ├─ src/services/              # 业务实现（筛查、精度比对、CDM 解析、日更、StarLink 拉取…）
 │  ├─ src/jobs/                  # 定时任务（dailyFetch、screening、dailyReport）
-│  ├─ src/db/                    # 数据访问层（orgDb、planDb、screenDb、starlinkDb…）
+│  ├─ src/db/                    # 数据访问层（orgDb、planDb、screenDb、starlinkDb、userDocsDb…）
 │  ├─ src/middleware/plan.ts     # 配额校验
 │  └─ sql/                       # 建表脚本
-├─ deploy/                       # Nginx 配置、Dockerfile（可选容器部署）
-└─ docs/                         # 阶段与变更文档（01～29）
+├─ data/user-documents/          # 用户文档正文落盘（运行期数据，Git 仅保留目录）
+├─ deploy/                       # Nginx 配置、加固脚本与 systemd drop-in、Dockerfile（可选容器部署）
+└─ docs/                         # 阶段与变更文档（01～31）+ user-manual 使用手册
 ```
 
 ### 2.3 运行形态
@@ -192,6 +194,18 @@ Nginx ── 静态资源 ──▶ /opt/openspace/web/dist（Vue 打包产物�
 - 邮件通知（nodemailer）：按组织配置推送高风险交会与筛查完成提醒。
 - 总览页「报告下载」：组织日报摘要（CSV）、关注事件包（CSV）。
 
+### 4.8 我的文档
+
+- 每个组织的文档库：`/cgi/documents` 列表 / 上传 / 正文 / 删除，按 `org_id` 隔离。
+- 正文按 UUID 落盘 `data/user-documents/`（运行期存储，不入 Git，仓库仅保留目录）；元数据在 `user_documents` 表（`002_user_documents.sql` 惰性建表）。
+
+### 4.9 安全加固基线
+
+- 星历全系接口（`/cgi/ephemerides` 列表 / 文件 / 元数据 / 版本）需登录，版本做可见性校验，列表不再下发服务器路径；元数据缺失时文件接口返回 503。
+- `/cgi/sat_tle/constellation/cache-clear` 仅平台超管。
+- API 默认监听 `127.0.0.1`（可用 `API_LISTEN` 覆盖，生产禁止 `0.0.0.0`）。
+- 主机侧：systemd 以 `openspace` 用户运行（drop-in `deploy/openspace-api.service.d/hardening.conf`），`/opt/openspace` 权限收紧由加固脚本统一设置；nginx 可选片段 `deploy/nginx/hardening-snippets.conf` 拒绝 `.bak` / `.sql` / `.env` 下载。
+
 ---
 
 ## 5. 本地开发
@@ -236,7 +250,7 @@ curl http://127.0.0.1:1235/cgi/health
 
 | 组件 | 配置 |
 | --- | --- |
-| API | systemd `openspace-api`，`PORT=1234`，工作目录 `/opt/openspace/api` |
+| API | systemd `openspace-api`，`PORT=1234`，监听 `127.0.0.1`，以 `openspace` 用户运行（drop-in），工作目录 `/opt/openspace/api` |
 | 数据库 | MySQL 8 本机，库 `openspace` |
 | Web | Nginx 托管 `/opt/openspace/web/dist`，`/cgi` 反代 `127.0.0.1:1234` |
 | 域名 | `https://www.openspace-safety.com/` |
@@ -255,8 +269,15 @@ scp Temp/deploy.tar.gz root@<server>:/tmp/
 
 # 服务器
 tar -xzf /tmp/deploy.tar.gz -C /opt/openspace
-cd /opt/openspace/api && npm ci && systemctl restart openspace-api
+cd /opt/openspace/api && npm ci
+
+# ★ 固定流程：先跑加固脚本，再重启服务（脚本可重复执行，不改 .env 内容）
+bash /opt/openspace/deploy/scripts/apply-openspace-host-hardening.sh
+systemctl restart openspace-api
+systemctl status openspace-api --no-pager
 ```
+
+验收：未带 token 访问 `/cgi/ephemerides` 应返回 401；`ss -lntp | grep 1234` 应显示 `127.0.0.1:1234` 且进程用户为 `openspace`。
 
 注意事项：
 
@@ -264,6 +285,7 @@ cd /opt/openspace/api && npm ci && systemctl restart openspace-api
 - 解压为叠加语义：仓库中删除或改名的文件不会自动从服务器消失，需手动清理旧路径。
 - 发布前先备份 `/opt/openspace` 的 `api` 与 `web/dist`，便于回退。
 - 数据库表多为惰性建表，新库首次访问对应接口时自动创建。
+- 不要 `chmod -R 777 /opt/openspace`、不要把监听改回 `0.0.0.0`、不要删除 systemd drop-in、不要开启 ufw（安全组挡 1234/3306 即可）。
 
 `deploy/` 下的 Docker Compose 为早期可选方案，生产未使用。
 
@@ -283,8 +305,9 @@ cd /opt/openspace/api && npm ci && systemctl restart openspace-api
 | GET | `/cgi/events` | 交会事件（`window`、`scope`、`eventSource`） |
 | GET/POST | `/cgi/objects` | 编目检索、认领 / 关注 |
 | GET/POST | `/cgi/screens` | 筛查任务列表 / 创建 |
-| GET | `/cgi/ephemerides` | 星历分页、文件与版本 |
+| GET | `/cgi/ephemerides` | 星历分页、文件与版本（需登录） |
 | POST | `/cgi/ephemerides/accuracy/compare` | 精度比对 |
+| GET/POST | `/cgi/documents` | 我的文档：列表 / 上传 / 正文 / 删除 |
 | GET | `/cgi/overview/summary` | 总览统计 |
 | GET/POST | `/cgi/admin/*` | 超管组织、配额、审批、审计、数据运维 |
 
@@ -295,6 +318,7 @@ cd /opt/openspace/api && npm ci && systemctl restart openspace-api
 | 变量 | 默认值 | 说明 |
 | --- | --- | --- |
 | `PORT` | `1234` | 监听端口 |
+| `API_LISTEN` | `127.0.0.1` | 监听地址（生产禁止设为 `0.0.0.0`） |
 | `DB_HOST` / `DB_PORT` | `127.0.0.1` / `3306` | MySQL 地址 |
 | `DB_USER` / `DB_PASSWORD` / `DB_NAME` | `root` / 空 / `openspace_safety` | 数据库账号与库名（生产为 `openspace`） |
 | `JWT_SECRET` | 空 | JWT 签名密钥，必填 |
@@ -331,5 +355,6 @@ cd /opt/openspace/api && npm ci && systemctl restart openspace-api
 
 ## 10. 相关文档
 
-- `docs/`：01 系统设计与三维外壳、各阶段 Epic 文档、21～29 变更说明与部署记录
-- `本地测试账号.md`：测试账号与档位
+- `docs/`：01 系统设计与三维外壳、各阶段 Epic 文档、21～31 变更说明与部署记录（30 安全加固与部署注意、31 我的文档）
+- `docs/user-manual/开源太空安全平台使用手册.html`：面向最终用户的使用手册（含截图）
+- `本地测试账号.md`：测试账号与档位（不入 Git）

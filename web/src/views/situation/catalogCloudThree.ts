@@ -220,7 +220,7 @@ export function consShowOf(name: string): boolean {
 /** Old BaseScene mask: type chips + consShowMap + stationFocus + selection channels. */
 function entryShown(e: CloudEntry): boolean {
   // 星历激活目标由 ephemOrbitThree 通道渲染（3D 模型 + 轨道），编目云一律排除防重复渲染
-  if (ephemNorad != null && e.norad === ephemNorad) return false
+  if (hiddenByActiveEphem(e)) return false
   if (e.norad === selectedNorad) return true
   if (stationFocus != null && e.norad === stationFocus) return true
   const t = e.type
@@ -1828,7 +1828,7 @@ export function updateCatalogCloud(whenMs: number, camera?: THREE.Camera | null)
       if (e.pi < 0 || !e.rec) continue
       if (!entryShown(e)) continue
       if (e.norad === selectedNorad || (stationFocus != null && e.norad === stationFocus)) continue
-      if (ephemNorad != null && e.norad === ephemNorad) continue
+      if (hiddenByActiveEphem(e)) continue
       writeOne(e, whenMs, tmp, true)
       spent++
     }
@@ -1894,15 +1894,40 @@ export function ensureCloudSelected(item: CatalogTle, whenMs = Date.now()): void
 }
 
 /**
- * 星历激活目标 NORAD：该目标由星历通道（ephemOrbitThree）渲染 3D 模型与轨道，
+ * 星历激活目标：该目标由星历通道（ephemOrbitThree）渲染 3D 模型与轨道，
  * 编目云芯片 / 模型实例必须排除，否则大屏出现两个重复目标。
+ * 排除口径：编目 NORAD（可能与星链生产号不同）+ 规范化后的精确名称（STARLINK-38123）。
  */
 let ephemNorad: number | null = null
+let ephemName: string | null = null
 
-export function setEphemNorad(norad: number | null, whenMs = Date.now()): void {
-  const n = norad != null && Number.isFinite(Number(norad)) ? Number(norad) : null
-  if (n === ephemNorad) return
+function usableEphemName(name?: string | null): string | null {
+  const n = String(name || '').trim().toUpperCase().replace(/\s+/g, ' ')
+  if (!n || n === 'UNKNOWN') return null
+  return n
+}
+
+function hiddenByActiveEphem(e: CloudEntry): boolean {
+  if (ephemNorad != null && e.norad === ephemNorad) return true
+  if (ephemName && usableEphemName(e.name) === ephemName) return true
+  return false
+}
+
+/**
+ * @param norad 编目 NORAD；传入生产号时仍靠 name 精确匹配隐藏同一物理目标
+ * @param name  省略时：norad 为 null 则同时清空名称，否则保留已有名称
+ */
+export function setEphemNorad(norad: number | null, whenMs = Date.now(), name?: string | null): void {
+  let n = norad != null && Number.isFinite(Number(norad)) ? Number(norad) : null
+  const nm = name === undefined ? (n == null ? null : ephemName) : usableEphemName(name)
+  // 云已加载时，用精确名称回查编目号，避免 STARLINK-38123 对不上 66955
+  if (nm) {
+    const hit = entries.find((e) => usableEphemName(e.name) === nm)
+    if (hit) n = hit.norad
+  }
+  if (n === ephemNorad && nm === ephemName) return
   ephemNorad = n
+  ephemName = nm
   if (!cloudGate()) {
     if (positions) positions.fill(0)
     bufDirty = true

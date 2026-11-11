@@ -62,14 +62,18 @@ interface ApiWrap<T> {
   data: T | null
 }
 
-async function getJson<T>(url: string): Promise<T> {
-  // 带 token 调用（/cgi/ephemerides 要求登录态；公开访问场景带 token 亦无副作用）
-  let headers: Record<string, string> = {}
+function authHeaders(): Record<string, string> {
+  const headers: Record<string, string> = {}
   try {
     const t = localStorage.getItem('osp-token')
-    if (t) headers = { Authorization: `Bearer ${t}` }
+    if (t) headers.Authorization = `Bearer ${t}`
   } catch { /* ignore */ }
-  const res = await fetch(url, { headers })
+  return headers
+}
+
+async function getJson<T>(url: string): Promise<T> {
+  // 带 token 调用（/cgi/ephemerides 要求登录态；公开访问场景带 token 亦无副作用）
+  const res = await fetch(url, { headers: authHeaders() })
   if (!res.ok) throw new Error(`HTTP ${res.status}`)
   const body = (await res.json()) as ApiWrap<T>
   if (body.code !== 0 || body.data == null) throw new Error(body.msg || 'api error')
@@ -100,7 +104,9 @@ export function getEphemerisMeta(id: string) {
 
 /** 拉取解压后的星历文本（ITC / OCM） */
 export async function fetchEphemerisText(filePath: string): Promise<string> {
-  const res = await fetch(`/cgi/ephemerides/file?path=${encodeURIComponent(filePath)}`)
+  const res = await fetch(`/cgi/ephemerides/file?path=${encodeURIComponent(filePath)}`, {
+    headers: authHeaders()
+  })
   if (!res.ok) throw new Error(`HTTP ${res.status}`)
   const ct = res.headers.get('content-type') || ''
   if (ct.includes('application/json')) {
@@ -293,7 +299,9 @@ export function listEphemerisVersions(params?: {
 
 /** 按版本回放星历全文（gunzip 文本，审计/比对用） */
 export async function fetchEphemerisVersionContent(id: number): Promise<string> {
-  const res = await fetch(`/cgi/ephemerides/versions/${id}/content`)
+  const res = await fetch(`/cgi/ephemerides/versions/${id}/content`, {
+    headers: authHeaders()
+  })
   if (!res.ok) throw new Error(`HTTP ${res.status}`)
   const ct = res.headers.get('content-type') || ''
   if (ct.includes('application/json')) {

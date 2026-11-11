@@ -73,6 +73,7 @@ import {
 
 const emit = defineEmits<{ (e: 'viewport-ready'): void; (e: 'event-pick', key: string | null): void }>()
 import type { EphemSet, EphemState } from './ephem/types'
+import { resolveCatalogNorad } from './ephem/useUserEphemeris'
 import { useCatalog, type CatalogTle } from '@/composables/useCatalog'
 import {
   EARTH_R,
@@ -919,11 +920,25 @@ function flushUserEphem() {
   }
 }
 
+/** 丢弃过期的编目 NORAD 回查（快速切换 / 取消激活星历） */
+let ephemHideToken = 0
+
 function showEphemOrbit(set: EphemSet | null, opts?: { track?: boolean }) {
   const setChanged = lastEphemSet !== set
   lastEphemSet = set
-  // 同步给编目云：星历激活目标由 ephem 通道渲染，编目芯片/模型实例排除该 NORAD 防重复
-  setEphemNorad(set ? Number(set.norad) || null : null)
+  // 同步给编目云：星历激活目标由 ephem 通道渲染，编目芯片/模型实例排除同一物理目标
+  const token = ++ephemHideToken
+  if (!set) {
+    setEphemNorad(null, Date.now(), null)
+  } else {
+    // 先按当前编号 + 精确名称隐藏（名称可立刻挡住生产号对不上编目号的重复目标）
+    setEphemNorad(Number(set.norad) || null, Date.now(), set.name)
+    void resolveCatalogNorad(set).then((hit) => {
+      if (token !== ephemHideToken) return
+      if (!hit) return
+      setEphemNorad(hit.norad, Date.now(), set.name)
+    })
+  }
   const scene = threeScene
   if (!scene) {
     if (!set) stopEphemTrack()
