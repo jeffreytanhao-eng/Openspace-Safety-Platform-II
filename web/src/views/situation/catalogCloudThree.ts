@@ -1520,6 +1520,7 @@ function scheduleFill(whenMs: number, gen: number): void {
   touchGeometry(true)
   if (first >= n) {
     fillBusy = false
+    rewriteModelMatrices()
     return
   }
   fillBusy = true
@@ -1538,6 +1539,9 @@ function scheduleFill(whenMs: number, gen: number): void {
     } else {
       touchGeometry(true)
       fillBusy = false
+      // Fill writes the remaining e.sx; rebuild instance matrices now.
+      // Otherwise PAYLOAD batches (no tumble) may skip a rewrite and stay at the geocenter.
+      rewriteModelMatrices()
     }
   }
   requestAnimationFrame(step)
@@ -1582,6 +1586,7 @@ let lastNearWallMs = 0
  * Preferred first-paint: constellation snapshot coords (server already SGP4'd).
  * No tle_lines, no client satrec batch.
  */
+
 export function initCatalogCloudFromSnapshot(
   scene: THREE.Scene,
   cloud: CloudPoint[],
@@ -1670,7 +1675,7 @@ export function initCatalogCloudFromSnapshot(
       vx: p.vx, vy: p.vy, vz: p.vz,
       tMs: snapTMs,
       pi: i,
-      sx: 0, sy: 0, sz: 0
+      sx: p.x * KM_TO_SCENE, sy: p.z * KM_TO_SCENE, sz: -p.y * KM_TO_SCENE
     }
   })
   entries = built
