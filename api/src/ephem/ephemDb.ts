@@ -370,6 +370,18 @@ export async function getRowBySourceNameDb(sourceName: string): Promise<EphemRow
   return rows.length ? rowToEphemRow(rows[0]) : null
 }
 
+/** 按 NORAD + 格式取当前星历行（版本可见性校验用） */
+export async function getRowByNoradFormatDb(norad: string, format: string): Promise<EphemRow | null> {
+  const fmt = format === 'OCM' ? 'OCM' : 'ITC'
+  const [rows] = await pool.query<DbRow[]>('SELECT * FROM `ephemeris` WHERE norad = ? AND format = ? LIMIT 1', [norad, fmt])
+  return rows.length ? rowToEphemRow(rows[0]) : null
+}
+
+export async function listRowsByNoradDb(norad: string): Promise<EphemRow[]> {
+  const [rows] = await pool.query<DbRow[]>('SELECT * FROM `ephemeris` WHERE norad = ?', [norad])
+  return rows.map(rowToEphemRow)
+}
+
 /** 行键集合（norad|format，供前端与 IndexedDB 本机行去重；按可见性过滤） */
 export async function listAllKeysDb(viewer?: EphemViewer | null): Promise<string[]> {
   const where: string[] = []

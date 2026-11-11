@@ -27,3 +27,8 @@ Thumbs.db
 
 # 参考仓库（仅本地对照，不参与构建）
 .reference/
+
+# 本地临时 / 调试产物
+Temp/
+osp-starlink-src/
+api/_probe*.mjs

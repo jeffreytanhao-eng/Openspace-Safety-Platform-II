@@ -1,4 +1,4 @@
-﻿﻿﻿﻿﻿﻿/**
+/**
  * Old Openspace-Safety-Platform public sat_tle routes
  * (reconstructed from frontend sat_public.ts + server.jsc string/SQL hints).
  * Mounted at /cgi/sat_tle/* — no bytenode runtime.
@@ -16,6 +16,7 @@ import {
   clearConstellationCache
 } from '../services/constellationSnapshot.js'
 import { requireAuth } from './auth.js'
+import { requireSuperAdmin } from './admin.js'
 import { PLAN_FORBIDDEN } from '../middleware/plan.js'
 import { getVisibleNorads, poolBadge, resolvePoolPolicy, type PoolPolicy } from '../services/systemPool.js'
 
@@ -128,7 +129,7 @@ router.get('/detail/:noradId', requireAuth, async (req, res) => {
 })
 
 /** Dev/ops: drop in-process snapshot cache */
-router.post('/constellation/cache-clear', (_req, res) => {
+router.post('/constellation/cache-clear', requireAuth, requireSuperAdmin, (_req, res) => {
   clearConstellationCache()
   res.json(ok({ cleared: true }))
 })

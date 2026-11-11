@@ -9,6 +9,8 @@ function num(value: string | undefined, fallback: number): number {
 /** 后端运行配置：全部来自环境变量（.env / docker compose） */
 export const config = {
   port: num(process.env.PORT, 1234),
+  /** API 监听地址。默认仅本机，由 nginx 反代；不要改回 0.0.0.0（安全组失效时会把 API 暴露到公网） */
+  listenHost: (process.env.API_LISTEN || '127.0.0.1').trim() || '127.0.0.1',
   db: {
     host: process.env.DB_HOST || '127.0.0.1',
     port: num(process.env.DB_PORT, 3306),

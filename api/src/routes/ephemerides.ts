@@ -2,9 +2,7 @@ import express, { Router, type Request, type Response, type NextFunction } from 
 import fs from 'node:fs'
 import path from 'node:path'
 import zlib from 'node:zlib'
-import jwt from 'jsonwebtoken'
 import { ok, fail } from '../utils/response.js'
-import { config } from '../config.js'
 import {
   ephemDbUp,
   listRowsDb,
@@ -12,6 +10,8 @@ import {
   getRowDb,
   getRowByFileDb,
   getRowBySourceNameDb,
+  getRowByNoradFormatDb,
+  listRowsByNoradDb,
   listAllKeysDb,
   toListItem,
   listVersionsDb,
@@ -30,31 +30,39 @@ import { requireSuperAdmin } from './admin.js'
 import { isOrgFlagEnabled } from '../db/planDb.js'
 import { quotaExceeded } from '../middleware/plan.js'
 import { getOwnerClaim } from '../db/objectsDb.js'
-import { findUserById, findOrgById, isVipUser } from '../db/orgDb.js'
 
 const router = Router()
 
-/**
- * 可选身份（第 6 项可见性过滤）：有效 token → { userId, superAdmin, vip }；无 token / 失效 → null（匿名）。
- * 仅供公开接口按可见性裁剪数据，不拒绝请求。
- */
-async function tryAuthViewer(req: Request): Promise<EphemViewer | null> {
-  const header = req.headers.authorization || ''
-  const token = header.startsWith('Bearer ') ? header.slice(7) : ''
-  if (!token) return null
-  try {
-    const payload = jwt.verify(token, config.jwtSecret) as { uid?: number; role?: string }
-    const uid = Number(payload.uid)
-    if (!Number.isFinite(uid) || uid <= 0) return null
-    const superAdmin = payload.role === 'platform_super_admin'
-    if (superAdmin) return { userId: uid, superAdmin: true, vip: true }
-    const user = await findUserById(uid)
-    if (!user || user.status !== 'active') return null
-    const org = user.org_id ? await findOrgById(user.org_id) : null
-    return { userId: uid, superAdmin: false, vip: isVipUser(user, org) }
-  } catch {
-    return null
+async function assertCanViewNoradFormat(
+  viewer: EphemViewer,
+  norad: string,
+  format: string | undefined,
+  res: Response
+): Promise<boolean> {
+  if (format === 'ITC' || format === 'OCM') {
+    const row = await getRowByNoradFormatDb(norad, format)
+    if (!row) {
+      if (viewer.superAdmin) return true
+      res.status(404).json(fail(404, '未找到该星历'))
+      return false
+    }
+    if (!canViewEphemeris(row, viewer)) {
+      res.status(403).json(fail(403, '该星历为业主私有或仅 VIP 可见，无权访问'))
+      return false
+    }
+    return true
   }
+  const rows = await listRowsByNoradDb(norad)
+  if (!rows.length) {
+    if (viewer.superAdmin) return true
+    res.status(404).json(fail(404, '未找到该星历'))
+    return false
+  }
+  if (!rows.some((row) => canViewEphemeris(row, viewer))) {
+    res.status(403).json(fail(403, '该星历为业主私有或仅 VIP 可见，无权访问'))
+    return false
+  }
+  return true
 }
 
 /** index.json 回退模式的 visibility 归一（未知值按 public 处理） */
@@ -123,7 +131,7 @@ function pagedFromIndex(items: IndexItem[], q: { format?: string; q?: string; pa
 }
 
 /** GET /cgi/ephemerides — 星历列表（支持分页 / 格式 / 关键词；DB 不可用回退 index.json） */
-router.get('/ephemerides', async (req: Request, res: Response) => {
+router.get('/ephemerides', requireAuth, async (req: Request, res: Response) => {
   const q = {
     format: req.query.format ? String(req.query.format) : undefined,
     q: req.query.q ? String(req.query.q) : undefined,
@@ -133,7 +141,7 @@ router.get('/ephemerides', async (req: Request, res: Response) => {
   const paged = q.page != null
   const wantKeys = req.query.keys === '1'
   // 第 6 项：私有星历仅上传业主与超管可见；VIP 星历仅 VIP 账号可见
-  const viewer = await tryAuthViewer(req)
+  const viewer = viewerFromAuth(req)
 
   if (await ephemDbUp()) {
     try {
@@ -142,7 +150,6 @@ router.get('/ephemerides', async (req: Request, res: Response) => {
         const size = Math.min(Math.max(q.size || 20, 1), 500)
         const data: Record<string, unknown> = {
           root: 'data/ephemerides',
-          resolvedRoot: EPH_ROOT,
           generatedAt: new Date().toISOString(),
           source: 'db',
           items: rows.map(toListItem),
@@ -160,7 +167,6 @@ router.get('/ephemerides', async (req: Request, res: Response) => {
       res.json(
         ok({
           root: 'data/ephemerides',
-          resolvedRoot: EPH_ROOT,
           generatedAt: new Date().toISOString(),
           source: 'db',
           items: rows.map(toListItem),
@@ -175,7 +181,7 @@ router.get('/ephemerides', async (req: Request, res: Response) => {
 
   const idx = readIndexFile()
   if (!idx) {
-    res.status(404).json(fail(404, `星历目录未初始化：${EPH_ROOT}`))
+    res.status(404).json(fail(404, '星历目录未初始化'))
     return
   }
   // index.json 快照同样按可见性裁剪（私有 / VIP 星历对外不可见）
@@ -193,7 +199,6 @@ router.get('/ephemerides', async (req: Request, res: Response) => {
     res.json(
       ok({
         root: 'data/ephemerides',
-        resolvedRoot: EPH_ROOT,
         generatedAt: idx.generatedAt,
         source: 'file',
         items: p.slice,
@@ -209,7 +214,6 @@ router.get('/ephemerides', async (req: Request, res: Response) => {
   res.json(
     ok({
       root: 'data/ephemerides',
-      resolvedRoot: EPH_ROOT,
       generatedAt: idx.generatedAt,
       source: 'file',
       items: visibleItems
@@ -222,23 +226,24 @@ router.get('/ephemerides', async (req: Request, res: Response) => {
  * Returns gunzipped text (Content-Type: text/plain) for preview / situation ingest.
  * Optional ?download=1 keeps Content-Disposition attachment of the .gz.
  */
-router.get('/ephemerides/file', async (req: Request, res: Response) => {
+router.get('/ephemerides/file', requireAuth, async (req: Request, res: Response) => {
   const rel = String(req.query.path || '')
   const full = safeResolve(rel)
   if (!full || !fs.existsSync(full)) {
     res.status(404).json(fail(404, '文件不存在'))
     return
   }
-  // 第 6 项：私有 / VIP 星历文件仅对应可见用户与超管可读
+  const viewer = viewerFromAuth(req)
   if (await ephemDbUp()) {
     try {
       const row = await getRowByFileDb(rel.replace(/\\/g, '/'))
-      if (row && !canViewEphemeris(row, await tryAuthViewer(req))) {
+      if (row && !canViewEphemeris(row, viewer)) {
         res.status(403).json(fail(403, '该星历为业主私有或仅 VIP 可见，无权访问'))
         return
       }
     } catch {
-      /* 元数据查询失败不阻断读取（历史行为优先） */
+      res.status(503).json(fail(503, '星历元数据查询失败，无法校验权限'))
+      return
     }
   }
   try {
@@ -261,8 +266,8 @@ router.get('/ephemerides/file', async (req: Request, res: Response) => {
 })
 
 /** GET /cgi/ephemerides/meta/:id — one row by id（DB 优先，回退 index.json） */
-router.get('/ephemerides/meta/:id', async (req: Request, res: Response) => {
-  const viewer = await tryAuthViewer(req)
+router.get('/ephemerides/meta/:id', requireAuth, async (req: Request, res: Response) => {
+  const viewer = viewerFromAuth(req)
   if (await ephemDbUp()) {
     try {
       const row = await getRowDb(req.params.id)
@@ -489,17 +494,25 @@ router.post('/ephemerides/rebuild', requireAuth, requireSuperAdmin, async (req: 
  * GET /cgi/ephemerides/versions?norad=&format=&page=&size=&includeDeleted=1
  * 版本历史分页（append 账本；默认只列未软删，includeDeleted=1 连同软删行一并返回）
  */
-router.get('/ephemerides/versions', async (req: Request, res: Response) => {
+router.get('/ephemerides/versions', requireAuth, async (req: Request, res: Response) => {
   if (!(await ephemDbUp())) {
     res.status(503).json(fail(503, '数据库不可用：版本归档需要 MySQL'))
     return
   }
   try {
+    const viewer = viewerFromAuth(req)
+    const norad = req.query.norad ? String(req.query.norad) : undefined
+    const format = req.query.format ? String(req.query.format) : undefined
+    if (!norad && !viewer.superAdmin) {
+      res.status(400).json(fail(400, '请指定 norad'))
+      return
+    }
+    if (norad && !(await assertCanViewNoradFormat(viewer, norad, format, res))) return
     const size = Math.min(Math.max(Number(req.query.size) || 20, 1), 200)
     const page = Math.max(Number(req.query.page) || 1, 1)
     const { total, rows } = await listVersionsDb({
-      norad: req.query.norad ? String(req.query.norad) : undefined,
-      format: req.query.format ? String(req.query.format) : undefined,
+      norad,
+      format,
       page,
       size,
       includeDeleted: req.query.includeDeleted === '1' || req.query.includeDeleted === 'true'
@@ -519,7 +532,7 @@ router.get('/ephemerides/versions', async (req: Request, res: Response) => {
 })
 
 /** GET /cgi/ephemerides/versions/:id/content — 按版本回放星历全文（gunzip 文本，审计/比对用） */
-router.get('/ephemerides/versions/:id/content', async (req: Request, res: Response) => {
+router.get('/ephemerides/versions/:id/content', requireAuth, async (req: Request, res: Response) => {
   if (!(await ephemDbUp())) {
     res.status(503).json(fail(503, '数据库不可用：版本归档需要 MySQL'))
     return
@@ -530,6 +543,7 @@ router.get('/ephemerides/versions/:id/content', async (req: Request, res: Respon
       res.status(404).json(fail(404, '版本不存在'))
       return
     }
+    if (!(await assertCanViewNoradFormat(viewerFromAuth(req), ver.norad, ver.format, res))) return
     const full = safeResolve(ver.file)
     if (!full || !fs.existsSync(full)) {
       res.status(404).json(fail(404, '版本文件缺失'))

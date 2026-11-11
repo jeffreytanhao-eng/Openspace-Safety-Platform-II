@@ -14,8 +14,8 @@ import { startDailyReportScheduler } from './jobs/dailyReport.js'
 
 const app = createApp()
 
-app.listen(config.port, '0.0.0.0', () => {
-  console.log(`[api] listening on http://0.0.0.0:${config.port}`)
+app.listen(config.port, config.listenHost, () => {
+  console.log(`[api] listening on http://${config.listenHost}:${config.port}`)
   // 启动时探测一次数据库：失败只提示，不阻塞服务
   void pingDb().then(async (up) => {
     console.log(`[api] database: ${up ? 'up' : 'down'}`)
