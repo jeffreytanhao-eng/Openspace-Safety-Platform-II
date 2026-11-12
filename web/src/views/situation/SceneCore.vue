@@ -47,6 +47,8 @@ import {
   upgradeConsRecsFromTles,
   prewarmCatalogModels,
   setEphemNorad,
+  hasCatalogCloudEntry,
+  upsertSelectedCatalogItem,
 } from './catalogCloudThree'
 import {
   setEphemOrbit,
@@ -567,7 +569,7 @@ async function paintFromSnapshot(types: string[]) {
       getStationFocus()
     )
     if (seq !== paintSeq) return
-    if (!r.plotted && !want.length && !getStationFocus()) {
+    if (!r.plotted && !want.length && !getStationFocus() && getCloudSelectedNorad() == null) {
       // Truly empty — clear filters
       setCloudTypeFilter([], simMs)
     }
@@ -661,15 +663,35 @@ async function showConsOrbit(name: string) {
   return { on }
 }
 
-function selectCatalogItem(item: CatalogTle | null) {
+async function selectCatalogItem(item: CatalogTle | null) {
   if (!item) {
     stopCatalogTrack()
     setCloudSelection(null, simMs)
     return
   }
+  // Selection first: halo/name can appear immediately, and the snapshot
+  // filter includes this NORAD even when type chips are off.
   ensureCloudSelected(item, simMs)
   // 拉近 + 跟踪 + 呼吸光环 + 名称（与星历选中一致，t201u）
   // 空间站沿用卡片中文名（pickStation 会同时 emit select，避免标签被 TLE 英文名回写）
+  startCatalogTrack(item, stationName(item.norad_id))
+  if (!threeScene || !cesiumActive) return
+  const norad = Number(item.norad_id)
+  if (!hasCatalogCloudEntry(norad)) {
+    const { cloudList, loadConstellation } = useCatalog()
+    try {
+      if (!cloudList.value.length) await loadConstellation()
+    } catch (e) {
+      console.warn('[situation] catalog load for locate', e)
+    }
+    if (disposed || !threeScene) return
+    await paintFromSnapshot(lastFilterTypes)
+    if (disposed || !threeScene) return
+  }
+  // Attach TLE, rebuild the orbit, and mount a custom 3D model. If the
+  // snapshot still lacks this NORAD (chips off / not in the pool), inject a
+  // single-entry cloud — never leave the pick as a halo-only / point substitute.
+  upsertSelectedCatalogItem(threeScene, item, simMs)
   startCatalogTrack(item, stationName(item.norad_id))
 }
 
@@ -963,8 +985,8 @@ function showEphemOrbit(set: EphemSet | null, opts?: { track?: boolean }) {
 }
 
 /**
- * 「机动卡片」定位：停卫星跟随（与当前位置解耦），相机对准琥珀 MAN 块中点；
- * 不改仿真时刻——保持真实时间，卫星无需位于斑块中。idx=null 取消高亮与标签。
+ * 「机动卡片」定位：停卫星跟随（与当前位置解耦），相机对准琥珀 MAN 块中点并高亮。
+ * 仿真时刻由页面 onLocateMan 跳到 t0（不在此函数内改时间、不自动播放）。idx=null 取消高亮与标签。
  * TRAJ 窗口外的段（如已完成）无琥珀块 → 用二体推进近似位置定位，仅相机+标签。
  */
 function focusEphemManIndex(idx: number | null, labelText?: string): boolean {

@@ -1686,7 +1686,8 @@ export function initCatalogCloudFromSnapshot(
   assignModelKeys()
   void buildModelInstances()
   scheduleFill(snapTMs, gen)
-  clearOrbitLines()
+  if (selectedNorad != null || consOrbitOn || stationFocus != null) rebuildOrbits(snapTMs)
+  else clearOrbitLines()
   console.info(
     '[situation] three cloud snapshot',
     {
@@ -2146,6 +2147,65 @@ export function clearCatalogCloud(scene?: THREE.Scene | null): void {
   group = null
   orbitGroup = null
   attachedScene = null
+}
+
+/** True when this NORAD already has a slot in the painted catalog cloud (model batches + orbit). */
+export function hasCatalogCloudEntry(norad: number): boolean {
+  const n = Number(norad)
+  return Number.isFinite(n) && entries.some((e) => e.norad === n)
+}
+
+function entryFromTle(item: CatalogTle, whenMs: number): CloudEntry | null {
+  const rec = makeRec(item)
+  if (!rec) return null
+  const tk = tokensOf([], item.object_name)
+  const fe: CloudEntry = {
+    norad: Number(item.norad_id),
+    type: normalizeObjectType(item.object_type),
+    name: item.object_name || '',
+    isStarlink: isStarlinkName(item.object_name),
+    cons: [],
+    toks: tk.toks,
+    nameTok: tk.nameTok,
+    nameRaw: tk.nameRaw,
+    item,
+    rec,
+    x: 0, y: 0, z: 0, vx: 0, vy: 0, vz: 0,
+    tMs: whenMs,
+    pi: -1,
+    sx: 0, sy: 0, sz: 0
+  }
+  propEntry(fe, whenMs)
+  return fe
+}
+
+/**
+ * Ensure a catalog pick (list click or /situation?norad= deep link) is in the
+ * rendered cloud: custom 3D model batch + TLE/ellipse orbit, even when type
+ * chips are off and the globe was never painted.
+ */
+export function upsertSelectedCatalogItem(scene: THREE.Scene, item: CatalogTle, whenMs = Date.now()): void {
+  if (!scene || !item) return
+  ensureGroup(scene)
+  setCloudSelection(item, whenMs)
+  const norad = Number(item.norad_id)
+  if (entries.some((e) => e.norad === norad)) return
+  let fe = focusEntry && focusEntry.norad === norad ? focusEntry : null
+  if (!fe) fe = entryFromTle(item, whenMs)
+  if (!fe) return
+  fe.pi = entries.length
+  entries.push(fe)
+  focusEntry = fe
+  focusRef = fe
+  allocatePoints(entries.length)
+  // Keep points hidden if models already replaced the cloud (no point-cloud fallback).
+  if (modelsActive && points) points.visible = false
+  const tmp = new THREE.Color()
+  for (const e of entries) writeOne(e, whenMs, tmp, e.norad === norad)
+  touchGeometry(true)
+  assignModelKeys()
+  void buildModelInstances()
+  rebuildOrbits(whenMs)
 }
 
 export function getCloudPlotted(): number {

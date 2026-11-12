@@ -36,3 +36,12 @@ api/_probe*.mjs
 # 用户文档运行期存储（上传正文按 UUID 落盘，不入库）
 data/user-documents/*
 !data/user-documents/.gitkeep
+
+# Local public-catalog TSV cache (downloaded by ingest:gcat --download)
+data/gcat/*.tsv
+
+
+# Uploaded catalog / family photos (paths stored in DB)
+data/catalog-photos/*
+!data/catalog-photos/.gitkeep
+

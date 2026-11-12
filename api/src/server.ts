@@ -10,6 +10,7 @@ import { ensurePlanSchema } from './db/planDb.js'
 import { ensureFetchSchema } from './db/fetchDb.js'
 import { startDailyFetchScheduler, parseDailyCron } from './jobs/dailyFetch.js'
 import { startStarlinkPullScheduler } from './services/pullStarlink.js'
+import { startGcatWeeklyScheduler } from './jobs/gcatRefresh.js'
 import { startDailyReportScheduler } from './jobs/dailyReport.js'
 import { ensureUserDocsSchema } from './db/userDocsDb.js'
 
@@ -34,6 +35,8 @@ app.listen(config.port, config.listenHost, () => {
     else console.warn('[fetch] schema not ready, daily-fetch scheduler not started')
     // StarLink 星历拉取调度器（UTC 00:00，配置开启时才执行）
     startStarlinkPullScheduler()
+    // 公开目录（GCAT）每周一 00:00 北京时间自动下载并入库，不并入系统日更
+    startGcatWeeklyScheduler()
     // 日报调度器（Epic H2）：复用 'M H * * *' 解析；通知表由路由/job 内幂等建表
     startDailyReportScheduler(parseDailyCron, config.dailyReportCron)
     // 平台超管 bootstrap（Epic B1）：凭据来自 .env，首次启动创建

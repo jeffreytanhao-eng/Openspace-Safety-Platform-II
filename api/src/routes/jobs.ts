@@ -2,6 +2,8 @@
  * 日更任务路由（Epic C1）：
  *  - POST /cgi/jobs/daily-fetch        超管手动触发（同步跑完返回各源结果）
  *  - GET  /cgi/jobs/daily-fetch/status 各源最近批次 + 上次成功时间
+ *  - GET  /cgi/jobs/gcat/status        超管：公开目录（GCAT）状态与每周计划
+ *  - POST /cgi/jobs/gcat/ingest        超管：手动触发入库（可下载；异步，轮询 status）
  */
 import { Router, type Request } from 'express'
 import { requireAuth } from './auth.js'
@@ -18,6 +20,8 @@ import {
   type StarlinkFormat
 } from '../db/starlinkDb.js'
 import { runStarlinkPull, isStarlinkPullRunning } from '../services/pullStarlink.js'
+import { getGcatStatus, isGcatIngestRunning, startGcatIngest } from '../jobs/gcatRefresh.js'
+import { writeUserAudit } from '../db/adminDb.js'
 
 const router = Router()
 
@@ -117,6 +121,41 @@ router.post('/jobs/starlink-pull/run', requireAuth, requireSuperAdmin, async (re
     console.error('[jobs/starlink-pull] run failed:', (e as Error).message)
   })
   res.json(ok({ started: true, triggered_by: triggeredBy, count: cfg.count, format: cfg.format }))
+})
+
+/* ------------------------- 公开目录（GCAT）每周更新 ------------------------- */
+
+router.get('/jobs/gcat/status', requireAuth, requireSuperAdmin, async (_req, res) => {
+  try {
+    const st = await getGcatStatus()
+    res.json(ok(st))
+  } catch (e) {
+    console.error('[jobs/gcat/status]', e)
+    res.status(500).json(fail(500, (e as Error).message || '查询失败'))
+  }
+})
+
+/** 手动更新：异步启动（重新下载时可能较慢），页面轮询 GET /jobs/gcat/status */
+router.post('/jobs/gcat/ingest', requireAuth, requireSuperAdmin, async (req: ScopedRequest, res) => {
+  if (isGcatIngestRunning()) {
+    res.status(409).json(fail(409, '公开目录正在更新，请稍后再试'))
+    return
+  }
+  const download = req.body?.download !== false
+  const triggeredBy = `manual:${req.auth?.user.email ?? 'unknown'}`
+  const started = startGcatIngest({ download, triggeredBy })
+  if (!started) {
+    res.status(409).json(fail(409, '公开目录正在更新，请稍后再试'))
+    return
+  }
+  try {
+    await writeUserAudit(req.auth, 'catalog.gcat.ingest', {
+      after: { summary: `手动更新公开目录${download ? '（含重新下载）' : '（仅入库）'}`, download, triggeredBy }
+    })
+  } catch {
+    /* 审计失败不阻断 */
+  }
+  res.json(ok({ started: true, triggered_by: triggeredBy, download }))
 })
 
 export default router

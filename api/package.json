@@ -6,7 +6,8 @@
   "scripts": {
     "dev": "tsx watch src/server.ts",
     "build": "tsc -p tsconfig.json",
-    "start": "node dist/server.js"
+    "start": "node dist/server.js",
+    "ingest:gcat": "tsx src/jobs/ingestGcat.ts"
   },
   "dependencies": {
     "bcryptjs": "^3.0.3",

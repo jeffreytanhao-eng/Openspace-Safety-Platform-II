@@ -362,3 +362,46 @@ export function adminStarlinkPullRun(): Promise<{
 }> {
   return cgiCall({ method: 'POST', url: '/jobs/starlink-pull/run', headers: headers() })
 }
+
+/* ------------------------- 公开目录（GCAT）每周更新 ------------------------- */
+
+export interface GcatLastRun {
+  running: boolean
+  triggeredBy: string
+  download: boolean
+  startedAt: string
+  finishedAt: string | null
+  written: number | null
+  total: number | null
+  sourceUpdated: string | null
+  elapsedMs: number | null
+  error: string | null
+}
+
+export interface GcatStatus {
+  rows: number
+  lastIngestAt: string | null
+  sourceUpdated: string | null
+  recommendedIntervalDays: number
+  schedule: string
+  scheduleNote: string
+  nextRunAt: string
+  overdue: boolean
+  running: boolean
+  lastRun: GcatLastRun | null
+  filesPresent: boolean
+  filesMissing: string[]
+  dataDir: string
+}
+
+export function adminGcatStatus(): Promise<GcatStatus> {
+  return cgiCall({ method: 'GET', url: '/jobs/gcat/status', headers: headers() })
+}
+
+export function adminGcatIngest(download = true): Promise<{
+  started: boolean
+  triggered_by: string
+  download: boolean
+}> {
+  return cgiCall({ method: 'POST', url: '/jobs/gcat/ingest', headers: headers(), data: { download } })
+}

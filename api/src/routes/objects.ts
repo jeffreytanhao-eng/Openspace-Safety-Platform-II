@@ -42,6 +42,22 @@ import {
   mergeCaParams
 } from '../db/caDb.js'
 import { sanitizeCaPatch } from './ca.js'
+import { ensureCatalogProfileSchema } from '../db/catalogProfileDb.js'
+import {
+  ensureDossierSchema,
+  resolveDossier,
+  sanitizeDossierPatch,
+  saveSuperAdminDossier,
+  saveOrgDossier,
+  resetOrgDossier,
+  saveSuperAdminPhoto,
+  saveOrgPhoto,
+  resolvePhotoAbs,
+  type DossierMeta
+} from '../db/dossierDb.js'
+import fs from 'node:fs'
+import path from 'node:path'
+import express from 'express'
 import { writeUserAudit } from '../db/adminDb.js'
 import { ensurePersonalWorkspace, isVipUser } from '../db/orgDb.js'
 
@@ -144,7 +160,12 @@ function ownerClaimAllowed(auth: AuthContext | undefined, res: Response): boolea
 
 /** 全部路由先过 requireAuth，进入业务前确保 schema（限定 /objects 前缀，避免拦截挂在后续的公开路由） */
 router.use('/objects', requireAuth, async (req, res, next) => {
-  if (!(await ensureObjectsSchema()) || !(await ensureCaSchema())) {
+  if (
+    !(await ensureObjectsSchema()) ||
+    !(await ensureCaSchema()) ||
+    !(await ensureCatalogProfileSchema()) ||
+    !(await ensureDossierSchema())
+  ) {
     res.status(503).json(fail(503, '数据库不可用'))
     return
   }
@@ -161,26 +182,38 @@ interface SatTleInfo extends RowDataPacket {
   incl: number | null
   apogee: number | null
   perigee: number | null
+  period: number | null
+  launch_date: string | null
+  decay_date: string | null
   tle_line1: string
   tle_line2: string
+}
+
+function dateOnly(v: unknown): string | null {
+  if (v == null || v === '') return null
+  if (v instanceof Date && Number.isFinite(v.getTime())) return v.toISOString().slice(0, 10)
+  const s = String(v)
+  const m = /^(\d{4}-\d{2}-\d{2})/.exec(s)
+  return m ? m[1] : s
 }
 
 async function satTleOf(noradId: number): Promise<SatTleInfo | null> {
   const [rows] = await pool.query<SatTleInfo[]>(
     `SELECT norad_id, object_name, object_type, intl_desig, regime, epoch, incl, apogee, perigee,
-            tle_line1, tle_line2
+            period, launch_date, decay_date, tle_line1, tle_line2
      FROM sat_tle WHERE norad_id = ? LIMIT 1`,
     [noradId]
   )
   const row = rows[0] ?? null
   if (!row) return null
   // R2-3：TLE 表要素列为空时，回填倾角/近远地点（OMM/GP 同源推导）
-  if ((row.incl == null || row.apogee == null || row.perigee == null) && row.tle_line1 && row.tle_line2) {
+  if ((row.incl == null || row.apogee == null || row.perigee == null || row.period == null) && row.tle_line1 && row.tle_line2) {
     try {
       const rec = twoline2satrec(row.tle_line1, row.tle_line2)
       const mu = 398600.4418
       // rec.no 为 rad/min，先换算成 rad/s（与 jobs/screening 的 apsisFromTle 同口径）
       const nRadS = Number(rec.no) / 60
+      const nRadMin = Number(rec.no)
       if (Number.isFinite(nRadS) && nRadS > 0) {
         const aKm = Math.cbrt(mu / (nRadS * nRadS))
         const e = Number(rec.ecco)
@@ -190,12 +223,82 @@ async function satTleOf(noradId: number): Promise<SatTleInfo | null> {
           row.apogee = row.apogee ?? aKm * (1 + e) - RE
           row.perigee = row.perigee ?? aKm * (1 - e) - RE
         }
+        if (row.period == null && Number.isFinite(nRadMin) && nRadMin > 0) {
+          row.period = (2 * Math.PI) / nRadMin
+        }
       }
     } catch {
       /* 推导失败保留编目原值 */
     }
   }
+  row.launch_date = dateOnly(row.launch_date)
+  row.decay_date = dateOnly(row.decay_date)
   return row
+}
+
+function dossierAuth(
+  req: ScopedRequest | undefined,
+  row?: { id?: number; org_id?: number; claim_type?: string; claim_status?: string } | null
+): {
+  isSuperAdmin: boolean
+  isPlatform: boolean
+  orgId: number
+  canEdit: boolean
+  applyOrgOverlay: boolean
+  objectId: number | null
+  email: string
+} {
+  const role = req?.auth?.user.role || ''
+  const isSuperAdmin = role === 'platform_super_admin'
+  const isPlatform = role.startsWith('platform_')
+  const orgId = Number(req?.auth?.user.orgId || 0)
+  const vip =
+    (!!req?.auth?.user.isVip || req?.auth?.org?.plan === 'vip') && req?.auth?.org?.status === 'active'
+  const canEdit =
+    isSuperAdmin ||
+    (!!row &&
+      !isPlatform &&
+      row.claim_type === 'owner' &&
+      row.claim_status === 'claimed' &&
+      !!vip &&
+      Number(row.org_id) === orgId)
+  return {
+    isSuperAdmin,
+    isPlatform,
+    orgId,
+    canEdit,
+    applyOrgOverlay: !isPlatform && orgId > 0,
+    objectId: row?.id ? Number(row.id) : null,
+    email: req?.auth?.user.email || ''
+  }
+}
+
+/** Read-side merged dossier (local tables only; never live-fetch). Does not touch org mass/RCS. */
+async function catalogFields(
+  noradId: number,
+  sat: SatTleInfo | null,
+  req?: ScopedRequest,
+  row?: { id?: number; org_id?: number; claim_type?: string; claim_status?: string } | null
+): Promise<{
+  sat: SatTleInfo | null
+  catalogProfile: Awaited<ReturnType<typeof resolveDossier>>['profile']
+  dossierMeta: DossierMeta
+}> {
+  const authz = dossierAuth(req, row)
+  const resolved = await resolveDossier({
+    noradId,
+    intlDesig: sat?.intl_desig,
+    objectName: sat?.object_name,
+    orgId: authz.orgId,
+    applyOrgOverlay: authz.applyOrgOverlay,
+    canEdit: authz.canEdit,
+    isSuperAdmin: authz.isSuperAdmin,
+    objectId: authz.objectId
+  })
+  if (sat && !sat.launch_date && resolved.profile.launchDate) {
+    sat.launch_date = resolved.profile.launchDate
+  }
+  return { sat, catalogProfile: resolved.profile, dossierMeta: resolved.meta }
 }
 
 /** 认领前预览：NORAD 在编目中的最新信息 */
@@ -205,11 +308,12 @@ router.get('/objects/lookup/:noradId', async (req, res) => {
     res.status(400).json(fail(400, 'NORAD 编号无效'))
     return
   }
-  const tle = await satTleOf(norad)
-  if (!tle) {
+  const tle0 = await satTleOf(norad)
+  if (!tle0) {
     res.status(404).json(fail(404, `编目中未找到 NORAD ${norad}`))
     return
   }
+  const { sat: tle, catalogProfile, dossierMeta } = await catalogFields(norad, tle0, req)
   const orgId = Number(req.auth?.user.orgId || 0)
   const owner = await getOwnerClaim(norad)
   const mine = orgId ? await getObjectByOrgNorad(orgId, norad) : null
@@ -220,6 +324,8 @@ router.get('/objects/lookup/:noradId', async (req, res) => {
   res.json(
     ok({
       sat: tle,
+      catalogProfile,
+      dossierMeta,
       owner_claim: owner
         ? { id: owner.id, orgId: owner.org_id, isMine: owner.org_id === orgId }
         : null,
@@ -281,7 +387,11 @@ router.post('/objects', async (req: ScopedRequest, res) => {
   const claimType: ClaimType = body.claimType === 'owner' ? 'owner' : 'normal'
   // R2-27：普通用户 API 层直接拒绝业主认领（不依赖前端按钮禁用）
   if (claimType === 'owner' && !ownerClaimAllowed(req.auth, res)) return
-  const tle = await satTleOf(norad)
+  const tle0 = await satTleOf(norad)
+  const cat = tle0 ? await catalogFields(norad, tle0, req, null) : { sat: null, catalogProfile: null, dossierMeta: null }
+  const tle = cat.sat
+  const catalogProfile = cat.catalogProfile
+  const dossierMeta = cat.dossierMeta
   if (!tle) {
     res.status(404).json(fail(404, `编目中未找到 NORAD ${norad}，无法认领`))
     return
@@ -350,6 +460,8 @@ router.post('/objects', async (req: ScopedRequest, res) => {
       ok({
         ...row,
         sat: tle,
+        catalogProfile,
+        dossierMeta,
         pending_review: true,
         message: '关注已升级为业主认领申请，等待平台超管审核'
       })
@@ -393,6 +505,8 @@ router.post('/objects', async (req: ScopedRequest, res) => {
           ok({
             ...row,
             sat: tle,
+            catalogProfile,
+            dossierMeta,
             pending_review: true,
             message: '认领申请已重新提交，等待平台超管审核'
           })
@@ -409,7 +523,7 @@ router.post('/objects', async (req: ScopedRequest, res) => {
           resubmit: true
         }
       })
-      res.json(ok({ ...row, sat: tle }))
+      res.json(ok({ ...row, sat: tle, catalogProfile, dossierMeta }))
       return
     }
     const row = await createObject({
@@ -439,6 +553,8 @@ router.post('/objects', async (req: ScopedRequest, res) => {
         ok({
           ...row,
           sat: tle,
+          catalogProfile,
+          dossierMeta,
           pending_review: true,
           message: '认领申请已提交，等待平台超管审核；审核通过后目标才归本用户所有'
         })
@@ -454,7 +570,7 @@ router.post('/objects', async (req: ScopedRequest, res) => {
         claimType: 'normal'
       }
     })
-    res.json(ok({ ...row, sat: tle }))
+    res.json(ok({ ...row, sat: tle, catalogProfile, dossierMeta }))
   } catch (e) {
     if ((e as { code?: string }).code === 'ER_DUP_ENTRY') {
       res.status(409).json(fail(409, '认领冲突：本组织已认领，或该目标已有业主认领'))
@@ -700,7 +816,8 @@ router.get('/objects/:id', async (req: ScopedRequest, res) => {
     res.status(403).json(fail(403, '无权查看其他组织的目标'))
     return
   }
-  const sat = await satTleOf(row.norad_id)
+  const sat0 = await satTleOf(row.norad_id)
+  const { sat, catalogProfile, dossierMeta } = await catalogFields(row.norad_id, sat0, req, row)
   const [ephems] = await pool.query<RowDataPacket[]>(
     `SELECT id, name, norad, format, points, published_at, status FROM ephemeris
      WHERE bound_object_id = ? ORDER BY published_at DESC LIMIT 50`,
@@ -710,7 +827,7 @@ router.get('/objects/:id', async (req: ScopedRequest, res) => {
   const caParams = await getObjectCaParams(id)
   const orgName = platform ? await getObjectOrgName(row.org_id) : ''
   const includeAlias = !platform || Number(req.auth?.user.orgId || 0) === row.org_id
-  res.json(ok({ ...row, alias: includeAlias ? (row.alias ?? null) : null, sat, ephemerides: ephems, ca_params: caParams, org_name: orgName }))
+  res.json(ok({ ...row, alias: includeAlias ? (row.alias ?? null) : null, sat, catalogProfile, dossierMeta, ephemerides: ephems, ca_params: caParams, org_name: orgName }))
 })
 
 /** 档案编辑 */
@@ -786,7 +903,14 @@ router.patch('/objects/:id', requireOrg, async (req: ScopedRequest, res) => {
       params: caNow
     }
   })
-  res.json(ok({ ...(updated ?? row), ca_params: caNow }))
+  const sat0 = await satTleOf((updated ?? row).norad_id)
+  const { sat, catalogProfile, dossierMeta } = await catalogFields((updated ?? row).norad_id, sat0, req, updated ?? row)
+  const [ephems] = await pool.query<RowDataPacket[]>(
+    `SELECT id, name, norad, format, points, published_at, status FROM ephemeris
+     WHERE bound_object_id = ? ORDER BY published_at DESC LIMIT 50`,
+    [id]
+  )
+  res.json(ok({ ...(updated ?? row), sat, catalogProfile, dossierMeta, ephemerides: ephems, ca_params: caNow }))
 })
 
 /** 设置/清除本组织别名：仅认领或关注中的本组织目标；官方名称不变 */
@@ -932,5 +1056,198 @@ router.post('/objects/:id/unbind-ephem', requireOrg, async (req: ScopedRequest, 
   })
   res.json(ok({ unbound: ephemId }))
 })
+
+
+async function loadManagedObject(req: ScopedRequest, res: import('express').Response): Promise<ObjectRow | null> {
+  const id = Number(req.params.id)
+  const row = Number.isInteger(id) ? await getObjectById(id) : null
+  if (!row) {
+    res.status(404).json(fail(404, '目标不存在'))
+    return null
+  }
+  const platform = isPlatformAccount(req)
+  if (!platform && row.org_id !== Number(req.auth?.user.orgId)) {
+    res.status(403).json(fail(403, '无权查看其他组织的目标'))
+    return null
+  }
+  return row
+}
+
+/** 超管或认领业主（VIP）保存目录层字段。本单位质量/迎风面积不在此接口。 */
+router.patch('/objects/:id/dossier', async (req: ScopedRequest, res) => {
+  const row = await loadManagedObject(req, res)
+  if (!row) return
+  const authz = dossierAuth(req, row)
+  if (!authz.canEdit) {
+    res.status(403).json(fail(403, '仅超管，或 VIP 对本组织已通过的业主认领目标，可编辑目录信息'))
+    return
+  }
+  const patch = sanitizeDossierPatch((req.body ?? {}) as Record<string, unknown>)
+  const sat = await satTleOf(row.norad_id)
+  try {
+    if (authz.isSuperAdmin) {
+      const fam = await saveSuperAdminDossier({
+        noradId: row.norad_id,
+        objectName: sat?.object_name || row.name,
+        bus: (await catalogFields(row.norad_id, sat, req, row)).catalogProfile.bus,
+        patch,
+        updatedBy: authz.email
+      })
+      await writeUserAudit(req.auth, 'object.dossier.admin_set', {
+        after: {
+          summary: `超管更新目录信息 ${objectAuditLabel(row)}` + (fam.familyName ? `（同步家族 ${fam.familyName}）` : ''),
+          id: row.id,
+          norad: row.norad_id,
+          familyId: fam.familyId,
+          familyName: fam.familyName,
+          fields: patch
+        }
+      })
+    } else {
+      await saveOrgDossier({
+        orgId: authz.orgId,
+        noradId: row.norad_id,
+        patch,
+        updatedBy: authz.email
+      })
+      await writeUserAudit(req.auth, 'object.dossier.org_set', {
+        after: {
+          summary: `更新本组织目录信息 ${objectAuditLabel(row)}`,
+          id: row.id,
+          norad: row.norad_id,
+          fields: patch
+        }
+      })
+    }
+  } catch (e) {
+    res.status(500).json(fail(500, e instanceof Error ? e.message : '保存失败'))
+    return
+  }
+  const sat0 = await satTleOf(row.norad_id)
+  const packed = await catalogFields(row.norad_id, sat0, req, row)
+  res.json(ok({ ...row, ...packed }))
+})
+
+/** VIP 重置本组织目录覆盖，立即回退到平台数据（目录基线 + 超管层）。 */
+router.delete('/objects/:id/dossier', async (req: ScopedRequest, res) => {
+  const row = await loadManagedObject(req, res)
+  if (!row) return
+  const authz = dossierAuth(req, row)
+  if (!authz.canEdit || authz.isSuperAdmin || !authz.orgId) {
+    res.status(403).json(fail(403, '仅 VIP 可重置本组织在该认领目标上的目录覆盖'))
+    return
+  }
+  const cleared = await resetOrgDossier(authz.orgId, row.norad_id)
+  await writeUserAudit(req.auth, 'object.dossier.org_reset', {
+    after: {
+      summary: `重置本组织目录信息 ${objectAuditLabel(row)}`,
+      id: row.id,
+      norad: row.norad_id,
+      cleared
+    }
+  })
+  const sat0 = await satTleOf(row.norad_id)
+  const packed = await catalogFields(row.norad_id, sat0, req, row)
+  res.json(ok({ ...row, ...packed }))
+})
+
+/** 上传照片：超管写入家族（有家族时）或单目标覆盖；VIP 写入本组织覆盖。 */
+router.post(
+  '/objects/:id/dossier-photo',
+  express.raw({ type: () => true, limit: '8mb' }),
+  async (req: ScopedRequest, res) => {
+    const row = await loadManagedObject(req, res)
+    if (!row) return
+    const authz = dossierAuth(req, row)
+    if (!authz.canEdit) {
+      res.status(403).json(fail(403, '仅超管或认领业主（VIP）可上传照片'))
+      return
+    }
+    const buf = Buffer.isBuffer(req.body) ? req.body : Buffer.from(req.body || [])
+    if (!buf.length) {
+      res.status(400).json(fail(400, '未收到照片内容'))
+      return
+    }
+    const mime = String(req.headers['content-type'] || '')
+    const filename = String(req.headers['x-filename'] || '')
+    const sat = await satTleOf(row.norad_id)
+    const objectOnly = String(req.query.objectOnly || '') === '1'
+    try {
+      if (authz.isSuperAdmin) {
+        const packed0 = await catalogFields(row.norad_id, sat, req, row)
+        const saved = await saveSuperAdminPhoto({
+          noradId: row.norad_id,
+          objectName: sat?.object_name || row.name,
+          bus: packed0.catalogProfile.bus,
+          buffer: buf,
+          mime,
+          filename,
+          updatedBy: authz.email,
+          objectOnly
+        })
+        await writeUserAudit(req.auth, 'object.dossier.admin_photo', {
+          after: {
+            summary: `超管上传目录照片 ${objectAuditLabel(row)}` + (saved.familyId ? '（家族）' : '（单目标）'),
+            id: row.id,
+            norad: row.norad_id,
+            familyId: saved.familyId
+          }
+        })
+      } else {
+        await saveOrgPhoto({
+          orgId: authz.orgId,
+          noradId: row.norad_id,
+          buffer: buf,
+          mime,
+          filename,
+          updatedBy: authz.email
+        })
+        await writeUserAudit(req.auth, 'object.dossier.org_photo', {
+          after: {
+            summary: `上传本组织目录照片 ${objectAuditLabel(row)}`,
+            id: row.id,
+            norad: row.norad_id
+          }
+        })
+      }
+    } catch (e) {
+      res.status(400).json(fail(400, e instanceof Error ? e.message : '上传失败'))
+      return
+    }
+    const sat0 = await satTleOf(row.norad_id)
+    const packed = await catalogFields(row.norad_id, sat0, req, row)
+    res.json(ok({ ...row, ...packed }))
+  }
+)
+
+/** 当前用户可见层叠后的照片（超管看不到客户组织覆盖）。 */
+router.get('/objects/:id/dossier-photo', async (req: ScopedRequest, res) => {
+  const row = await loadManagedObject(req, res)
+  if (!row) return
+  const sat = await satTleOf(row.norad_id)
+  const authz = dossierAuth(req, row)
+  const resolved = await resolveDossier({
+    noradId: row.norad_id,
+    intlDesig: sat?.intl_desig,
+    objectName: sat?.object_name,
+    orgId: authz.orgId,
+    applyOrgOverlay: authz.applyOrgOverlay,
+    canEdit: authz.canEdit,
+    isSuperAdmin: authz.isSuperAdmin,
+    objectId: row.id
+  })
+  const abs = resolvePhotoAbs(resolved.photoPath)
+  if (!abs) {
+    res.status(404).json(fail(404, '暂无照片'))
+    return
+  }
+  const ext = path.extname(abs).toLowerCase()
+  const mime =
+    ext === '.png' ? 'image/png' : ext === '.webp' ? 'image/webp' : ext === '.gif' ? 'image/gif' : 'image/jpeg'
+  res.setHeader('Content-Type', mime)
+  res.setHeader('Cache-Control', 'private, max-age=60')
+  fs.createReadStream(abs).pipe(res)
+})
+
 
 export default router

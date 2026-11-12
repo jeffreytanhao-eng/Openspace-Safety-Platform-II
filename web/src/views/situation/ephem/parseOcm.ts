@@ -57,7 +57,23 @@ export function parseOcm(text: string): ParseResult {
 
   let section: 'none' | 'meta' | 'traj' | 'cov' | 'man' = 'none'
   const maneuvers: EphemManSegment[] = []
-  let manAcc: { id: string | null; t: number | null; dura: number | null; acc: number[] | null } | null = null
+  type ManAcc = {
+    id: string | null
+    t: number | null
+    dura: number | null
+    acc: number[] | null
+    refFrame: string | null
+    basis: string | null
+    dcType: string | null
+    purpose: string | null
+    deviceId: string | null
+    extras: Record<string, string>
+  }
+  const emptyMan = (): ManAcc => ({
+    id: null, t: null, dura: null, acc: null,
+    refFrame: null, basis: null, dcType: null, purpose: null, deviceId: null, extras: {}
+  })
+  let manAcc: ManAcc | null = null
   let refFrame: EphemFrame = 'EME2000'
   let timeSystem = 'UTC'
   let objectName = ''
@@ -161,18 +177,29 @@ export function parseOcm(text: string): ParseResult {
     if (upper.startsWith('MAN_START')) {
       flushPending()
       section = 'man'
-      manAcc = { id: null, t: null, dura: null, acc: null }
+      manAcc = emptyMan()
       continue
     }
     if (upper.startsWith('MAN_STOP')) {
       if (manAcc && manAcc.t != null && manAcc.dura != null && manAcc.dura > 0) {
         const ax = manAcc.acc ? Math.hypot(manAcc.acc[0], manAcc.acc[1], manAcc.acc[2]) : 0
         const dvMps = manAcc.dura * ax * 1000 // km/s^2 * s → m/s
+        const extras = Object.keys(manAcc.extras).length ? { ...manAcc.extras } : undefined
+        const acc = manAcc.acc && manAcc.acc.length >= 3
+          ? [manAcc.acc[0], manAcc.acc[1], manAcc.acc[2]] as [number, number, number]
+          : undefined
         maneuvers.push({
           t0: manAcc.t,
           t1: manAcc.t + manAcc.dura * 1000,
           dvMps: Number(dvMps.toFixed(6)),
-          id: manAcc.id || undefined
+          id: manAcc.id || undefined,
+          acc,
+          refFrame: manAcc.refFrame || undefined,
+          basis: manAcc.basis || undefined,
+          dcType: manAcc.dcType || undefined,
+          purpose: manAcc.purpose || undefined,
+          deviceId: manAcc.deviceId || undefined,
+          extras
         })
       }
       manAcc = null
@@ -227,8 +254,29 @@ export function parseOcm(text: string): ParseResult {
         if ((FRAME_SET as string[]).indexOf(frameCand) >= 0) refFrame = frameCand as EphemFrame
       } else if (key === 'COV_REF_FRAME') {
         covFrame = value
-      } else if (key === 'MAN_ID' && manAcc) {
-        manAcc.id = value
+      } else if (section === 'man' && manAcc) {
+        if (key === 'MAN_ID') manAcc.id = value
+        else if (key === 'MAN_BASIS') manAcc.basis = value
+        else if (key === 'DC_TYPE' || key === 'MAN_DC_TYPE') manAcc.dcType = value
+        else if (key === 'MAN_PURPOSE') manAcc.purpose = value
+        else if (key === 'MAN_DEVICE_ID') manAcc.deviceId = value
+        else if (key === 'MAN_REF_FRAME') manAcc.refFrame = value
+        else if (key === 'MAN_DURA' && NUM_RE.test(value)) manAcc.dura = Number(value)
+        else if ((key === 'TIME_ABSOLUTE' || key === 'MAN_EPOCH') && manAcc.t == null) {
+          const mt = parseIso(value)
+          if (mt != null) manAcc.t = mt
+        } else if ((key === 'ACC_X' || key === 'MAN_ACC_X') && NUM_RE.test(value)) {
+          if (!manAcc.acc) manAcc.acc = [0, 0, 0]
+          manAcc.acc[0] = Number(value)
+        } else if ((key === 'ACC_Y' || key === 'MAN_ACC_Y') && NUM_RE.test(value)) {
+          if (!manAcc.acc) manAcc.acc = [0, 0, 0]
+          manAcc.acc[1] = Number(value)
+        } else if ((key === 'ACC_Z' || key === 'MAN_ACC_Z') && NUM_RE.test(value)) {
+          if (!manAcc.acc) manAcc.acc = [0, 0, 0]
+          manAcc.acc[2] = Number(value)
+        } else if (key !== 'MAN_ID') {
+          manAcc.extras[key] = value
+        }
       }
       continue
     }

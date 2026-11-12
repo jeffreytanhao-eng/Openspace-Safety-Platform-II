@@ -8,10 +8,13 @@ import { listEvents } from '@/api/events'
 import { AuthError } from '@/api/auth'
 import { saveReportDocument } from '@/api/documents'
 import { useObjectAliases } from '@/composables/useObjectAliases'
+import { useAuthStore } from '@/stores/auth'
 
 const router = useRouter()
 const { label: objLabel } = useObjectAliases()
 const { t } = useI18n()
+const auth = useAuthStore()
+const isSuperAdmin = computed(() => auth.user?.role === 'platform_super_admin')
 
 const loading = ref(true)
 const needAuth = ref(false)
@@ -297,7 +300,7 @@ async function saveReport() {
             </div>
           </div>
 
-          <div class="panel sources">
+          <div v-if="isSuperAdmin" class="panel sources">
             <header class="panel-h">
               <div>
                 <div class="h-title">{{ t('ov.srcHealth') }}</div>
@@ -534,7 +537,7 @@ async function saveReport() {
   color: var(--text);
 }
 
-.asset-list { padding: 8px; overflow: auto; display: flex; flex-direction: column; gap: 6px; }
+.asset-list { flex: 1; min-height: 0; padding: 8px; overflow: auto; display: flex; flex-direction: column; gap: 6px; }
 .asset {
   background: var(--bg-panel-2);
   border: 1px solid var(--border);

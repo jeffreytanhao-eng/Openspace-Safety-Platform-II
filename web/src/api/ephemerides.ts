@@ -5,6 +5,15 @@ export interface EphManeuverEpoch {
   /** OCM MAN_DURA（秒）；缺省时按瞬时机动处理 */
   duraSec?: number
   id?: string
+  accX?: number
+  accY?: number
+  accZ?: number
+  refFrame?: string
+  basis?: string
+  dcType?: string
+  purpose?: string
+  deviceId?: string
+  extras?: Record<string, string>
 }
 
 export interface EphListItem {

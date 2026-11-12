@@ -6,10 +6,13 @@ import {
   adminStarlinkPullGet,
   adminStarlinkPullSave,
   adminStarlinkPullRun,
+  adminGcatStatus,
+  adminGcatIngest,
   type DailyFetchSourceResult,
   type DailyFetchStatus,
   type StarlinkFormat,
-  type StarlinkPullStatus
+  type StarlinkPullStatus,
+  type GcatStatus
 } from '@/api/admin'
 import {
   uploadEphemerisFile,
@@ -196,6 +199,82 @@ function skipConflict() {
   void runQueue(c.files, c.index + 1, false)
 }
 
+/* ------------------------- 公开目录（GCAT） ------------------------- */
+
+const gcat = ref<GcatStatus | null>(null)
+const gcatLoading = ref(false)
+const gcatRunning = ref(false)
+const gcatDownload = ref(true)
+const gcatMsg = ref('')
+const gcatErr = ref('')
+let gcatTimer: ReturnType<typeof setTimeout> | null = null
+
+const gcatBusy = computed(() => gcatRunning.value || (gcat.value?.running ?? false))
+
+async function loadGcat() {
+  gcatLoading.value = true
+  gcatErr.value = ''
+  try {
+    const s = await adminGcatStatus()
+    gcat.value = s
+    gcatRunning.value = s.running
+    if (s.running) scheduleGcatPoll()
+  } catch (e) {
+    gcatErr.value = e instanceof AuthError ? e.message : String((e as Error).message || e)
+  } finally {
+    gcatLoading.value = false
+  }
+}
+
+function scheduleGcatPoll() {
+  if (gcatTimer) clearTimeout(gcatTimer)
+  gcatTimer = setTimeout(async () => {
+    try {
+      const s = await adminGcatStatus()
+      gcat.value = s
+      gcatRunning.value = s.running
+      if (s.running) {
+        scheduleGcatPoll()
+      } else if (s.lastRun?.error) {
+        gcatErr.value = s.lastRun.error
+        gcatMsg.value = ''
+      } else {
+        gcatMsg.value = s.lastRun
+          ? `更新完成：档案 ${s.lastRun.total ?? s.rows} 条` +
+            (s.lastRun.elapsedMs != null ? `，用时 ${(s.lastRun.elapsedMs / 1000).toFixed(0)} 秒` : '')
+          : '更新完成'
+        gcatErr.value = ''
+      }
+    } catch (e) {
+      gcatRunning.value = false
+      gcatErr.value = e instanceof AuthError ? e.message : String((e as Error).message || e)
+    }
+  }, 2000)
+}
+
+async function runGcat() {
+  if (gcatBusy.value) return
+  gcatMsg.value = ''
+  gcatErr.value = ''
+  try {
+    const r = await adminGcatIngest(gcatDownload.value)
+    gcatRunning.value = true
+    gcatMsg.value = r.download ? '已开始更新：正在下载官方文件并入库…' : '已开始更新：使用已有文件入库…'
+    scheduleGcatPoll()
+  } catch (e) {
+    gcatErr.value = e instanceof AuthError ? e.message : String((e as Error).message || e)
+  }
+}
+
+function fmtNextRun(iso: string | null | undefined): string {
+  if (!iso) return '—'
+  const d = new Date(iso)
+  if (Number.isNaN(d.getTime())) return iso
+  return (
+    d.toLocaleString('zh-CN', { hour12: false, timeZone: 'Asia/Shanghai' }) + '（北京时间）'
+  )
+}
+
 /* ------------------------- StarLink 星历拉取 ------------------------- */
 
 const slEnabled = ref(false)
@@ -295,11 +374,13 @@ async function runStarlink() {
 
 onBeforeUnmount(() => {
   if (slTimer) clearTimeout(slTimer)
+  if (gcatTimer) clearTimeout(gcatTimer)
 })
 
 onMounted(() => {
   void load()
   void loadStarlink()
+  void loadGcat()
 })
 </script>
 
@@ -367,6 +448,61 @@ onMounted(() => {
         </tbody>
       </table>
     </div>
+
+    <section class="upload-zone sl-zone gcat-zone">
+      <div class="uz-row">
+        <div class="uz-text">
+          <div class="uz-title">公开目录（GCAT）</div>
+          <div class="uz-perm">
+            建议每周更新一次；仅在需要当天发射信息时改为每天。自动任务为每周一 00:00（北京时间）重新下载官方文件并入库，不走 Space-Track，也不并入上方系统日更。
+          </div>
+        </div>
+        <div class="uz-actions">
+          <label class="uz-vis">
+            <input v-model="gcatDownload" type="checkbox" :disabled="gcatBusy" />
+            <span>同时重新下载官方文件</span>
+          </label>
+          <button type="button" class="btn" :disabled="gcatLoading" @click="loadGcat">刷新状态</button>
+          <button type="button" class="btn primary" :disabled="gcatBusy" @click="runGcat">
+            {{ gcatBusy ? '更新中…' : '手动更新' }}
+          </button>
+        </div>
+      </div>
+      <p v-if="gcatErr" class="error inline">{{ gcatErr }}</p>
+      <p v-if="gcatMsg" class="uz-msg">{{ gcatMsg }}</p>
+      <div v-if="gcatLoading && !gcat" class="sl-last">加载中…</div>
+      <div v-else-if="gcat" class="gcat-meta">
+        <div class="kv-row">
+          <span class="k">建议频率</span>
+          <span class="v">{{ gcat.schedule }}</span>
+          <span class="chip" :class="gcat.running ? 'warn' : gcat.overdue ? 'bad' : 'ok'">
+            {{ gcat.running ? '更新中' : gcat.overdue ? '建议更新' : '正常' }}
+          </span>
+        </div>
+        <div class="kv-row">
+          <span class="k">档案条数</span>
+          <span class="v mono">{{ gcat.rows.toLocaleString('zh-CN') }}</span>
+          <span class="k">数据版本</span>
+          <span class="v mono">{{ gcat.sourceUpdated || '—' }}</span>
+        </div>
+        <div class="kv-row">
+          <span class="k">上次入库</span>
+          <span class="v mono">{{ fmtIso(gcat.lastIngestAt) }}</span>
+          <span class="k">下次自动</span>
+          <span class="v mono">{{ fmtNextRun(gcat.nextRunAt) }}</span>
+        </div>
+        <p v-if="gcat.lastRun && !gcat.running" class="sl-last">
+          最近一次：{{ fmtIso(gcat.lastRun.startedAt) }} 由 {{ gcat.lastRun.triggeredBy }} 触发
+          <template v-if="gcat.lastRun.download">（含下载）</template>
+          <template v-if="gcat.lastRun.total != null"> → 档案 {{ gcat.lastRun.total }} 条</template>
+          <template v-if="gcat.lastRun.finishedAt">，完成于 {{ fmtIso(gcat.lastRun.finishedAt) }}</template>
+          <template v-if="gcat.lastRun.error"> · 失败：{{ gcat.lastRun.error }}</template>
+        </p>
+        <p v-if="!gcat.filesPresent" class="error inline">
+          本地文件不完整，缺少：{{ gcat.filesMissing.join('、') }}。请勾选「同时重新下载官方文件」后更新。
+        </p>
+      </div>
+    </section>
 
     <section class="upload-zone sl-zone">
       <div class="uz-row">
@@ -674,5 +810,36 @@ onMounted(() => {
   display: flex;
   justify-content: flex-end;
   gap: 8px;
+}
+
+.gcat-zone .uz-vis {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--text-muted);
+}
+.gcat-zone .uz-vis input {
+  margin: 0;
+}
+.gcat-meta {
+  margin-top: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.gcat-meta .kv-row {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 8px 16px;
+  font-size: 12px;
+}
+.gcat-meta .k {
+  color: var(--text-dim);
+  min-width: 4.5em;
+}
+.gcat-meta .v {
+  color: var(--text);
 }
 </style>

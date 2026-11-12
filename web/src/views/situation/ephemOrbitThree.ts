@@ -14,6 +14,7 @@ import { interpolateAt } from './ephem/interp'
 import { twoBodyPropagate } from './ephem/screening'
 import { resolveCatalogModelKey, loadSharedModelGeom } from './catalogCloudThree'
 import type { EphemManSegment, EphemSet, EphemState, Vec3 } from './ephem/types'
+import { accToEci, manChevronCount, manSpeedSense } from './ephem/maneuverDisplay'
 
 export const EPH_ORBIT_COLOR = 0x81d4fa
 export const EPH_MANEUVER_COLOR = 0xffb454
@@ -61,6 +62,13 @@ let markerModel: THREE.Mesh | null = null
 let markerModelSeq = 0
 /** 面板机动卡片当前选中的可画 MAN 下标（null = 无）；重绘后自动恢复高亮 */
 let selectedManIdx: number | null = null
+/** Selected-maneuver thrust marks: small blue ">" chevrons along the burn (file NTW/RTN acc). */
+let manThrustArrows: THREE.LineSegments | null = null
+/** Saturated blue ">" chevrons along the selected burn (gold tube stays #ffd166). */
+const EPH_THRUST_ARROW_COLOR = 0x3b9eff
+/** Two-stroke chevron arm length / half-width in km. Compact ">" , tighter than the old 14/6 ticks. */
+const CHEVRON_ARM_KM = 7
+const CHEVRON_HALF_KM = 3.2
 const _mkUp = new THREE.Vector3()
 const _mkFwd = new THREE.Vector3()
 const _mkRight = new THREE.Vector3()
@@ -89,7 +97,61 @@ function disposeLine(line: THREE.Line | null) {
   ;(line.material as THREE.Material).dispose()
 }
 
+function clearManThrustArrow() {
+  if (!manThrustArrows) return
+  if (group) group.remove(manThrustArrows)
+  manThrustArrows.geometry.dispose()
+  ;(manThrustArrows.material as THREE.Material).dispose()
+  manThrustArrows = null
+}
+
+function manStateAt(set: EphemSet, t: number): { r: Vec3; v: Vec3 } | null {
+  const st = interpolateAt(set.states, t)
+  if (st) return { r: st.r, v: st.v }
+  if (!set.states.length) return null
+  const s0 = set.states[0]
+  const sN = set.states[set.states.length - 1]
+  const base = t < s0.t ? s0 : sN
+  const prop = twoBodyPropagate(base.r, base.v, (t - base.t) / 1000)
+  if (!prop) return null
+  return { r: prop.r, v: prop.v }
+}
+
+const _thrPerp = new THREE.Vector3()
+const _thrTip = new THREE.Vector3()
+const _thrLeft = new THREE.Vector3()
+const _thrRight = new THREE.Vector3()
+const _thrBase = new THREE.Vector3()
+
+/** Two-stroke ">" chevron: tip in the thrust direction, arms only (no shaft). Sits just outside the tube. */
+function appendChevron(
+  positions: number[],
+  origin: THREE.Vector3,
+  dir: THREE.Vector3,
+  armLen: number,
+  halfW: number
+): void {
+  _thrBase.copy(origin)
+  const rLen = origin.length()
+  if (rLen > 1e-9) _thrBase.addScaledVector(origin, (MAN_TUBE_RADIUS + 0.0008) / rLen)
+  const along = Math.sqrt(Math.max(0, armLen * armLen - halfW * halfW))
+  _thrTip.copy(_thrBase).addScaledVector(dir, along)
+  _thrPerp.crossVectors(dir, origin)
+  if (_thrPerp.lengthSq() < 1e-12) {
+    if (Math.abs(dir.y) < 0.9) _thrPerp.set(0, 1, 0).cross(dir)
+    else _thrPerp.set(1, 0, 0).cross(dir)
+  }
+  _thrPerp.normalize()
+  _thrLeft.copy(_thrTip).addScaledVector(dir, -along).addScaledVector(_thrPerp, halfW)
+  _thrRight.copy(_thrTip).addScaledVector(dir, -along).addScaledVector(_thrPerp, -halfW)
+  positions.push(
+    _thrLeft.x, _thrLeft.y, _thrLeft.z, _thrTip.x, _thrTip.y, _thrTip.z,
+    _thrRight.x, _thrRight.y, _thrRight.z, _thrTip.x, _thrTip.y, _thrTip.z
+  )
+}
+
 function clearManObjects() {
+  clearManThrustArrow()
   for (const obj of manObjects) {
     if (group) group.remove(obj)
     disposeObject(obj)
@@ -97,6 +159,56 @@ function clearManObjects() {
   manObjects = []
   manOrigIdx = []
   manHighlights = []
+}
+
+/** Stream of small blue ">" chevrons along the selected MAN burn, pointing in file-frame thrust. */
+function updateManThrustArrow(): void {
+  clearManThrustArrow()
+  if (selectedManIdx == null || !currentSet?.states.length || !group) return
+  const seg = currentSet.maneuvers?.[selectedManIdx]
+  if (!seg?.acc) return
+  const high = manHighlights.find((h) => h.origIdx === selectedManIdx)
+  const tStart = high ? high.draw0 : seg.t0
+  const tEnd = high ? high.draw1 : seg.t1
+  const midSv = manStateAt(currentSet, (tStart + tEnd) / 2)
+  const sense = midSv ? manSpeedSense(midSv.r, midSv.v, seg.acc, seg.refFrame) : null
+  const n = manChevronCount(tEnd - tStart, sense)
+  const positions: number[] = []
+  const dir = new THREE.Vector3()
+  const origin = new THREE.Vector3()
+  for (let i = 0; i < n; i++) {
+    const t = n === 1 ? (tStart + tEnd) / 2 : tStart + ((i + 0.5) / n) * (tEnd - tStart)
+    const sv = manStateAt(currentSet, t)
+    if (!sv) continue
+    const accEci = accToEci(sv.r, sv.v, seg.acc, seg.refFrame)
+    if (!accEci) continue
+    const mag = Math.hypot(accEci[0], accEci[1], accEci[2])
+    if (!(mag > 0)) continue
+    const hat: Vec3 = [accEci[0] / mag, accEci[1] / mag, accEci[2] / mag]
+    origin.copy(eciToScene(sv.r[0], sv.r[1], sv.r[2]))
+    // 1 km tip → scene-units-per-km, so glyph size stays consistent with the ECI scale.
+    dir.copy(eciToScene(sv.r[0] + hat[0], sv.r[1] + hat[1], sv.r[2] + hat[2])).sub(origin)
+    const km = dir.length()
+    if (km < 1e-12) continue
+    dir.multiplyScalar(1 / km)
+    appendChevron(positions, origin, dir, CHEVRON_ARM_KM * km, CHEVRON_HALF_KM * km)
+  }
+  if (positions.length < 6) return
+  const geo = new THREE.BufferGeometry()
+  geo.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3))
+  manThrustArrows = new THREE.LineSegments(
+    geo,
+    new THREE.LineBasicMaterial({
+      color: EPH_THRUST_ARROW_COLOR,
+      transparent: true,
+      opacity: 1,
+      depthTest: true,
+      depthWrite: false
+    })
+  )
+  manThrustArrows.frustumCulled = false
+  manThrustArrows.renderOrder = 4
+  group.add(manThrustArrows)
 }
 
 function ensureGroup(scene: THREE.Scene): THREE.Group {
@@ -319,7 +431,7 @@ function paintManSegments(g: THREE.Group, set: EphemSet) {
   applyManSelection()
 }
 
-/** 把选中态刷到 MAN 管道材质：选中段亮琥珀、其余恢复常规琥珀（按 maneuver 原始下标匹配） */
+/** 把选中态刷到 MAN 管道材质：选中段亮金 #ffd166（整段含烧蚀区间），其余恢复常规琥珀 */
 function applyManSelection(): void {
   for (let i = 0; i < manObjects.length; i++) {
     const mesh = manObjects[i] as THREE.Mesh
@@ -333,6 +445,7 @@ function applyManSelection(): void {
       mat.opacity = 0.95
     }
   }
+  updateManThrustArrow()
 }
 
 /** 面板机动卡片选中/取消 → 高亮对应琥珀段（idx 为 set.maneuvers 原始下标，null 取消） */
@@ -548,6 +661,7 @@ export function clearEphemOrbit(): void {
   manOrigIdx = []
   manHighlights = []
   selectedManIdx = null
+  manThrustArrows = null
   impulseLine = null
   marker = null
   markerModelSeq++

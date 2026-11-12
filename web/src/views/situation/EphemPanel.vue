@@ -16,6 +16,7 @@ import {
   type BuiltinSample
 } from './ephem/useUserEphemeris'
 import type { ThreatEvent, Vec3 } from './ephem/types'
+import { manSpeedLine, manSpeedSense } from './ephem/maneuverDisplay'
 import { useI18n } from '@/composables/useI18n'
 import CompactPager from '@/components/CompactPager.vue'
 import type { EphemMeta } from './ephem/store'
@@ -24,11 +25,30 @@ import { gmstRad } from './ephem/time'
 import { twoBodyPropagate } from './ephem/screening'
 
 const { t } = useI18n()
+const tMan = (key: string, params?: Record<string, string | number>) => t(key as never, params)
 
-/** 机动明细行：每段 MAN 的起始时刻 / 时长 / 位置经纬度（OCM 专有） */
-interface ManRow { t0: number; duraSec: number; lat: string; lon: string; done: boolean }
+/** 机动明细行：每段 MAN 的起始时刻 / 时长 / Δv / 方向 / 目的 / 位置经纬度（OCM 专有） */
+interface ManRow {
+  t0: number
+  duraSec: number
+  lat: string
+  lon: string
+  done: boolean
+  dvMps?: number
+  purpose?: string
+  dirText: string
+}
 /** 机动卡片定位事件负载（发给三维做标签文本与高亮定位） */
-interface ManLocateInfo { idx: number; t0: number; duraSec: number; lat: string; lon: string }
+interface ManLocateInfo {
+  idx: number
+  t0: number
+  duraSec: number
+  lat: string
+  lon: string
+  dvMps?: number
+  purpose?: string
+  dirText: string
+}
 
 const emit = defineEmits<{
   (e: 'close'): void
@@ -217,22 +237,32 @@ const activeManList = computed<ManRow[]>(() => {
   return mans.map((m) => {
     // MAN 可落在 TRAJ 区间外（OCM 的 MAN 窗口常早于首点）：区间外用两端状态做二体推进近似
     let r: Vec3 | null = null
+    let v: Vec3 | null = null
     const st = interpolateAt(set.states, m.t0)
-    if (st) r = st.r
-    else if (set.states.length) {
+    if (st) {
+      r = st.r
+      v = st.v
+    } else if (set.states.length) {
       const s0 = set.states[0]
       const sN = set.states[set.states.length - 1]
       const base = m.t0 < s0.t ? s0 : sN
       const prop = twoBodyPropagate(base.r, base.v, (m.t0 - base.t) / 1000)
-      if (prop) r = prop.r
+      if (prop) {
+        r = prop.r
+        v = prop.v
+      }
     }
     const ll = r ? eciToLatLon(r, m.t0) : null
+    const sense = r && v && m.acc ? manSpeedSense(r, v, m.acc, m.refFrame) : null
     return {
       t0: m.t0,
       duraSec: Math.max(0, Math.round((m.t1 - m.t0) / 1000)),
       lat: ll ? fmtLat(ll.lat) : '—',
       lon: ll ? fmtLon(ll.lon) : '—',
-      done: m.t1 < Date.now()
+      done: m.t1 < Date.now(),
+      dvMps: m.dvMps,
+      purpose: m.purpose,
+      dirText: manSpeedLine(m, tMan, sense)
     }
   })
 })
@@ -255,7 +285,7 @@ function toggleMan(i: number, m: ManRow) {
     return
   }
   selectedMan.value = i
-  emit('locate-man', i, { idx: i, t0: m.t0, duraSec: m.duraSec, lat: m.lat, lon: m.lon })
+  emit('locate-man', i, { idx: i, t0: m.t0, duraSec: m.duraSec, lat: m.lat, lon: m.lon, dvMps: m.dvMps, purpose: m.purpose, dirText: m.dirText })
 }
 
 function fmtUtc(ms?: number, withSec = false) {
@@ -452,6 +482,10 @@ function isCardActive(c: EphCard): boolean {
                       <span>{{ i + 1 }}. {{ fmtUtc(m.t0, true) }} UTC · {{ m.duraSec }} s</span>
                       <em v-if="m.done" class="ep-man-done">{{ t('ephp.manDone') }}</em>
                     </span>
+                    <span
+                      class="ep-man-line is-item is-dv"
+                      :title="m.purpose ? (m.dirText + ' · ' + m.purpose) : m.dirText"
+                    >{{ m.dirText }}<template v-if="m.purpose"> · {{ m.purpose }}</template></span>
                     <span class="ep-man-line is-item">{{ m.lat }} / {{ m.lon }}</span>
                   </button>
                 </template>
@@ -583,11 +617,20 @@ function isCardActive(c: EphCard): boolean {
   > span { flex: none; width: 84px; color: #8ea4c4; }
   b { flex: 1 1 auto; min-width: 0; color: #eaf2fc; font-weight: 600; word-break: break-all; }
   &.is-sub span { width: auto; } &.is-sub b { flex: none; } }
+.ep-kv-man b { word-break: normal; overflow-wrap: normal; }
 
-/* 机动明细：首行总数；每段 MAN 为一张琥珀边框卡片（时刻/时长 + 经纬度两行） */
+/* 机动明细：首行总数；每段 MAN 为一张琥珀边框卡片（时刻/时长 + 速度一行不换行 + 经纬度） */
 .ep-man-line { display: block; font-size: 10px; line-height: 1.55; font-weight: 400; color: #cfe0f5;
+  word-break: normal; overflow-wrap: normal;
   &.is-item { color: #9dbbdd; }
-  &.is-head { display: flex; align-items: baseline; gap: 6px; > span { flex: 1 1 auto; min-width: 0; } } }
+  &.is-dv {
+    font-size: 9.5px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  &.is-head { display: flex; align-items: baseline; gap: 6px; white-space: nowrap;
+    > span { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; } } }
 
 /* 「已完成」小字徽标（机动结束时刻早于真实时间） */
 .ep-man-done { flex: none; font-style: normal; font-size: 8.5px; line-height: 1.5;

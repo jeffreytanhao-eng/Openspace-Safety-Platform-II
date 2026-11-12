@@ -1,5 +1,5 @@
 {
-  "generatedAt": "2026-11-11T06:29:13.201Z",
+  "generatedAt": "2026-11-12T10:24:39.676Z",
   "items": [
     {
       "id": "ocm-100002",
@@ -22,19 +22,52 @@
           "t": 1794259455561,
           "dvMps": 0.092793,
           "duraSec": 297.061544,
-          "id": "0"
+          "id": "0",
+          "accX": 0,
+          "accY": 3.1236847382699337e-7,
+          "accZ": 0,
+          "refFrame": "NTW_ROTATING",
+          "basis": "PLANNED",
+          "dcType": "CONTINUOUS",
+          "deviceId": "ALL",
+          "extras": {
+            "MAN_COMPOSITION": "TIME_ABSOLUTE, MAN_DURA, ACC_X, ACC_Y, ACC_Z",
+            "MAN_UNITS": "[n/a, s, km/s**2, km/s**2, km/s**2]"
+          }
         },
         {
           "t": 1794346293128,
           "dvMps": 0.11072,
           "duraSec": 354.453381,
-          "id": "1"
+          "id": "1",
+          "accX": 0,
+          "accY": 3.1236847382699337e-7,
+          "accZ": 0,
+          "refFrame": "NTW_ROTATING",
+          "basis": "PLANNED",
+          "dcType": "CONTINUOUS",
+          "deviceId": "ALL",
+          "extras": {
+            "MAN_COMPOSITION": "TIME_ABSOLUTE, MAN_DURA, ACC_X, ACC_Y, ACC_Z",
+            "MAN_UNITS": "[n/a, s, km/s**2, km/s**2, km/s**2]"
+          }
         },
         {
           "t": 1794428866049,
           "dvMps": 0.096152,
           "duraSec": 307.815692,
-          "id": "2"
+          "id": "2",
+          "accX": 0,
+          "accY": 3.1236847382699337e-7,
+          "accZ": 0,
+          "refFrame": "NTW_ROTATING",
+          "basis": "PLANNED",
+          "dcType": "CONTINUOUS",
+          "deviceId": "ALL",
+          "extras": {
+            "MAN_COMPOSITION": "TIME_ABSOLUTE, MAN_DURA, ACC_X, ACC_Y, ACC_Z",
+            "MAN_UNITS": "[n/a, s, km/s**2, km/s**2, km/s**2]"
+          }
         }
       ],
       "status": "local",
@@ -67,13 +100,35 @@
           "t": 1794344926397,
           "dvMps": 0.144554,
           "duraSec": 482.772093,
-          "id": "0"
+          "id": "0",
+          "accX": 0,
+          "accY": 2.9942587861788613e-7,
+          "accZ": 0,
+          "refFrame": "NTW_ROTATING",
+          "basis": "PLANNED",
+          "dcType": "CONTINUOUS",
+          "deviceId": "ALL",
+          "extras": {
+            "MAN_COMPOSITION": "TIME_ABSOLUTE, MAN_DURA, ACC_X, ACC_Y, ACC_Z",
+            "MAN_UNITS": "[n/a, s, km/s**2, km/s**2, km/s**2]"
+          }
         },
         {
           "t": 1794432372000,
           "dvMps": 0.106753,
           "duraSec": 356.524075,
-          "id": "1"
+          "id": "1",
+          "accX": 0,
+          "accY": 2.9942587861788613e-7,
+          "accZ": 0,
+          "refFrame": "NTW_ROTATING",
+          "basis": "PLANNED",
+          "dcType": "CONTINUOUS",
+          "deviceId": "ALL",
+          "extras": {
+            "MAN_COMPOSITION": "TIME_ABSOLUTE, MAN_DURA, ACC_X, ACC_Y, ACC_Z",
+            "MAN_UNITS": "[n/a, s, km/s**2, km/s**2, km/s**2]"
+          }
         }
       ],
       "status": "local",
@@ -106,19 +161,52 @@
           "t": 1794259362841,
           "dvMps": 0.078618,
           "duraSec": 252.830884,
-          "id": "0"
+          "id": "0",
+          "accX": 0,
+          "accY": 3.109493595614051e-7,
+          "accZ": 0,
+          "refFrame": "NTW_ROTATING",
+          "basis": "PLANNED",
+          "dcType": "CONTINUOUS",
+          "deviceId": "ALL",
+          "extras": {
+            "MAN_COMPOSITION": "TIME_ABSOLUTE, MAN_DURA, ACC_X, ACC_Y, ACC_Z",
+            "MAN_UNITS": "[n/a, s, km/s**2, km/s**2, km/s**2]"
+          }
         },
         {
           "t": 1794346689938,
           "dvMps": 0.071438,
           "duraSec": 229.742632,
-          "id": "1"
+          "id": "1",
+          "accX": 0,
+          "accY": 3.109493595614051e-7,
+          "accZ": 0,
+          "refFrame": "NTW_ROTATING",
+          "basis": "PLANNED",
+          "dcType": "CONTINUOUS",
+          "deviceId": "ALL",
+          "extras": {
+            "MAN_COMPOSITION": "TIME_ABSOLUTE, MAN_DURA, ACC_X, ACC_Y, ACC_Z",
+            "MAN_UNITS": "[n/a, s, km/s**2, km/s**2, km/s**2]"
+          }
         },
         {
           "t": 1794431563039,
           "dvMps": 0.103036,
           "duraSec": 331.359958,
-          "id": "2"
+          "id": "2",
+          "accX": 0,
+          "accY": 3.109493595614051e-7,
+          "accZ": 0,
+          "refFrame": "NTW_ROTATING",
+          "basis": "PLANNED",
+          "dcType": "CONTINUOUS",
+          "deviceId": "ALL",
+          "extras": {
+            "MAN_COMPOSITION": "TIME_ABSOLUTE, MAN_DURA, ACC_X, ACC_Y, ACC_Z",
+            "MAN_UNITS": "[n/a, s, km/s**2, km/s**2, km/s**2]"
+          }
         }
       ],
       "status": "local",
@@ -176,151 +264,451 @@
           "t": 1794080015297,
           "dvMps": 0.402825,
           "duraSec": 1680,
-          "id": "0"
+          "id": "0",
+          "accX": 0,
+          "accY": -2.3977652536715203e-7,
+          "accZ": 0,
+          "refFrame": "NTW_ROTATING",
+          "basis": "PLANNED",
+          "dcType": "CONTINUOUS",
+          "purpose": "RELOCATION",
+          "deviceId": "ALL",
+          "extras": {
+            "MAN_COMPOSITION": "TIME_ABSOLUTE, MAN_DURA, ACC_X, ACC_Y, ACC_Z",
+            "MAN_UNITS": "[n/a, s, km/s**2, km/s**2, km/s**2]"
+          }
         },
         {
           "t": 1794088903026,
           "dvMps": 0.402825,
           "duraSec": 1680,
-          "id": "1"
+          "id": "1",
+          "accX": 0,
+          "accY": -2.3977652536715203e-7,
+          "accZ": 0,
+          "refFrame": "NTW_ROTATING",
+          "basis": "PLANNED",
+          "dcType": "CONTINUOUS",
+          "purpose": "RELOCATION",
+          "deviceId": "ALL",
+          "extras": {
+            "MAN_COMPOSITION": "TIME_ABSOLUTE, MAN_DURA, ACC_X, ACC_Y, ACC_Z",
+            "MAN_UNITS": "[n/a, s, km/s**2, km/s**2, km/s**2]"
+          }
         },
         {
           "t": 1794097996992,
           "dvMps": 0.303408,
           "duraSec": 1265.376472,
-          "id": "2"
+          "id": "2",
+          "accX": 0,
+          "accY": -2.3977652536715203e-7,
+          "accZ": 0,
+          "refFrame": "NTW_ROTATING",
+          "basis": "PLANNED",
+          "dcType": "CONTINUOUS",
+          "purpose": "RELOCATION",
+          "deviceId": "ALL",
+          "extras": {
+            "MAN_COMPOSITION": "TIME_ABSOLUTE, MAN_DURA, ACC_X, ACC_Y, ACC_Z",
+            "MAN_UNITS": "[n/a, s, km/s**2, km/s**2, km/s**2]"
+          }
         },
         {
           "t": 1794107213226,
           "dvMps": 0.144839,
           "duraSec": 604.058429,
-          "id": "3"
+          "id": "3",
+          "accX": 0,
+          "accY": -2.3977652536715203e-7,
+          "accZ": 0,
+          "refFrame": "NTW_ROTATING",
+          "basis": "PLANNED",
+          "dcType": "CONTINUOUS",
+          "purpose": "RELOCATION",
+          "deviceId": "ALL",
+          "extras": {
+            "MAN_COMPOSITION": "TIME_ABSOLUTE, MAN_DURA, ACC_X, ACC_Y, ACC_Z",
+            "MAN_UNITS": "[n/a, s, km/s**2, km/s**2, km/s**2]"
+          }
         },
         {
           "t": 1794115766082,
           "dvMps": 0.303882,
           "duraSec": 1267.356202,
-          "id": "4"
+          "id": "4",
+          "accX": 0,
+          "accY": -2.3977652536715203e-7,
+          "accZ": 0,
+          "refFrame": "NTW_ROTATING",
+          "basis": "PLANNED",
+          "dcType": "CONTINUOUS",
+          "purpose": "RELOCATION",
+          "deviceId": "ALL",
+          "extras": {
+            "MAN_COMPOSITION": "TIME_ABSOLUTE, MAN_DURA, ACC_X, ACC_Y, ACC_Z",
+            "MAN_UNITS": "[n/a, s, km/s**2, km/s**2, km/s**2]"
+          }
         },
         {
           "t": 1794124596123,
           "dvMps": 0.329485,
           "duraSec": 1374.132405,
-          "id": "5"
+          "id": "5",
+          "accX": 0,
+          "accY": -2.3977652536715203e-7,
+          "accZ": 0,
+          "refFrame": "NTW_ROTATING",
+          "basis": "PLANNED",
+          "dcType": "CONTINUOUS",
+          "purpose": "RELOCATION",
+          "deviceId": "ALL",
+          "extras": {
+            "MAN_COMPOSITION": "TIME_ABSOLUTE, MAN_DURA, ACC_X, ACC_Y, ACC_Z",
+            "MAN_UNITS": "[n/a, s, km/s**2, km/s**2, km/s**2]"
+          }
         },
         {
           "t": 1794133714739,
           "dvMps": 0.216184,
           "duraSec": 901.608062,
-          "id": "6"
+          "id": "6",
+          "accX": 0,
+          "accY": -2.3977652536715203e-7,
+          "accZ": 0,
+          "refFrame": "NTW_ROTATING",
+          "basis": "PLANNED",
+          "dcType": "CONTINUOUS",
+          "purpose": "RELOCATION",
+          "deviceId": "ALL",
+          "extras": {
+            "MAN_COMPOSITION": "TIME_ABSOLUTE, MAN_DURA, ACC_X, ACC_Y, ACC_Z",
+            "MAN_UNITS": "[n/a, s, km/s**2, km/s**2, km/s**2]"
+          }
         },
         {
           "t": 1794142388907,
           "dvMps": 0.315509,
           "duraSec": 1315.847561,
-          "id": "7"
+          "id": "7",
+          "accX": 0,
+          "accY": -2.3977652536715203e-7,
+          "accZ": 0,
+          "refFrame": "NTW_ROTATING",
+          "basis": "PLANNED",
+          "dcType": "CONTINUOUS",
+          "purpose": "RELOCATION",
+          "deviceId": "ALL",
+          "extras": {
+            "MAN_COMPOSITION": "TIME_ABSOLUTE, MAN_DURA, ACC_X, ACC_Y, ACC_Z",
+            "MAN_UNITS": "[n/a, s, km/s**2, km/s**2, km/s**2]"
+          }
         },
         {
           "t": 1794151310919,
           "dvMps": 0.295463,
           "duraSec": 1232.242537,
-          "id": "8"
+          "id": "8",
+          "accX": 0,
+          "accY": -2.3977652536715203e-7,
+          "accZ": 0,
+          "refFrame": "NTW_ROTATING",
+          "basis": "PLANNED",
+          "dcType": "CONTINUOUS",
+          "purpose": "RELOCATION",
+          "deviceId": "ALL",
+          "extras": {
+            "MAN_COMPOSITION": "TIME_ABSOLUTE, MAN_DURA, ACC_X, ACC_Y, ACC_Z",
+            "MAN_UNITS": "[n/a, s, km/s**2, km/s**2, km/s**2]"
+          }
         },
         {
           "t": 1794160192878,
           "dvMps": 0.294109,
           "duraSec": 1226.596898,
-          "id": "9"
+          "id": "9",
+          "accX": 0,
+          "accY": -2.3977652536715203e-7,
+          "accZ": 0,
+          "refFrame": "NTW_ROTATING",
+          "basis": "PLANNED",
+          "dcType": "CONTINUOUS",
+          "purpose": "RELOCATION",
+          "deviceId": "ALL",
+          "extras": {
+            "MAN_COMPOSITION": "TIME_ABSOLUTE, MAN_DURA, ACC_X, ACC_Y, ACC_Z",
+            "MAN_UNITS": "[n/a, s, km/s**2, km/s**2, km/s**2]"
+          }
         },
         {
           "t": 1794169009796,
           "dvMps": 0.32343,
           "duraSec": 1348.882517,
-          "id": "10"
+          "id": "10",
+          "accX": 0,
+          "accY": -2.3977652536715203e-7,
+          "accZ": 0,
+          "refFrame": "NTW_ROTATING",
+          "basis": "PLANNED",
+          "dcType": "CONTINUOUS",
+          "purpose": "RELOCATION",
+          "deviceId": "ALL",
+          "extras": {
+            "MAN_COMPOSITION": "TIME_ABSOLUTE, MAN_DURA, ACC_X, ACC_Y, ACC_Z",
+            "MAN_UNITS": "[n/a, s, km/s**2, km/s**2, km/s**2]"
+          }
         },
         {
           "t": 1794178025995,
           "dvMps": 0.256676,
           "duraSec": 1070.478026,
-          "id": "11"
+          "id": "11",
+          "accX": 0,
+          "accY": -2.3977652536715203e-7,
+          "accZ": 0,
+          "refFrame": "NTW_ROTATING",
+          "basis": "PLANNED",
+          "dcType": "CONTINUOUS",
+          "purpose": "RELOCATION",
+          "deviceId": "ALL",
+          "extras": {
+            "MAN_COMPOSITION": "TIME_ABSOLUTE, MAN_DURA, ACC_X, ACC_Y, ACC_Z",
+            "MAN_UNITS": "[n/a, s, km/s**2, km/s**2, km/s**2]"
+          }
         },
         {
           "t": 1794186800301,
           "dvMps": 0.30541,
           "duraSec": 1273.725721,
-          "id": "12"
+          "id": "12",
+          "accX": 0,
+          "accY": -2.3977652536715203e-7,
+          "accZ": 0,
+          "refFrame": "NTW_ROTATING",
+          "basis": "PLANNED",
+          "dcType": "CONTINUOUS",
+          "purpose": "RELOCATION",
+          "deviceId": "ALL",
+          "extras": {
+            "MAN_COMPOSITION": "TIME_ABSOLUTE, MAN_DURA, ACC_X, ACC_Y, ACC_Z",
+            "MAN_UNITS": "[n/a, s, km/s**2, km/s**2, km/s**2]"
+          }
         },
         {
           "t": 1794195683279,
           "dvMps": 0.301509,
           "duraSec": 1257.459478,
-          "id": "13"
+          "id": "13",
+          "accX": 0,
+          "accY": -2.3977652536715203e-7,
+          "accZ": 0,
+          "refFrame": "NTW_ROTATING",
+          "basis": "PLANNED",
+          "dcType": "CONTINUOUS",
+          "purpose": "RELOCATION",
+          "deviceId": "ALL",
+          "extras": {
+            "MAN_COMPOSITION": "TIME_ABSOLUTE, MAN_DURA, ACC_X, ACC_Y, ACC_Z",
+            "MAN_UNITS": "[n/a, s, km/s**2, km/s**2, km/s**2]"
+          }
         },
         {
           "t": 1794204621683,
           "dvMps": 0.27052,
           "duraSec": 1128.218973,
-          "id": "14"
+          "id": "14",
+          "accX": 0,
+          "accY": -2.3977652536715203e-7,
+          "accZ": 0,
+          "refFrame": "NTW_ROTATING",
+          "basis": "PLANNED",
+          "dcType": "CONTINUOUS",
+          "purpose": "RELOCATION",
+          "deviceId": "ALL",
+          "extras": {
+            "MAN_COMPOSITION": "TIME_ABSOLUTE, MAN_DURA, ACC_X, ACC_Y, ACC_Z",
+            "MAN_UNITS": "[n/a, s, km/s**2, km/s**2, km/s**2]"
+          }
         },
         {
           "t": 1794213398897,
           "dvMps": 0.316318,
           "duraSec": 1319.220113,
-          "id": "15"
+          "id": "15",
+          "accX": 0,
+          "accY": -2.3977652536715203e-7,
+          "accZ": 0,
+          "refFrame": "NTW_ROTATING",
+          "basis": "PLANNED",
+          "dcType": "CONTINUOUS",
+          "purpose": "RELOCATION",
+          "deviceId": "ALL",
+          "extras": {
+            "MAN_COMPOSITION": "TIME_ABSOLUTE, MAN_DURA, ACC_X, ACC_Y, ACC_Z",
+            "MAN_UNITS": "[n/a, s, km/s**2, km/s**2, km/s**2]"
+          }
         },
         {
           "t": 1794222321443,
           "dvMps": 0.291903,
           "duraSec": 1217.397163,
-          "id": "16"
+          "id": "16",
+          "accX": 0,
+          "accY": -2.3977652536715203e-7,
+          "accZ": 0,
+          "refFrame": "NTW_ROTATING",
+          "basis": "PLANNED",
+          "dcType": "CONTINUOUS",
+          "purpose": "RELOCATION",
+          "deviceId": "ALL",
+          "extras": {
+            "MAN_COMPOSITION": "TIME_ABSOLUTE, MAN_DURA, ACC_X, ACC_Y, ACC_Z",
+            "MAN_UNITS": "[n/a, s, km/s**2, km/s**2, km/s**2]"
+          }
         },
         {
           "t": 1794231223919,
           "dvMps": 0.276606,
           "duraSec": 1153.597268,
-          "id": "17"
+          "id": "17",
+          "accX": 0,
+          "accY": -2.39776502327277e-7,
+          "accZ": -1.0511347111392695e-10,
+          "refFrame": "NTW_ROTATING",
+          "basis": "PLANNED",
+          "dcType": "CONTINUOUS",
+          "purpose": "RELOCATION",
+          "deviceId": "ALL",
+          "extras": {
+            "MAN_COMPOSITION": "TIME_ABSOLUTE, MAN_DURA, ACC_X, ACC_Y, ACC_Z",
+            "MAN_UNITS": "[n/a, s, km/s**2, km/s**2, km/s**2]"
+          }
         },
         {
           "t": 1794240073625,
           "dvMps": 0.286102,
           "duraSec": 1193.202938,
-          "id": "18"
+          "id": "18",
+          "accX": 0,
+          "accY": -2.3893365876664874e-7,
+          "accZ": 2.008703127709896e-8,
+          "refFrame": "NTW_ROTATING",
+          "basis": "PLANNED",
+          "dcType": "CONTINUOUS",
+          "purpose": "RELOCATION",
+          "deviceId": "ALL",
+          "extras": {
+            "MAN_COMPOSITION": "TIME_ABSOLUTE, MAN_DURA, ACC_X, ACC_Y, ACC_Z",
+            "MAN_UNITS": "[n/a, s, km/s**2, km/s**2, km/s**2]"
+          }
         },
         {
           "t": 1794248866635,
           "dvMps": 0.322269,
           "duraSec": 1344.03966,
-          "id": "19"
+          "id": "19",
+          "accX": 0,
+          "accY": -2.390408144276102e-7,
+          "accZ": -1.876888795132362e-8,
+          "refFrame": "NTW_ROTATING",
+          "basis": "PLANNED",
+          "dcType": "CONTINUOUS",
+          "purpose": "RELOCATION",
+          "deviceId": "ALL",
+          "extras": {
+            "MAN_COMPOSITION": "TIME_ABSOLUTE, MAN_DURA, ACC_X, ACC_Y, ACC_Z",
+            "MAN_UNITS": "[n/a, s, km/s**2, km/s**2, km/s**2]"
+          }
         },
         {
           "t": 1794257806671,
           "dvMps": 0.287411,
           "duraSec": 1198.663257,
-          "id": "20"
+          "id": "20",
+          "accX": 0,
+          "accY": -2.3977652536715203e-7,
+          "accZ": 0,
+          "refFrame": "NTW_ROTATING",
+          "basis": "PLANNED",
+          "dcType": "CONTINUOUS",
+          "purpose": "RELOCATION",
+          "deviceId": "ALL",
+          "extras": {
+            "MAN_COMPOSITION": "TIME_ABSOLUTE, MAN_DURA, ACC_X, ACC_Y, ACC_Z",
+            "MAN_UNITS": "[n/a, s, km/s**2, km/s**2, km/s**2]"
+          }
         },
         {
           "t": 1794266676623,
           "dvMps": 0.285656,
           "duraSec": 1191.343128,
-          "id": "21"
+          "id": "21",
+          "accX": 0,
+          "accY": -2.335950904434984e-7,
+          "accZ": -5.409358407277429e-8,
+          "refFrame": "NTW_ROTATING",
+          "basis": "PLANNED",
+          "dcType": "CONTINUOUS",
+          "purpose": "RELOCATION",
+          "deviceId": "ALL",
+          "extras": {
+            "MAN_COMPOSITION": "TIME_ABSOLUTE, MAN_DURA, ACC_X, ACC_Y, ACC_Z",
+            "MAN_UNITS": "[n/a, s, km/s**2, km/s**2, km/s**2]"
+          }
         },
         {
           "t": 1794275519987,
           "dvMps": 0.296133,
           "duraSec": 1235.037504,
-          "id": "22"
+          "id": "22",
+          "accX": 0,
+          "accY": -2.3977652536715203e-7,
+          "accZ": 0,
+          "refFrame": "NTW_ROTATING",
+          "basis": "PLANNED",
+          "dcType": "CONTINUOUS",
+          "purpose": "RELOCATION",
+          "deviceId": "ALL",
+          "extras": {
+            "MAN_COMPOSITION": "TIME_ABSOLUTE, MAN_DURA, ACC_X, ACC_Y, ACC_Z",
+            "MAN_UNITS": "[n/a, s, km/s**2, km/s**2, km/s**2]"
+          }
         },
         {
           "t": 1794284385241,
           "dvMps": 0.295597,
           "duraSec": 1232.80349,
-          "id": "23"
+          "id": "23",
+          "accX": 0,
+          "accY": -2.3977652536715203e-7,
+          "accZ": 0,
+          "refFrame": "NTW_ROTATING",
+          "basis": "PLANNED",
+          "dcType": "CONTINUOUS",
+          "purpose": "RELOCATION",
+          "deviceId": "ALL",
+          "extras": {
+            "MAN_COMPOSITION": "TIME_ABSOLUTE, MAN_DURA, ACC_X, ACC_Y, ACC_Z",
+            "MAN_UNITS": "[n/a, s, km/s**2, km/s**2, km/s**2]"
+          }
         },
         {
           "t": 1794293260484,
           "dvMps": 0.289759,
           "duraSec": 1208.453454,
-          "id": "24"
+          "id": "24",
+          "accX": 0,
+          "accY": -2.3977652536715203e-7,
+          "accZ": 0,
+          "refFrame": "NTW_ROTATING",
+          "basis": "PLANNED",
+          "dcType": "CONTINUOUS",
+          "purpose": "RELOCATION",
+          "deviceId": "ALL",
+          "extras": {
+            "MAN_COMPOSITION": "TIME_ABSOLUTE, MAN_DURA, ACC_X, ACC_Y, ACC_Z",
+            "MAN_UNITS": "[n/a, s, km/s**2, km/s**2, km/s**2]"
+          }
         }
       ],
       "status": "local",
@@ -353,151 +741,450 @@
           "t": 1794081677656,
           "dvMps": 0.295744,
           "duraSec": 1288.41227,
-          "id": "0"
+          "id": "0",
+          "accX": 0,
+          "accY": -2.2954138555560229e-7,
+          "accZ": 0,
+          "refFrame": "NTW_ROTATING",
+          "basis": "PLANNED",
+          "dcType": "CONTINUOUS",
+          "purpose": "RELOCATION",
+          "deviceId": "ALL",
+          "extras": {
+            "MAN_COMPOSITION": "TIME_ABSOLUTE, MAN_DURA, ACC_X, ACC_Y, ACC_Z",
+            "MAN_UNITS": "[n/a, s, km/s**2, km/s**2, km/s**2]"
+          }
         },
         {
           "t": 1794090377623,
           "dvMps": 0.357087,
           "duraSec": 1555.654286,
-          "id": "1"
+          "id": "1",
+          "accX": 0,
+          "accY": -2.2954138555560229e-7,
+          "accZ": 0,
+          "refFrame": "NTW_ROTATING",
+          "basis": "PLANNED",
+          "dcType": "CONTINUOUS",
+          "purpose": "RELOCATION",
+          "deviceId": "ALL",
+          "extras": {
+            "MAN_COMPOSITION": "TIME_ABSOLUTE, MAN_DURA, ACC_X, ACC_Y, ACC_Z",
+            "MAN_UNITS": "[n/a, s, km/s**2, km/s**2, km/s**2]"
+          }
         },
         {
           "t": 1794099481549,
           "dvMps": 0.232535,
           "duraSec": 1013.039928,
-          "id": "2"
+          "id": "2",
+          "accX": 0,
+          "accY": -2.2954138471727877e-7,
+          "accZ": 1.9617845560142602e-11,
+          "refFrame": "NTW_ROTATING",
+          "basis": "PLANNED",
+          "dcType": "CONTINUOUS",
+          "purpose": "RELOCATION",
+          "deviceId": "ALL",
+          "extras": {
+            "MAN_COMPOSITION": "TIME_ABSOLUTE, MAN_DURA, ACC_X, ACC_Y, ACC_Z",
+            "MAN_UNITS": "[n/a, s, km/s**2, km/s**2, km/s**2]"
+          }
         },
         {
           "t": 1794108173151,
           "dvMps": 0.296783,
           "duraSec": 1292.936922,
-          "id": "3"
+          "id": "3",
+          "accX": 0,
+          "accY": -2.295410093090547e-7,
+          "accZ": -4.1560578209590387e-10,
+          "refFrame": "NTW_ROTATING",
+          "basis": "PLANNED",
+          "dcType": "CONTINUOUS",
+          "purpose": "RELOCATION",
+          "deviceId": "ALL",
+          "extras": {
+            "MAN_COMPOSITION": "TIME_ABSOLUTE, MAN_DURA, ACC_X, ACC_Y, ACC_Z",
+            "MAN_UNITS": "[n/a, s, km/s**2, km/s**2, km/s**2]"
+          }
         },
         {
           "t": 1794117751611,
           "dvMps": 0.31935,
           "duraSec": 1391.252885,
-          "id": "4"
+          "id": "4",
+          "accX": 0,
+          "accY": -2.286925951600662e-7,
+          "accZ": -1.9721678471664602e-8,
+          "refFrame": "NTW_ROTATING",
+          "basis": "PLANNED",
+          "dcType": "CONTINUOUS",
+          "deviceId": "ALL",
+          "extras": {
+            "MAN_COMPOSITION": "TIME_ABSOLUTE, MAN_DURA, ACC_X, ACC_Y, ACC_Z",
+            "MAN_UNITS": "[n/a, s, km/s**2, km/s**2, km/s**2]"
+          }
         },
         {
           "t": 1794126903378,
           "dvMps": 0.311961,
           "duraSec": 1359.061429,
-          "id": "5"
+          "id": "5",
+          "accX": 0,
+          "accY": -2.2954138555560229e-7,
+          "accZ": 0,
+          "refFrame": "NTW_ROTATING",
+          "basis": "PLANNED",
+          "dcType": "CONTINUOUS",
+          "purpose": "RELOCATION",
+          "deviceId": "ALL",
+          "extras": {
+            "MAN_COMPOSITION": "TIME_ABSOLUTE, MAN_DURA, ACC_X, ACC_Y, ACC_Z",
+            "MAN_UNITS": "[n/a, s, km/s**2, km/s**2, km/s**2]"
+          }
         },
         {
           "t": 1794135929455,
           "dvMps": 0.221031,
           "duraSec": 962.926349,
-          "id": "6"
+          "id": "6",
+          "accX": 0,
+          "accY": -2.2954138555560229e-7,
+          "accZ": 0,
+          "refFrame": "NTW_ROTATING",
+          "basis": "PLANNED",
+          "dcType": "CONTINUOUS",
+          "purpose": "RELOCATION",
+          "deviceId": "ALL",
+          "extras": {
+            "MAN_COMPOSITION": "TIME_ABSOLUTE, MAN_DURA, ACC_X, ACC_Y, ACC_Z",
+            "MAN_UNITS": "[n/a, s, km/s**2, km/s**2, km/s**2]"
+          }
         },
         {
           "t": 1794144456163,
           "dvMps": 0.358867,
           "duraSec": 1563.408411,
-          "id": "7"
+          "id": "7",
+          "accX": 0,
+          "accY": -2.2954138555560229e-7,
+          "accZ": 0,
+          "refFrame": "NTW_ROTATING",
+          "basis": "PLANNED",
+          "dcType": "CONTINUOUS",
+          "purpose": "RELOCATION",
+          "deviceId": "ALL",
+          "extras": {
+            "MAN_COMPOSITION": "TIME_ABSOLUTE, MAN_DURA, ACC_X, ACC_Y, ACC_Z",
+            "MAN_UNITS": "[n/a, s, km/s**2, km/s**2, km/s**2]"
+          }
         },
         {
           "t": 1794153559380,
           "dvMps": 0.231491,
           "duraSec": 1008.495171,
-          "id": "8"
+          "id": "8",
+          "accX": 0,
+          "accY": -2.2954138555560229e-7,
+          "accZ": 0,
+          "refFrame": "NTW_ROTATING",
+          "basis": "PLANNED",
+          "dcType": "CONTINUOUS",
+          "purpose": "RELOCATION",
+          "deviceId": "ALL",
+          "extras": {
+            "MAN_COMPOSITION": "TIME_ABSOLUTE, MAN_DURA, ACC_X, ACC_Y, ACC_Z",
+            "MAN_UNITS": "[n/a, s, km/s**2, km/s**2, km/s**2]"
+          }
         },
         {
           "t": 1794162337331,
           "dvMps": 0.25296,
           "duraSec": 1102.022492,
-          "id": "9"
+          "id": "9",
+          "accX": 0,
+          "accY": -2.2954138555560229e-7,
+          "accZ": 0,
+          "refFrame": "NTW_ROTATING",
+          "basis": "PLANNED",
+          "dcType": "CONTINUOUS",
+          "purpose": "RELOCATION",
+          "deviceId": "ALL",
+          "extras": {
+            "MAN_COMPOSITION": "TIME_ABSOLUTE, MAN_DURA, ACC_X, ACC_Y, ACC_Z",
+            "MAN_UNITS": "[n/a, s, km/s**2, km/s**2, km/s**2]"
+          }
         },
         {
           "t": 1794170995072,
           "dvMps": 0.329167,
           "duraSec": 1434.022357,
-          "id": "10"
+          "id": "10",
+          "accX": 0,
+          "accY": -2.284562167935754e-7,
+          "accZ": -2.2293602022834698e-8,
+          "refFrame": "NTW_ROTATING",
+          "basis": "PLANNED",
+          "dcType": "CONTINUOUS",
+          "purpose": "RELOCATION",
+          "deviceId": "ALL",
+          "extras": {
+            "MAN_COMPOSITION": "TIME_ABSOLUTE, MAN_DURA, ACC_X, ACC_Y, ACC_Z",
+            "MAN_UNITS": "[n/a, s, km/s**2, km/s**2, km/s**2]"
+          }
         },
         {
           "t": 1794179972423,
           "dvMps": 0.258102,
           "duraSec": 1124.424939,
-          "id": "11"
+          "id": "11",
+          "accX": 0,
+          "accY": -2.2954098500783543e-7,
+          "accZ": -4.288174650505696e-10,
+          "refFrame": "NTW_ROTATING",
+          "basis": "PLANNED",
+          "dcType": "CONTINUOUS",
+          "purpose": "RELOCATION",
+          "deviceId": "ALL",
+          "extras": {
+            "MAN_COMPOSITION": "TIME_ABSOLUTE, MAN_DURA, ACC_X, ACC_Y, ACC_Z",
+            "MAN_UNITS": "[n/a, s, km/s**2, km/s**2, km/s**2]"
+          }
         },
         {
           "t": 1794188669668,
           "dvMps": 0.315137,
           "duraSec": 1372.897102,
-          "id": "12"
+          "id": "12",
+          "accX": 0,
+          "accY": -2.295263188287065e-7,
+          "accZ": -2.6299520392265344e-9,
+          "refFrame": "NTW_ROTATING",
+          "basis": "PLANNED",
+          "dcType": "CONTINUOUS",
+          "purpose": "RELOCATION",
+          "deviceId": "ALL",
+          "extras": {
+            "MAN_COMPOSITION": "TIME_ABSOLUTE, MAN_DURA, ACC_X, ACC_Y, ACC_Z",
+            "MAN_UNITS": "[n/a, s, km/s**2, km/s**2, km/s**2]"
+          }
         },
         {
           "t": 1794197609384,
           "dvMps": 0.260337,
           "duraSec": 1134.161082,
-          "id": "13"
+          "id": "13",
+          "accX": 0,
+          "accY": -2.291464745416161e-7,
+          "accZ": 1.3458859087386758e-8,
+          "refFrame": "NTW_ROTATING",
+          "basis": "PLANNED",
+          "dcType": "CONTINUOUS",
+          "purpose": "RELOCATION",
+          "deviceId": "ALL",
+          "extras": {
+            "MAN_COMPOSITION": "TIME_ABSOLUTE, MAN_DURA, ACC_X, ACC_Y, ACC_Z",
+            "MAN_UNITS": "[n/a, s, km/s**2, km/s**2, km/s**2]"
+          }
         },
         {
           "t": 1794206378857,
           "dvMps": 0.283191,
           "duraSec": 1233.725669,
-          "id": "14"
+          "id": "14",
+          "accX": 0,
+          "accY": -2.197944824621925e-7,
+          "accZ": -6.617879692139033e-8,
+          "refFrame": "NTW_ROTATING",
+          "basis": "PLANNED",
+          "dcType": "CONTINUOUS",
+          "purpose": "RELOCATION",
+          "deviceId": "ALL",
+          "extras": {
+            "MAN_COMPOSITION": "TIME_ABSOLUTE, MAN_DURA, ACC_X, ACC_Y, ACC_Z",
+            "MAN_UNITS": "[n/a, s, km/s**2, km/s**2, km/s**2]"
+          }
         },
         {
           "t": 1794215138850,
           "dvMps": 0.309883,
           "duraSec": 1350.010018,
-          "id": "15"
+          "id": "15",
+          "accX": 0,
+          "accY": -2.2954138555560229e-7,
+          "accZ": 0,
+          "refFrame": "NTW_ROTATING",
+          "basis": "PLANNED",
+          "dcType": "CONTINUOUS",
+          "purpose": "RELOCATION",
+          "deviceId": "ALL",
+          "extras": {
+            "MAN_COMPOSITION": "TIME_ABSOLUTE, MAN_DURA, ACC_X, ACC_Y, ACC_Z",
+            "MAN_UNITS": "[n/a, s, km/s**2, km/s**2, km/s**2]"
+          }
         },
         {
           "t": 1794224093677,
           "dvMps": 0.24662,
           "duraSec": 1074.403253,
-          "id": "16"
+          "id": "16",
+          "accX": 0,
+          "accY": -2.2954138555560229e-7,
+          "accZ": 0,
+          "refFrame": "NTW_ROTATING",
+          "basis": "PLANNED",
+          "dcType": "CONTINUOUS",
+          "purpose": "RELOCATION",
+          "deviceId": "ALL",
+          "extras": {
+            "MAN_COMPOSITION": "TIME_ABSOLUTE, MAN_DURA, ACC_X, ACC_Y, ACC_Z",
+            "MAN_UNITS": "[n/a, s, km/s**2, km/s**2, km/s**2]"
+          }
         },
         {
           "t": 1794232952868,
           "dvMps": 0.226762,
           "duraSec": 987.891118,
-          "id": "17"
+          "id": "17",
+          "accX": 0,
+          "accY": -2.2954138555560229e-7,
+          "accZ": 0,
+          "refFrame": "NTW_ROTATING",
+          "basis": "PLANNED",
+          "dcType": "CONTINUOUS",
+          "purpose": "RELOCATION",
+          "deviceId": "ALL",
+          "extras": {
+            "MAN_COMPOSITION": "TIME_ABSOLUTE, MAN_DURA, ACC_X, ACC_Y, ACC_Z",
+            "MAN_UNITS": "[n/a, s, km/s**2, km/s**2, km/s**2]"
+          }
         },
         {
           "t": 1794242074928,
           "dvMps": 0.08574,
           "duraSec": 373.526059,
-          "id": "18"
+          "id": "18",
+          "accX": 0,
+          "accY": -2.2954138555560229e-7,
+          "accZ": 0,
+          "refFrame": "NTW_ROTATING",
+          "basis": "PLANNED",
+          "dcType": "CONTINUOUS",
+          "purpose": "RELOCATION",
+          "deviceId": "ALL",
+          "extras": {
+            "MAN_COMPOSITION": "TIME_ABSOLUTE, MAN_DURA, ACC_X, ACC_Y, ACC_Z",
+            "MAN_UNITS": "[n/a, s, km/s**2, km/s**2, km/s**2]"
+          }
         },
         {
           "t": 1794250947280,
           "dvMps": 0.059277,
           "duraSec": 258.242284,
-          "id": "19"
+          "id": "19",
+          "accX": 0,
+          "accY": -2.2954138555560229e-7,
+          "accZ": 0,
+          "refFrame": "NTW_ROTATING",
+          "basis": "PLANNED",
+          "dcType": "CONTINUOUS",
+          "purpose": "RELOCATION",
+          "deviceId": "ALL",
+          "extras": {
+            "MAN_COMPOSITION": "TIME_ABSOLUTE, MAN_DURA, ACC_X, ACC_Y, ACC_Z",
+            "MAN_UNITS": "[n/a, s, km/s**2, km/s**2, km/s**2]"
+          }
         },
         {
           "t": 1794259653552,
           "dvMps": 0.108842,
           "duraSec": 474.173462,
-          "id": "20"
+          "id": "20",
+          "accX": 0,
+          "accY": -2.2954138555560229e-7,
+          "accZ": 0,
+          "refFrame": "NTW_ROTATING",
+          "basis": "PLANNED",
+          "dcType": "CONTINUOUS",
+          "purpose": "RELOCATION",
+          "deviceId": "ALL",
+          "extras": {
+            "MAN_COMPOSITION": "TIME_ABSOLUTE, MAN_DURA, ACC_X, ACC_Y, ACC_Z",
+            "MAN_UNITS": "[n/a, s, km/s**2, km/s**2, km/s**2]"
+          }
         },
         {
           "t": 1794268475158,
           "dvMps": 0.105245,
           "duraSec": 458.500425,
-          "id": "21"
+          "id": "21",
+          "accX": 0,
+          "accY": -2.2953923721949e-7,
+          "accZ": -9.931059763926513e-10,
+          "refFrame": "NTW_ROTATING",
+          "basis": "PLANNED",
+          "dcType": "CONTINUOUS",
+          "purpose": "RELOCATION",
+          "deviceId": "ALL",
+          "extras": {
+            "MAN_COMPOSITION": "TIME_ABSOLUTE, MAN_DURA, ACC_X, ACC_Y, ACC_Z",
+            "MAN_UNITS": "[n/a, s, km/s**2, km/s**2, km/s**2]"
+          }
         },
         {
           "t": 1794277306027,
           "dvMps": 0.097186,
           "duraSec": 423.391988,
-          "id": "22"
+          "id": "22",
+          "accX": 0,
+          "accY": -2.2950212097201618e-7,
+          "accZ": -4.245486088978018e-9,
+          "refFrame": "NTW_ROTATING",
+          "basis": "PLANNED",
+          "dcType": "CONTINUOUS",
+          "purpose": "RELOCATION",
+          "deviceId": "ALL",
+          "extras": {
+            "MAN_COMPOSITION": "TIME_ABSOLUTE, MAN_DURA, ACC_X, ACC_Y, ACC_Z",
+            "MAN_UNITS": "[n/a, s, km/s**2, km/s**2, km/s**2]"
+          }
         },
         {
           "t": 1794286151139,
           "dvMps": 0.082377,
           "duraSec": 358.876756,
-          "id": "23"
+          "id": "23",
+          "accX": 0,
+          "accY": -2.260206735420406e-7,
+          "accZ": 4.0048755466156186e-8,
+          "refFrame": "NTW_ROTATING",
+          "basis": "PLANNED",
+          "dcType": "CONTINUOUS",
+          "purpose": "RELOCATION",
+          "deviceId": "ALL",
+          "extras": {
+            "MAN_COMPOSITION": "TIME_ABSOLUTE, MAN_DURA, ACC_X, ACC_Y, ACC_Z",
+            "MAN_UNITS": "[n/a, s, km/s**2, km/s**2, km/s**2]"
+          }
         },
         {
           "t": 1794294923862,
           "dvMps": 0.100589,
           "duraSec": 438.218655,
-          "id": "24"
+          "id": "24",
+          "accX": 0,
+          "accY": -2.1254877438524147e-7,
+          "accZ": -8.66733303278314e-8,
+          "refFrame": "NTW_ROTATING",
+          "basis": "PLANNED",
+          "dcType": "CONTINUOUS",
+          "purpose": "RELOCATION",
+          "deviceId": "ALL",
+          "extras": {
+            "MAN_COMPOSITION": "TIME_ABSOLUTE, MAN_DURA, ACC_X, ACC_Y, ACC_Z",
+            "MAN_UNITS": "[n/a, s, km/s**2, km/s**2, km/s**2]"
+          }
         }
       ],
       "status": "local",
@@ -530,145 +1217,433 @@
           "t": 1794085516738,
           "dvMps": 0.277423,
           "duraSec": 1197.418257,
-          "id": "0"
+          "id": "0",
+          "accX": 0,
+          "accY": -2.3168441536144462e-7,
+          "accZ": 0,
+          "refFrame": "NTW_ROTATING",
+          "basis": "PLANNED",
+          "dcType": "CONTINUOUS",
+          "purpose": "RELOCATION",
+          "deviceId": "ALL",
+          "extras": {
+            "MAN_COMPOSITION": "TIME_ABSOLUTE, MAN_DURA, ACC_X, ACC_Y, ACC_Z",
+            "MAN_UNITS": "[n/a, s, km/s**2, km/s**2, km/s**2]"
+          }
         },
         {
           "t": 1794094460431,
           "dvMps": 0.274255,
           "duraSec": 1183.743992,
-          "id": "1"
+          "id": "1",
+          "accX": 0,
+          "accY": -2.3168441536144462e-7,
+          "accZ": 0,
+          "refFrame": "NTW_ROTATING",
+          "basis": "PLANNED",
+          "dcType": "CONTINUOUS",
+          "purpose": "RELOCATION",
+          "deviceId": "ALL",
+          "extras": {
+            "MAN_COMPOSITION": "TIME_ABSOLUTE, MAN_DURA, ACC_X, ACC_Y, ACC_Z",
+            "MAN_UNITS": "[n/a, s, km/s**2, km/s**2, km/s**2]"
+          }
         },
         {
           "t": 1794103225206,
           "dvMps": 0.353438,
           "duraSec": 1525.516175,
-          "id": "2"
+          "id": "2",
+          "accX": 0,
+          "accY": -2.3168441536144462e-7,
+          "accZ": 0,
+          "refFrame": "NTW_ROTATING",
+          "basis": "PLANNED",
+          "dcType": "CONTINUOUS",
+          "purpose": "RELOCATION",
+          "deviceId": "ALL",
+          "extras": {
+            "MAN_COMPOSITION": "TIME_ABSOLUTE, MAN_DURA, ACC_X, ACC_Y, ACC_Z",
+            "MAN_UNITS": "[n/a, s, km/s**2, km/s**2, km/s**2]"
+          }
         },
         {
           "t": 1794112451025,
           "dvMps": 0.218489,
           "duraSec": 943.043793,
-          "id": "3"
+          "id": "3",
+          "accX": 0,
+          "accY": -2.3168441536144462e-7,
+          "accZ": 0,
+          "refFrame": "NTW_ROTATING",
+          "basis": "PLANNED",
+          "dcType": "CONTINUOUS",
+          "purpose": "RELOCATION",
+          "deviceId": "ALL",
+          "extras": {
+            "MAN_COMPOSITION": "TIME_ABSOLUTE, MAN_DURA, ACC_X, ACC_Y, ACC_Z",
+            "MAN_UNITS": "[n/a, s, km/s**2, km/s**2, km/s**2]"
+          }
         },
         {
           "t": 1794122278285,
           "dvMps": 0.321846,
           "duraSec": 1389.155286,
-          "id": "4"
+          "id": "4",
+          "accX": 0,
+          "accY": -2.3168441536144462e-7,
+          "accZ": 0,
+          "refFrame": "NTW_ROTATING",
+          "basis": "PLANNED",
+          "dcType": "CONTINUOUS",
+          "purpose": "RELOCATION",
+          "deviceId": "ALL",
+          "extras": {
+            "MAN_COMPOSITION": "TIME_ABSOLUTE, MAN_DURA, ACC_X, ACC_Y, ACC_Z",
+            "MAN_UNITS": "[n/a, s, km/s**2, km/s**2, km/s**2]"
+          }
         },
         {
           "t": 1794131065033,
           "dvMps": 0.38923,
           "duraSec": 1680,
-          "id": "5"
+          "id": "5",
+          "accX": 0,
+          "accY": -2.3168441536144462e-7,
+          "accZ": 0,
+          "refFrame": "NTW_ROTATING",
+          "basis": "PLANNED",
+          "dcType": "CONTINUOUS",
+          "purpose": "RELOCATION",
+          "deviceId": "ALL",
+          "extras": {
+            "MAN_COMPOSITION": "TIME_ABSOLUTE, MAN_DURA, ACC_X, ACC_Y, ACC_Z",
+            "MAN_UNITS": "[n/a, s, km/s**2, km/s**2, km/s**2]"
+          }
         },
         {
           "t": 1794140468531,
           "dvMps": 0.170407,
           "duraSec": 735.514275,
-          "id": "6"
+          "id": "6",
+          "accX": 0,
+          "accY": -2.3168441536144462e-7,
+          "accZ": 0,
+          "refFrame": "NTW_ROTATING",
+          "basis": "PLANNED",
+          "dcType": "CONTINUOUS",
+          "purpose": "RELOCATION",
+          "deviceId": "ALL",
+          "extras": {
+            "MAN_COMPOSITION": "TIME_ABSOLUTE, MAN_DURA, ACC_X, ACC_Y, ACC_Z",
+            "MAN_UNITS": "[n/a, s, km/s**2, km/s**2, km/s**2]"
+          }
         },
         {
           "t": 1794149018375,
           "dvMps": 0.346674,
           "duraSec": 1496.320055,
-          "id": "7"
+          "id": "7",
+          "accX": 0,
+          "accY": -2.3168441536144462e-7,
+          "accZ": 0,
+          "refFrame": "NTW_ROTATING",
+          "basis": "PLANNED",
+          "dcType": "CONTINUOUS",
+          "purpose": "RELOCATION",
+          "deviceId": "ALL",
+          "extras": {
+            "MAN_COMPOSITION": "TIME_ABSOLUTE, MAN_DURA, ACC_X, ACC_Y, ACC_Z",
+            "MAN_UNITS": "[n/a, s, km/s**2, km/s**2, km/s**2]"
+          }
         },
         {
           "t": 1794158084881,
           "dvMps": 0.282997,
           "duraSec": 1221.476698,
-          "id": "8"
+          "id": "8",
+          "accX": 0,
+          "accY": -2.3168441536144462e-7,
+          "accZ": 0,
+          "refFrame": "NTW_ROTATING",
+          "basis": "PLANNED",
+          "dcType": "CONTINUOUS",
+          "purpose": "RELOCATION",
+          "deviceId": "ALL",
+          "extras": {
+            "MAN_COMPOSITION": "TIME_ABSOLUTE, MAN_DURA, ACC_X, ACC_Y, ACC_Z",
+            "MAN_UNITS": "[n/a, s, km/s**2, km/s**2, km/s**2]"
+          }
         },
         {
           "t": 1794167523445,
           "dvMps": 0.046452,
           "duraSec": 200.49566,
-          "id": "9"
+          "id": "9",
+          "accX": 0,
+          "accY": -2.3168441536144462e-7,
+          "accZ": 0,
+          "refFrame": "NTW_ROTATING",
+          "basis": "PLANNED",
+          "dcType": "CONTINUOUS",
+          "purpose": "RELOCATION",
+          "deviceId": "ALL",
+          "extras": {
+            "MAN_COMPOSITION": "TIME_ABSOLUTE, MAN_DURA, ACC_X, ACC_Y, ACC_Z",
+            "MAN_UNITS": "[n/a, s, km/s**2, km/s**2, km/s**2]"
+          }
         },
         {
           "t": 1794176335281,
           "dvMps": 0.100159,
           "duraSec": 432.309772,
-          "id": "10"
+          "id": "10",
+          "accX": 0,
+          "accY": -2.3168441536144462e-7,
+          "accZ": 0,
+          "refFrame": "NTW_ROTATING",
+          "basis": "PLANNED",
+          "dcType": "CONTINUOUS",
+          "purpose": "RELOCATION",
+          "deviceId": "ALL",
+          "extras": {
+            "MAN_COMPOSITION": "TIME_ABSOLUTE, MAN_DURA, ACC_X, ACC_Y, ACC_Z",
+            "MAN_UNITS": "[n/a, s, km/s**2, km/s**2, km/s**2]"
+          }
         },
         {
           "t": 1794185282293,
           "dvMps": 0.091109,
           "duraSec": 393.245203,
-          "id": "11"
+          "id": "11",
+          "accX": 0,
+          "accY": -2.243859135967701e-7,
+          "accZ": 5.7694281351943646e-8,
+          "refFrame": "NTW_ROTATING",
+          "basis": "PLANNED",
+          "dcType": "CONTINUOUS",
+          "purpose": "RELOCATION",
+          "deviceId": "ALL",
+          "extras": {
+            "MAN_COMPOSITION": "TIME_ABSOLUTE, MAN_DURA, ACC_X, ACC_Y, ACC_Z",
+            "MAN_UNITS": "[n/a, s, km/s**2, km/s**2, km/s**2]"
+          }
         },
         {
           "t": 1794194098987,
           "dvMps": 0.142278,
           "duraSec": 614.102998,
-          "id": "12"
+          "id": "12",
+          "accX": 0,
+          "accY": -2.3088825317461083e-7,
+          "accZ": -1.919069741700933e-8,
+          "refFrame": "NTW_ROTATING",
+          "basis": "PLANNED",
+          "dcType": "CONTINUOUS",
+          "purpose": "RELOCATION",
+          "deviceId": "ALL",
+          "extras": {
+            "MAN_COMPOSITION": "TIME_ABSOLUTE, MAN_DURA, ACC_X, ACC_Y, ACC_Z",
+            "MAN_UNITS": "[n/a, s, km/s**2, km/s**2, km/s**2]"
+          }
         },
         {
           "t": 1794202756126,
           "dvMps": 0.267209,
           "duraSec": 1153.333114,
-          "id": "13"
+          "id": "13",
+          "accX": 0,
+          "accY": -2.3168441536144462e-7,
+          "accZ": 0,
+          "refFrame": "NTW_ROTATING",
+          "basis": "PLANNED",
+          "dcType": "CONTINUOUS",
+          "purpose": "RELOCATION",
+          "deviceId": "ALL",
+          "extras": {
+            "MAN_COMPOSITION": "TIME_ABSOLUTE, MAN_DURA, ACC_X, ACC_Y, ACC_Z",
+            "MAN_UNITS": "[n/a, s, km/s**2, km/s**2, km/s**2]"
+          }
         },
         {
           "t": 1794211606427,
           "dvMps": 0.302142,
           "duraSec": 1304.111447,
-          "id": "14"
+          "id": "14",
+          "accX": 0,
+          "accY": -2.3168441536144462e-7,
+          "accZ": 0,
+          "refFrame": "NTW_ROTATING",
+          "basis": "PLANNED",
+          "dcType": "CONTINUOUS",
+          "purpose": "RELOCATION",
+          "deviceId": "ALL",
+          "extras": {
+            "MAN_COMPOSITION": "TIME_ABSOLUTE, MAN_DURA, ACC_X, ACC_Y, ACC_Z",
+            "MAN_UNITS": "[n/a, s, km/s**2, km/s**2, km/s**2]"
+          }
         },
         {
           "t": 1794220569419,
           "dvMps": 0.284296,
           "duraSec": 1227.082424,
-          "id": "15"
+          "id": "15",
+          "accX": 0,
+          "accY": -2.3168441536144462e-7,
+          "accZ": 0,
+          "refFrame": "NTW_ROTATING",
+          "basis": "PLANNED",
+          "dcType": "CONTINUOUS",
+          "purpose": "RELOCATION",
+          "deviceId": "ALL",
+          "extras": {
+            "MAN_COMPOSITION": "TIME_ABSOLUTE, MAN_DURA, ACC_X, ACC_Y, ACC_Z",
+            "MAN_UNITS": "[n/a, s, km/s**2, km/s**2, km/s**2]"
+          }
         },
         {
           "t": 1794229479273,
           "dvMps": 0.29058,
           "duraSec": 1254.206883,
-          "id": "16"
+          "id": "16",
+          "accX": 0,
+          "accY": -2.3168441536144462e-7,
+          "accZ": 0,
+          "refFrame": "NTW_ROTATING",
+          "basis": "PLANNED",
+          "dcType": "CONTINUOUS",
+          "purpose": "RELOCATION",
+          "deviceId": "ALL",
+          "extras": {
+            "MAN_COMPOSITION": "TIME_ABSOLUTE, MAN_DURA, ACC_X, ACC_Y, ACC_Z",
+            "MAN_UNITS": "[n/a, s, km/s**2, km/s**2, km/s**2]"
+          }
         },
         {
           "t": 1794238338093,
           "dvMps": 0.320013,
           "duraSec": 1381.245904,
-          "id": "17"
+          "id": "17",
+          "accX": 0,
+          "accY": -2.3168441536144462e-7,
+          "accZ": 0,
+          "refFrame": "NTW_ROTATING",
+          "basis": "PLANNED",
+          "dcType": "CONTINUOUS",
+          "purpose": "RELOCATION",
+          "deviceId": "ALL",
+          "extras": {
+            "MAN_COMPOSITION": "TIME_ABSOLUTE, MAN_DURA, ACC_X, ACC_Y, ACC_Z",
+            "MAN_UNITS": "[n/a, s, km/s**2, km/s**2, km/s**2]"
+          }
         },
         {
           "t": 1794247360989,
           "dvMps": 0.27292,
           "duraSec": 1177.980841,
-          "id": "18"
+          "id": "18",
+          "accX": 0,
+          "accY": -2.3168441536144462e-7,
+          "accZ": 0,
+          "refFrame": "NTW_ROTATING",
+          "basis": "PLANNED",
+          "dcType": "CONTINUOUS",
+          "purpose": "RELOCATION",
+          "deviceId": "ALL",
+          "extras": {
+            "MAN_COMPOSITION": "TIME_ABSOLUTE, MAN_DURA, ACC_X, ACC_Y, ACC_Z",
+            "MAN_UNITS": "[n/a, s, km/s**2, km/s**2, km/s**2]"
+          }
         },
         {
           "t": 1794256235137,
           "dvMps": 0.294264,
           "duraSec": 1270.106411,
-          "id": "19"
+          "id": "19",
+          "accX": 0,
+          "accY": -2.3168441536144462e-7,
+          "accZ": 0,
+          "refFrame": "NTW_ROTATING",
+          "basis": "PLANNED",
+          "dcType": "CONTINUOUS",
+          "purpose": "RELOCATION",
+          "deviceId": "ALL",
+          "extras": {
+            "MAN_COMPOSITION": "TIME_ABSOLUTE, MAN_DURA, ACC_X, ACC_Y, ACC_Z",
+            "MAN_UNITS": "[n/a, s, km/s**2, km/s**2, km/s**2]"
+          }
         },
         {
           "t": 1794265153994,
           "dvMps": 0.294388,
           "duraSec": 1270.64191,
-          "id": "20"
+          "id": "20",
+          "accX": 0,
+          "accY": -2.316843577943722e-7,
+          "accZ": -1.6332416766353308e-10,
+          "refFrame": "NTW_ROTATING",
+          "basis": "PLANNED",
+          "dcType": "CONTINUOUS",
+          "purpose": "RELOCATION",
+          "deviceId": "ALL",
+          "extras": {
+            "MAN_COMPOSITION": "TIME_ABSOLUTE, MAN_DURA, ACC_X, ACC_Y, ACC_Z",
+            "MAN_UNITS": "[n/a, s, km/s**2, km/s**2, km/s**2]"
+          }
         },
         {
           "t": 1794274096891,
           "dvMps": 0.282879,
           "duraSec": 1220.966032,
-          "id": "21"
+          "id": "21",
+          "accX": 0,
+          "accY": -2.3089558840755024e-7,
+          "accZ": 1.9102240059887163e-8,
+          "refFrame": "NTW_ROTATING",
+          "basis": "PLANNED",
+          "dcType": "CONTINUOUS",
+          "purpose": "RELOCATION",
+          "deviceId": "ALL",
+          "extras": {
+            "MAN_COMPOSITION": "TIME_ABSOLUTE, MAN_DURA, ACC_X, ACC_Y, ACC_Z",
+            "MAN_UNITS": "[n/a, s, km/s**2, km/s**2, km/s**2]"
+          }
         },
         {
           "t": 1794283006687,
           "dvMps": 0.286214,
           "duraSec": 1235.359576,
-          "id": "22"
+          "id": "22",
+          "accX": 0,
+          "accY": -2.3168441536144462e-7,
+          "accZ": 0,
+          "refFrame": "NTW_ROTATING",
+          "basis": "PLANNED",
+          "dcType": "CONTINUOUS",
+          "purpose": "RELOCATION",
+          "deviceId": "ALL",
+          "extras": {
+            "MAN_COMPOSITION": "TIME_ABSOLUTE, MAN_DURA, ACC_X, ACC_Y, ACC_Z",
+            "MAN_UNITS": "[n/a, s, km/s**2, km/s**2, km/s**2]"
+          }
         },
         {
           "t": 1794291887142,
           "dvMps": 0.302647,
           "duraSec": 1306.289848,
-          "id": "23"
+          "id": "23",
+          "accX": 0,
+          "accY": -2.3168441536144462e-7,
+          "accZ": 0,
+          "refFrame": "NTW_ROTATING",
+          "basis": "PLANNED",
+          "dcType": "CONTINUOUS",
+          "purpose": "RELOCATION",
+          "deviceId": "ALL",
+          "extras": {
+            "MAN_COMPOSITION": "TIME_ABSOLUTE, MAN_DURA, ACC_X, ACC_Y, ACC_Z",
+            "MAN_UNITS": "[n/a, s, km/s**2, km/s**2, km/s**2]"
+          }
         }
       ],
       "status": "local",
@@ -805,145 +1780,430 @@
           "t": 1794084100233,
           "dvMps": 0.199619,
           "duraSec": 837.95481,
-          "id": "0"
+          "id": "0",
+          "accX": 0,
+          "accY": -2.3822162980495707e-7,
+          "accZ": 0,
+          "refFrame": "NTW_ROTATING",
+          "basis": "PLANNED",
+          "dcType": "CONTINUOUS",
+          "purpose": "RELOCATION",
+          "deviceId": "ALL",
+          "extras": {
+            "MAN_COMPOSITION": "TIME_ABSOLUTE, MAN_DURA, ACC_X, ACC_Y, ACC_Z",
+            "MAN_UNITS": "[n/a, s, km/s**2, km/s**2, km/s**2]"
+          }
         },
         {
           "t": 1794092688910,
           "dvMps": 0.342218,
           "duraSec": 1436.552628,
-          "id": "1"
+          "id": "1",
+          "accX": 0,
+          "accY": -2.3822162980495707e-7,
+          "accZ": 0,
+          "refFrame": "NTW_ROTATING",
+          "basis": "PLANNED",
+          "dcType": "CONTINUOUS",
+          "purpose": "RELOCATION",
+          "deviceId": "ALL",
+          "extras": {
+            "MAN_COMPOSITION": "TIME_ABSOLUTE, MAN_DURA, ACC_X, ACC_Y, ACC_Z",
+            "MAN_UNITS": "[n/a, s, km/s**2, km/s**2, km/s**2]"
+          }
         },
         {
           "t": 1794101667912,
           "dvMps": 0.298156,
           "duraSec": 1251.589817,
-          "id": "2"
+          "id": "2",
+          "accX": 0,
+          "accY": -2.3822162980495707e-7,
+          "accZ": 0,
+          "refFrame": "NTW_ROTATING",
+          "basis": "PLANNED",
+          "dcType": "CONTINUOUS",
+          "purpose": "RELOCATION",
+          "deviceId": "ALL",
+          "extras": {
+            "MAN_COMPOSITION": "TIME_ABSOLUTE, MAN_DURA, ACC_X, ACC_Y, ACC_Z",
+            "MAN_UNITS": "[n/a, s, km/s**2, km/s**2, km/s**2]"
+          }
         },
         {
           "t": 1794110536652,
           "dvMps": 0.306123,
           "duraSec": 1285.033401,
-          "id": "3"
+          "id": "3",
+          "accX": 0,
+          "accY": -2.3822162980495707e-7,
+          "accZ": 0,
+          "refFrame": "NTW_ROTATING",
+          "basis": "PLANNED",
+          "dcType": "CONTINUOUS",
+          "purpose": "RELOCATION",
+          "deviceId": "ALL",
+          "extras": {
+            "MAN_COMPOSITION": "TIME_ABSOLUTE, MAN_DURA, ACC_X, ACC_Y, ACC_Z",
+            "MAN_UNITS": "[n/a, s, km/s**2, km/s**2, km/s**2]"
+          }
         },
         {
           "t": 1794121600136,
           "dvMps": 0.326084,
           "duraSec": 1368.825214,
-          "id": "4"
+          "id": "4",
+          "accX": 0,
+          "accY": -2.3822162980495707e-7,
+          "accZ": 0,
+          "refFrame": "NTW_ROTATING",
+          "basis": "PLANNED",
+          "dcType": "CONTINUOUS",
+          "purpose": "RELOCATION",
+          "deviceId": "ALL",
+          "extras": {
+            "MAN_COMPOSITION": "TIME_ABSOLUTE, MAN_DURA, ACC_X, ACC_Y, ACC_Z",
+            "MAN_UNITS": "[n/a, s, km/s**2, km/s**2, km/s**2]"
+          }
         },
         {
           "t": 1794130018970,
           "dvMps": 0.400212,
           "duraSec": 1680,
-          "id": "5"
+          "id": "5",
+          "accX": 0,
+          "accY": -2.3822162980495707e-7,
+          "accZ": 0,
+          "refFrame": "NTW_ROTATING",
+          "basis": "PLANNED",
+          "dcType": "CONTINUOUS",
+          "deviceId": "ALL",
+          "extras": {
+            "MAN_COMPOSITION": "TIME_ABSOLUTE, MAN_DURA, ACC_X, ACC_Y, ACC_Z",
+            "MAN_UNITS": "[n/a, s, km/s**2, km/s**2, km/s**2]"
+          }
         },
         {
           "t": 1794139923255,
           "dvMps": 0.207024,
           "duraSec": 869.040836,
-          "id": "6"
+          "id": "6",
+          "accX": 0,
+          "accY": -2.3822162980495707e-7,
+          "accZ": 0,
+          "refFrame": "NTW_ROTATING",
+          "basis": "PLANNED",
+          "dcType": "CONTINUOUS",
+          "deviceId": "ALL",
+          "extras": {
+            "MAN_COMPOSITION": "TIME_ABSOLUTE, MAN_DURA, ACC_X, ACC_Y, ACC_Z",
+            "MAN_UNITS": "[n/a, s, km/s**2, km/s**2, km/s**2]"
+          }
         },
         {
           "t": 1794147946157,
           "dvMps": 0.321882,
           "duraSec": 1351.185657,
-          "id": "7"
+          "id": "7",
+          "accX": 0,
+          "accY": -2.3817302716864158e-7,
+          "accZ": -4.811864114408157e-9,
+          "refFrame": "NTW_ROTATING",
+          "basis": "PLANNED",
+          "dcType": "CONTINUOUS",
+          "deviceId": "ALL",
+          "extras": {
+            "MAN_COMPOSITION": "TIME_ABSOLUTE, MAN_DURA, ACC_X, ACC_Y, ACC_Z",
+            "MAN_UNITS": "[n/a, s, km/s**2, km/s**2, km/s**2]"
+          }
         },
         {
           "t": 1794157270694,
           "dvMps": 0.256893,
           "duraSec": 1078.378585,
-          "id": "8"
+          "id": "8",
+          "accX": 0,
+          "accY": -2.3822162980495707e-7,
+          "accZ": 0,
+          "refFrame": "NTW_ROTATING",
+          "basis": "PLANNED",
+          "dcType": "CONTINUOUS",
+          "purpose": "RELOCATION",
+          "deviceId": "ALL",
+          "extras": {
+            "MAN_COMPOSITION": "TIME_ABSOLUTE, MAN_DURA, ACC_X, ACC_Y, ACC_Z",
+            "MAN_UNITS": "[n/a, s, km/s**2, km/s**2, km/s**2]"
+          }
         },
         {
           "t": 1794166522006,
           "dvMps": 0.079311,
           "duraSec": 332.92753,
-          "id": "9"
+          "id": "9",
+          "accX": 0,
+          "accY": -2.205864329194494e-7,
+          "accZ": -8.995093395181209e-8,
+          "refFrame": "NTW_ROTATING",
+          "basis": "PLANNED",
+          "dcType": "CONTINUOUS",
+          "purpose": "RELOCATION",
+          "deviceId": "ALL",
+          "extras": {
+            "MAN_COMPOSITION": "TIME_ABSOLUTE, MAN_DURA, ACC_X, ACC_Y, ACC_Z",
+            "MAN_UNITS": "[n/a, s, km/s**2, km/s**2, km/s**2]"
+          }
         },
         {
           "t": 1794175377801,
           "dvMps": 0.0901,
           "duraSec": 378.220374,
-          "id": "10"
+          "id": "10",
+          "accX": 0,
+          "accY": -2.3822155582120223e-7,
+          "accZ": -1.8774731911849472e-10,
+          "refFrame": "NTW_ROTATING",
+          "basis": "PLANNED",
+          "dcType": "CONTINUOUS",
+          "purpose": "RELOCATION",
+          "deviceId": "ALL",
+          "extras": {
+            "MAN_COMPOSITION": "TIME_ABSOLUTE, MAN_DURA, ACC_X, ACC_Y, ACC_Z",
+            "MAN_UNITS": "[n/a, s, km/s**2, km/s**2, km/s**2]"
+          }
         },
         {
           "t": 1794184212676,
           "dvMps": 0.110697,
           "duraSec": 464.68026,
-          "id": "11"
+          "id": "11",
+          "accX": 0,
+          "accY": -2.205864329194494e-7,
+          "accZ": 8.995093395181209e-8,
+          "refFrame": "NTW_ROTATING",
+          "basis": "PLANNED",
+          "dcType": "CONTINUOUS",
+          "purpose": "RELOCATION",
+          "deviceId": "ALL",
+          "extras": {
+            "MAN_COMPOSITION": "TIME_ABSOLUTE, MAN_DURA, ACC_X, ACC_Y, ACC_Z",
+            "MAN_UNITS": "[n/a, s, km/s**2, km/s**2, km/s**2]"
+          }
         },
         {
           "t": 1794193139452,
           "dvMps": 0.08733,
           "duraSec": 366.591237,
-          "id": "12"
+          "id": "12",
+          "accX": 0,
+          "accY": -2.38180433371945e-7,
+          "accZ": -4.430131564916351e-9,
+          "refFrame": "NTW_ROTATING",
+          "basis": "PLANNED",
+          "dcType": "CONTINUOUS",
+          "purpose": "RELOCATION",
+          "deviceId": "ALL",
+          "extras": {
+            "MAN_COMPOSITION": "TIME_ABSOLUTE, MAN_DURA, ACC_X, ACC_Y, ACC_Z",
+            "MAN_UNITS": "[n/a, s, km/s**2, km/s**2, km/s**2]"
+          }
         },
         {
           "t": 1794202017370,
           "dvMps": 0.087062,
           "duraSec": 365.465789,
-          "id": "13"
+          "id": "13",
+          "accX": 0,
+          "accY": -2.3822162980495707e-7,
+          "accZ": 0,
+          "refFrame": "NTW_ROTATING",
+          "basis": "PLANNED",
+          "dcType": "CONTINUOUS",
+          "purpose": "RELOCATION",
+          "deviceId": "ALL",
+          "extras": {
+            "MAN_COMPOSITION": "TIME_ABSOLUTE, MAN_DURA, ACC_X, ACC_Y, ACC_Z",
+            "MAN_UNITS": "[n/a, s, km/s**2, km/s**2, km/s**2]"
+          }
         },
         {
           "t": 1794210828756,
           "dvMps": 0.118313,
           "duraSec": 496.650932,
-          "id": "14"
+          "id": "14",
+          "accX": 0,
+          "accY": -2.3822162980495707e-7,
+          "accZ": 0,
+          "refFrame": "NTW_ROTATING",
+          "basis": "PLANNED",
+          "dcType": "CONTINUOUS",
+          "purpose": "RELOCATION",
+          "deviceId": "ALL",
+          "extras": {
+            "MAN_COMPOSITION": "TIME_ABSOLUTE, MAN_DURA, ACC_X, ACC_Y, ACC_Z",
+            "MAN_UNITS": "[n/a, s, km/s**2, km/s**2, km/s**2]"
+          }
         },
         {
           "t": 1794219825494,
           "dvMps": 0.061074,
           "duraSec": 256.374648,
-          "id": "15"
+          "id": "15",
+          "accX": 0,
+          "accY": -2.3822162980495707e-7,
+          "accZ": 0,
+          "refFrame": "NTW_ROTATING",
+          "basis": "PLANNED",
+          "dcType": "CONTINUOUS",
+          "purpose": "RELOCATION",
+          "deviceId": "ALL",
+          "extras": {
+            "MAN_COMPOSITION": "TIME_ABSOLUTE, MAN_DURA, ACC_X, ACC_Y, ACC_Z",
+            "MAN_UNITS": "[n/a, s, km/s**2, km/s**2, km/s**2]"
+          }
         },
         {
           "t": 1794228650290,
           "dvMps": 0.085579,
           "duraSec": 359.241948,
-          "id": "16"
+          "id": "16",
+          "accX": 0,
+          "accY": -2.3822162980495707e-7,
+          "accZ": 0,
+          "refFrame": "NTW_ROTATING",
+          "basis": "PLANNED",
+          "dcType": "CONTINUOUS",
+          "purpose": "RELOCATION",
+          "deviceId": "ALL",
+          "extras": {
+            "MAN_COMPOSITION": "TIME_ABSOLUTE, MAN_DURA, ACC_X, ACC_Y, ACC_Z",
+            "MAN_UNITS": "[n/a, s, km/s**2, km/s**2, km/s**2]"
+          }
         },
         {
           "t": 1794237430041,
           "dvMps": 0.131364,
           "duraSec": 551.435415,
-          "id": "17"
+          "id": "17",
+          "accX": 0,
+          "accY": -2.3822162980495707e-7,
+          "accZ": 0,
+          "refFrame": "NTW_ROTATING",
+          "basis": "PLANNED",
+          "dcType": "CONTINUOUS",
+          "purpose": "RELOCATION",
+          "deviceId": "ALL",
+          "extras": {
+            "MAN_COMPOSITION": "TIME_ABSOLUTE, MAN_DURA, ACC_X, ACC_Y, ACC_Z",
+            "MAN_UNITS": "[n/a, s, km/s**2, km/s**2, km/s**2]"
+          }
         },
         {
           "t": 1794246407082,
           "dvMps": 0.082971,
           "duraSec": 348.291871,
-          "id": "18"
+          "id": "18",
+          "accX": 0,
+          "accY": -2.3822162980495707e-7,
+          "accZ": 0,
+          "refFrame": "NTW_ROTATING",
+          "basis": "PLANNED",
+          "dcType": "CONTINUOUS",
+          "purpose": "RELOCATION",
+          "deviceId": "ALL",
+          "extras": {
+            "MAN_COMPOSITION": "TIME_ABSOLUTE, MAN_DURA, ACC_X, ACC_Y, ACC_Z",
+            "MAN_UNITS": "[n/a, s, km/s**2, km/s**2, km/s**2]"
+          }
         },
         {
           "t": 1794254986442,
           "dvMps": 0.223874,
           "duraSec": 939.773352,
-          "id": "19"
+          "id": "19",
+          "accX": 0,
+          "accY": -2.3822162980495707e-7,
+          "accZ": 0,
+          "refFrame": "NTW_ROTATING",
+          "basis": "PLANNED",
+          "dcType": "CONTINUOUS",
+          "purpose": "RELOCATION",
+          "deviceId": "ALL",
+          "extras": {
+            "MAN_COMPOSITION": "TIME_ABSOLUTE, MAN_DURA, ACC_X, ACC_Y, ACC_Z",
+            "MAN_UNITS": "[n/a, s, km/s**2, km/s**2, km/s**2]"
+          }
         },
         {
           "t": 1794263591651,
           "dvMps": 0.352136,
           "duraSec": 1478.186933,
-          "id": "20"
+          "id": "20",
+          "accX": 0,
+          "accY": -2.3822162980495707e-7,
+          "accZ": 0,
+          "refFrame": "NTW_ROTATING",
+          "basis": "PLANNED",
+          "dcType": "CONTINUOUS",
+          "purpose": "RELOCATION",
+          "deviceId": "ALL",
+          "extras": {
+            "MAN_COMPOSITION": "TIME_ABSOLUTE, MAN_DURA, ACC_X, ACC_Y, ACC_Z",
+            "MAN_UNITS": "[n/a, s, km/s**2, km/s**2, km/s**2]"
+          }
         },
         {
           "t": 1794272594330,
           "dvMps": 0.290344,
           "duraSec": 1218.798206,
-          "id": "21"
+          "id": "21",
+          "accX": 0,
+          "accY": -2.3822162980495707e-7,
+          "accZ": 0,
+          "refFrame": "NTW_ROTATING",
+          "basis": "PLANNED",
+          "dcType": "CONTINUOUS",
+          "purpose": "RELOCATION",
+          "deviceId": "ALL",
+          "extras": {
+            "MAN_COMPOSITION": "TIME_ABSOLUTE, MAN_DURA, ACC_X, ACC_Y, ACC_Z",
+            "MAN_UNITS": "[n/a, s, km/s**2, km/s**2, km/s**2]"
+          }
         },
         {
           "t": 1794281476875,
           "dvMps": 0.285281,
           "duraSec": 1197.545662,
-          "id": "22"
+          "id": "22",
+          "accX": 0,
+          "accY": -2.3822162980495707e-7,
+          "accZ": 0,
+          "refFrame": "NTW_ROTATING",
+          "basis": "PLANNED",
+          "dcType": "CONTINUOUS",
+          "purpose": "RELOCATION",
+          "deviceId": "ALL",
+          "extras": {
+            "MAN_COMPOSITION": "TIME_ABSOLUTE, MAN_DURA, ACC_X, ACC_Y, ACC_Z",
+            "MAN_UNITS": "[n/a, s, km/s**2, km/s**2, km/s**2]"
+          }
         },
         {
           "t": 1794290235858,
           "dvMps": 0.338552,
           "duraSec": 1421.164654,
-          "id": "23"
+          "id": "23",
+          "accX": 0,
+          "accY": -2.3822162980495707e-7,
+          "accZ": 0,
+          "refFrame": "NTW_ROTATING",
+          "basis": "PLANNED",
+          "dcType": "CONTINUOUS",
+          "purpose": "RELOCATION",
+          "deviceId": "ALL",
+          "extras": {
+            "MAN_COMPOSITION": "TIME_ABSOLUTE, MAN_DURA, ACC_X, ACC_Y, ACC_Z",
+            "MAN_UNITS": "[n/a, s, km/s**2, km/s**2, km/s**2]"
+          }
         }
       ],
       "status": "local",
@@ -976,145 +2236,432 @@
           "t": 1794077123824,
           "dvMps": 0.188435,
           "duraSec": 780.035618,
-          "id": "0"
+          "id": "0",
+          "accX": 0,
+          "accY": -2.41572461987488e-7,
+          "accZ": 0,
+          "refFrame": "NTW_ROTATING",
+          "basis": "PLANNED",
+          "dcType": "CONTINUOUS",
+          "purpose": "RELOCATION",
+          "deviceId": "ALL",
+          "extras": {
+            "MAN_COMPOSITION": "TIME_ABSOLUTE, MAN_DURA, ACC_X, ACC_Y, ACC_Z",
+            "MAN_UNITS": "[n/a, s, km/s**2, km/s**2, km/s**2]"
+          }
         },
         {
           "t": 1794085338259,
           "dvMps": 0.354593,
           "duraSec": 1467.852896,
-          "id": "1"
+          "id": "1",
+          "accX": 0,
+          "accY": -2.41572461987488e-7,
+          "accZ": 0,
+          "refFrame": "NTW_ROTATING",
+          "basis": "PLANNED",
+          "dcType": "CONTINUOUS",
+          "deviceId": "ALL",
+          "extras": {
+            "MAN_COMPOSITION": "TIME_ABSOLUTE, MAN_DURA, ACC_X, ACC_Y, ACC_Z",
+            "MAN_UNITS": "[n/a, s, km/s**2, km/s**2, km/s**2]"
+          }
         },
         {
           "t": 1794094570655,
           "dvMps": 0.325739,
           "duraSec": 1348.411547,
-          "id": "2"
+          "id": "2",
+          "accX": 0,
+          "accY": -2.415218452030141e-7,
+          "accZ": 4.944965159394198e-9,
+          "refFrame": "NTW_ROTATING",
+          "basis": "PLANNED",
+          "dcType": "CONTINUOUS",
+          "purpose": "RELOCATION",
+          "deviceId": "ALL",
+          "extras": {
+            "MAN_COMPOSITION": "TIME_ABSOLUTE, MAN_DURA, ACC_X, ACC_Y, ACC_Z",
+            "MAN_UNITS": "[n/a, s, km/s**2, km/s**2, km/s**2]"
+          }
         },
         {
           "t": 1794103549424,
           "dvMps": 0.27015,
           "duraSec": 1118.296405,
-          "id": "3"
+          "id": "3",
+          "accX": 0,
+          "accY": -2.41572461987488e-7,
+          "accZ": 0,
+          "refFrame": "NTW_ROTATING",
+          "basis": "PLANNED",
+          "dcType": "CONTINUOUS",
+          "purpose": "RELOCATION",
+          "deviceId": "ALL",
+          "extras": {
+            "MAN_COMPOSITION": "TIME_ABSOLUTE, MAN_DURA, ACC_X, ACC_Y, ACC_Z",
+            "MAN_UNITS": "[n/a, s, km/s**2, km/s**2, km/s**2]"
+          }
         },
         {
           "t": 1794112366768,
           "dvMps": 0.292032,
           "duraSec": 1208.880911,
-          "id": "4"
+          "id": "4",
+          "accX": 0,
+          "accY": -2.41170650237879e-7,
+          "accZ": 1.3927377877224178e-8,
+          "refFrame": "NTW_ROTATING",
+          "basis": "PLANNED",
+          "dcType": "CONTINUOUS",
+          "purpose": "RELOCATION",
+          "deviceId": "ALL",
+          "extras": {
+            "MAN_COMPOSITION": "TIME_ABSOLUTE, MAN_DURA, ACC_X, ACC_Y, ACC_Z",
+            "MAN_UNITS": "[n/a, s, km/s**2, km/s**2, km/s**2]"
+          }
         },
         {
           "t": 1794120345549,
           "dvMps": 0.183313,
           "duraSec": 758.831303,
-          "id": "5"
+          "id": "5",
+          "accX": 0,
+          "accY": -2.415487310417789e-7,
+          "accZ": -3.385989191169018e-9,
+          "refFrame": "NTW_ROTATING",
+          "basis": "PLANNED",
+          "dcType": "CONTINUOUS",
+          "purpose": "RELOCATION",
+          "deviceId": "ALL",
+          "extras": {
+            "MAN_COMPOSITION": "TIME_ABSOLUTE, MAN_DURA, ACC_X, ACC_Y, ACC_Z",
+            "MAN_UNITS": "[n/a, s, km/s**2, km/s**2, km/s**2]"
+          }
         },
         {
           "t": 1794129278897,
           "dvMps": 0.148225,
           "duraSec": 613.585468,
-          "id": "6"
+          "id": "6",
+          "accX": 0,
+          "accY": -2.41572461987488e-7,
+          "accZ": 0,
+          "refFrame": "NTW_ROTATING",
+          "basis": "PLANNED",
+          "dcType": "CONTINUOUS",
+          "purpose": "RELOCATION",
+          "deviceId": "ALL",
+          "extras": {
+            "MAN_COMPOSITION": "TIME_ABSOLUTE, MAN_DURA, ACC_X, ACC_Y, ACC_Z",
+            "MAN_UNITS": "[n/a, s, km/s**2, km/s**2, km/s**2]"
+          }
         },
         {
           "t": 1794137998338,
           "dvMps": 0.216258,
           "duraSec": 895.209588,
-          "id": "7"
+          "id": "7",
+          "accX": 0,
+          "accY": -2.41572461987488e-7,
+          "accZ": 0,
+          "refFrame": "NTW_ROTATING",
+          "basis": "PLANNED",
+          "dcType": "CONTINUOUS",
+          "purpose": "RELOCATION",
+          "deviceId": "ALL",
+          "extras": {
+            "MAN_COMPOSITION": "TIME_ABSOLUTE, MAN_DURA, ACC_X, ACC_Y, ACC_Z",
+            "MAN_UNITS": "[n/a, s, km/s**2, km/s**2, km/s**2]"
+          }
         },
         {
           "t": 1794146754236,
           "dvMps": 0.266476,
           "duraSec": 1103.087785,
-          "id": "8"
+          "id": "8",
+          "accX": 0,
+          "accY": -2.41572461987488e-7,
+          "accZ": 0,
+          "refFrame": "NTW_ROTATING",
+          "basis": "PLANNED",
+          "dcType": "CONTINUOUS",
+          "purpose": "RELOCATION",
+          "deviceId": "ALL",
+          "extras": {
+            "MAN_COMPOSITION": "TIME_ABSOLUTE, MAN_DURA, ACC_X, ACC_Y, ACC_Z",
+            "MAN_UNITS": "[n/a, s, km/s**2, km/s**2, km/s**2]"
+          }
         },
         {
           "t": 1794155412679,
           "dvMps": 0.363083,
           "duraSec": 1502.996465,
-          "id": "9"
+          "id": "9",
+          "accX": 0,
+          "accY": -2.41572461987488e-7,
+          "accZ": 0,
+          "refFrame": "NTW_ROTATING",
+          "basis": "PLANNED",
+          "dcType": "CONTINUOUS",
+          "purpose": "RELOCATION",
+          "deviceId": "ALL",
+          "extras": {
+            "MAN_COMPOSITION": "TIME_ABSOLUTE, MAN_DURA, ACC_X, ACC_Y, ACC_Z",
+            "MAN_UNITS": "[n/a, s, km/s**2, km/s**2, km/s**2]"
+          }
         },
         {
           "t": 1794164455610,
           "dvMps": 0.273374,
           "duraSec": 1131.644407,
-          "id": "10"
+          "id": "10",
+          "accX": 0,
+          "accY": -2.41572461987488e-7,
+          "accZ": 0,
+          "refFrame": "NTW_ROTATING",
+          "basis": "PLANNED",
+          "dcType": "CONTINUOUS",
+          "purpose": "RELOCATION",
+          "deviceId": "ALL",
+          "extras": {
+            "MAN_COMPOSITION": "TIME_ABSOLUTE, MAN_DURA, ACC_X, ACC_Y, ACC_Z",
+            "MAN_UNITS": "[n/a, s, km/s**2, km/s**2, km/s**2]"
+          }
         },
         {
           "t": 1794173200900,
           "dvMps": 0.326953,
           "duraSec": 1353.434665,
-          "id": "11"
+          "id": "11",
+          "accX": 0,
+          "accY": -2.41572461987488e-7,
+          "accZ": 0,
+          "refFrame": "NTW_ROTATING",
+          "basis": "PLANNED",
+          "dcType": "CONTINUOUS",
+          "purpose": "RELOCATION",
+          "deviceId": "ALL",
+          "extras": {
+            "MAN_COMPOSITION": "TIME_ABSOLUTE, MAN_DURA, ACC_X, ACC_Y, ACC_Z",
+            "MAN_UNITS": "[n/a, s, km/s**2, km/s**2, km/s**2]"
+          }
         },
         {
           "t": 1794182121318,
           "dvMps": 0.295372,
           "duraSec": 1222.704739,
-          "id": "12"
+          "id": "12",
+          "accX": 0,
+          "accY": -2.41572461987488e-7,
+          "accZ": 0,
+          "refFrame": "NTW_ROTATING",
+          "basis": "PLANNED",
+          "dcType": "CONTINUOUS",
+          "purpose": "RELOCATION",
+          "deviceId": "ALL",
+          "extras": {
+            "MAN_COMPOSITION": "TIME_ABSOLUTE, MAN_DURA, ACC_X, ACC_Y, ACC_Z",
+            "MAN_UNITS": "[n/a, s, km/s**2, km/s**2, km/s**2]"
+          }
         },
         {
           "t": 1794190992464,
           "dvMps": 0.287061,
           "duraSec": 1188.302213,
-          "id": "13"
+          "id": "13",
+          "accX": 0,
+          "accY": -2.41572461987488e-7,
+          "accZ": 0,
+          "refFrame": "NTW_ROTATING",
+          "basis": "PLANNED",
+          "dcType": "CONTINUOUS",
+          "purpose": "RELOCATION",
+          "deviceId": "ALL",
+          "extras": {
+            "MAN_COMPOSITION": "TIME_ABSOLUTE, MAN_DURA, ACC_X, ACC_Y, ACC_Z",
+            "MAN_UNITS": "[n/a, s, km/s**2, km/s**2, km/s**2]"
+          }
         },
         {
           "t": 1794199764253,
           "dvMps": 0.32622,
           "duraSec": 1350.401102,
-          "id": "14"
+          "id": "14",
+          "accX": 0,
+          "accY": -2.41572461987488e-7,
+          "accZ": 0,
+          "refFrame": "NTW_ROTATING",
+          "basis": "PLANNED",
+          "dcType": "CONTINUOUS",
+          "purpose": "RELOCATION",
+          "deviceId": "ALL",
+          "extras": {
+            "MAN_COMPOSITION": "TIME_ABSOLUTE, MAN_DURA, ACC_X, ACC_Y, ACC_Z",
+            "MAN_UNITS": "[n/a, s, km/s**2, km/s**2, km/s**2]"
+          }
         },
         {
           "t": 1794208692015,
           "dvMps": 0.289478,
           "duraSec": 1198.30541,
-          "id": "15"
+          "id": "15",
+          "accX": 0,
+          "accY": -2.41572461987488e-7,
+          "accZ": 0,
+          "refFrame": "NTW_ROTATING",
+          "basis": "PLANNED",
+          "dcType": "CONTINUOUS",
+          "purpose": "RELOCATION",
+          "deviceId": "ALL",
+          "extras": {
+            "MAN_COMPOSITION": "TIME_ABSOLUTE, MAN_DURA, ACC_X, ACC_Y, ACC_Z",
+            "MAN_UNITS": "[n/a, s, km/s**2, km/s**2, km/s**2]"
+          }
         },
         {
           "t": 1794217483460,
           "dvMps": 0.318066,
           "duraSec": 1316.648957,
-          "id": "16"
+          "id": "16",
+          "accX": 0,
+          "accY": -2.41572461987488e-7,
+          "accZ": 0,
+          "refFrame": "NTW_ROTATING",
+          "basis": "PLANNED",
+          "dcType": "CONTINUOUS",
+          "purpose": "RELOCATION",
+          "deviceId": "ALL",
+          "extras": {
+            "MAN_COMPOSITION": "TIME_ABSOLUTE, MAN_DURA, ACC_X, ACC_Y, ACC_Z",
+            "MAN_UNITS": "[n/a, s, km/s**2, km/s**2, km/s**2]"
+          }
         },
         {
           "t": 1794226373749,
           "dvMps": 0.298358,
           "duraSec": 1235.065328,
-          "id": "17"
+          "id": "17",
+          "accX": 0,
+          "accY": -2.41572461987488e-7,
+          "accZ": 0,
+          "refFrame": "NTW_ROTATING",
+          "basis": "PLANNED",
+          "dcType": "CONTINUOUS",
+          "purpose": "RELOCATION",
+          "deviceId": "ALL",
+          "extras": {
+            "MAN_COMPOSITION": "TIME_ABSOLUTE, MAN_DURA, ACC_X, ACC_Y, ACC_Z",
+            "MAN_UNITS": "[n/a, s, km/s**2, km/s**2, km/s**2]"
+          }
         },
         {
           "t": 1794235236771,
           "dvMps": 0.291291,
           "duraSec": 1205.810331,
-          "id": "18"
+          "id": "18",
+          "accX": 0,
+          "accY": -2.41572461987488e-7,
+          "accZ": 0,
+          "refFrame": "NTW_ROTATING",
+          "basis": "PLANNED",
+          "dcType": "CONTINUOUS",
+          "purpose": "RELOCATION",
+          "deviceId": "ALL",
+          "extras": {
+            "MAN_COMPOSITION": "TIME_ABSOLUTE, MAN_DURA, ACC_X, ACC_Y, ACC_Z",
+            "MAN_UNITS": "[n/a, s, km/s**2, km/s**2, km/s**2]"
+          }
         },
         {
           "t": 1794244052995,
           "dvMps": 0.306297,
           "duraSec": 1267.928725,
-          "id": "19"
+          "id": "19",
+          "accX": 0,
+          "accY": -2.41572461987488e-7,
+          "accZ": 0,
+          "refFrame": "NTW_ROTATING",
+          "basis": "PLANNED",
+          "dcType": "CONTINUOUS",
+          "purpose": "RELOCATION",
+          "deviceId": "ALL",
+          "extras": {
+            "MAN_COMPOSITION": "TIME_ABSOLUTE, MAN_DURA, ACC_X, ACC_Y, ACC_Z",
+            "MAN_UNITS": "[n/a, s, km/s**2, km/s**2, km/s**2]"
+          }
         },
         {
           "t": 1794252897434,
           "dvMps": 0.307133,
           "duraSec": 1271.390033,
-          "id": "20"
+          "id": "20",
+          "accX": 0,
+          "accY": -2.41572461987488e-7,
+          "accZ": 0,
+          "refFrame": "NTW_ROTATING",
+          "basis": "PLANNED",
+          "dcType": "CONTINUOUS",
+          "purpose": "RELOCATION",
+          "deviceId": "ALL",
+          "extras": {
+            "MAN_COMPOSITION": "TIME_ABSOLUTE, MAN_DURA, ACC_X, ACC_Y, ACC_Z",
+            "MAN_UNITS": "[n/a, s, km/s**2, km/s**2, km/s**2]"
+          }
         },
         {
           "t": 1794261728657,
           "dvMps": 0.313819,
           "duraSec": 1299.068613,
-          "id": "21"
+          "id": "21",
+          "accX": 0,
+          "accY": -2.41572461987488e-7,
+          "accZ": 0,
+          "refFrame": "NTW_ROTATING",
+          "basis": "PLANNED",
+          "dcType": "CONTINUOUS",
+          "purpose": "RELOCATION",
+          "deviceId": "ALL",
+          "extras": {
+            "MAN_COMPOSITION": "TIME_ABSOLUTE, MAN_DURA, ACC_X, ACC_Y, ACC_Z",
+            "MAN_UNITS": "[n/a, s, km/s**2, km/s**2, km/s**2]"
+          }
         },
         {
           "t": 1794270621241,
           "dvMps": 0.290324,
           "duraSec": 1201.811233,
-          "id": "22"
+          "id": "22",
+          "accX": 0,
+          "accY": -2.41572461987488e-7,
+          "accZ": 0,
+          "refFrame": "NTW_ROTATING",
+          "basis": "PLANNED",
+          "dcType": "CONTINUOUS",
+          "purpose": "RELOCATION",
+          "deviceId": "ALL",
+          "extras": {
+            "MAN_COMPOSITION": "TIME_ABSOLUTE, MAN_DURA, ACC_X, ACC_Y, ACC_Z",
+            "MAN_UNITS": "[n/a, s, km/s**2, km/s**2, km/s**2]"
+          }
         },
         {
           "t": 1794279452230,
           "dvMps": 0.296057,
           "duraSec": 1225.54014,
-          "id": "23"
+          "id": "23",
+          "accX": 0,
+          "accY": -2.41572461987488e-7,
+          "accZ": 0,
+          "refFrame": "NTW_ROTATING",
+          "basis": "PLANNED",
+          "dcType": "CONTINUOUS",
+          "purpose": "RELOCATION",
+          "deviceId": "ALL",
+          "extras": {
+            "MAN_COMPOSITION": "TIME_ABSOLUTE, MAN_DURA, ACC_X, ACC_Y, ACC_Z",
+            "MAN_UNITS": "[n/a, s, km/s**2, km/s**2, km/s**2]"
+          }
         }
       ],
       "status": "local",
@@ -1173,151 +2720,441 @@
           "t": 1793501100802,
           "dvMps": 0.071731,
           "duraSec": 292.684265,
-          "id": "0"
+          "id": "0",
+          "accX": 0,
+          "accY": -2.4508127248941074e-7,
+          "accZ": 0,
+          "refFrame": "NTW_ROTATING",
+          "basis": "PLANNED",
+          "dcType": "CONTINUOUS",
+          "deviceId": "ALL",
+          "extras": {
+            "MAN_COMPOSITION": "TIME_ABSOLUTE, MAN_DURA, ACC_X, ACC_Y, ACC_Z",
+            "MAN_UNITS": "[n/a, s, km/s**2, km/s**2, km/s**2]"
+          }
         },
         {
           "t": 1793506641695,
           "dvMps": 0.0832,
           "duraSec": 339.479329,
-          "id": "1"
+          "id": "1",
+          "accX": 0,
+          "accY": -2.4508127248941074e-7,
+          "accZ": 0,
+          "refFrame": "NTW_ROTATING",
+          "basis": "PLANNED",
+          "dcType": "CONTINUOUS",
+          "deviceId": "ALL",
+          "extras": {
+            "MAN_COMPOSITION": "TIME_ABSOLUTE, MAN_DURA, ACC_X, ACC_Y, ACC_Z",
+            "MAN_UNITS": "[n/a, s, km/s**2, km/s**2, km/s**2]"
+          }
         },
         {
           "t": 1793512180202,
           "dvMps": 0.097437,
           "duraSec": 397.568527,
-          "id": "2"
+          "id": "2",
+          "accX": 0,
+          "accY": -2.4508127248941074e-7,
+          "accZ": 0,
+          "refFrame": "NTW_ROTATING",
+          "basis": "PLANNED",
+          "dcType": "CONTINUOUS",
+          "deviceId": "ALL",
+          "extras": {
+            "MAN_COMPOSITION": "TIME_ABSOLUTE, MAN_DURA, ACC_X, ACC_Y, ACC_Z",
+            "MAN_UNITS": "[n/a, s, km/s**2, km/s**2, km/s**2]"
+          }
         },
         {
           "t": 1793517656442,
           "dvMps": 0.133282,
           "duraSec": 543.827264,
-          "id": "3"
+          "id": "3",
+          "accX": 0,
+          "accY": -2.4508127248941074e-7,
+          "accZ": 0,
+          "refFrame": "NTW_ROTATING",
+          "basis": "PLANNED",
+          "dcType": "CONTINUOUS",
+          "deviceId": "ALL",
+          "extras": {
+            "MAN_COMPOSITION": "TIME_ABSOLUTE, MAN_DURA, ACC_X, ACC_Y, ACC_Z",
+            "MAN_UNITS": "[n/a, s, km/s**2, km/s**2, km/s**2]"
+          }
         },
         {
           "t": 1793523063458,
           "dvMps": 0.211352,
           "duraSec": 862.376052,
-          "id": "4"
+          "id": "4",
+          "accX": 0,
+          "accY": -2.4508127248941074e-7,
+          "accZ": 0,
+          "refFrame": "NTW_ROTATING",
+          "basis": "PLANNED",
+          "dcType": "CONTINUOUS",
+          "deviceId": "ALL",
+          "extras": {
+            "MAN_COMPOSITION": "TIME_ABSOLUTE, MAN_DURA, ACC_X, ACC_Y, ACC_Z",
+            "MAN_UNITS": "[n/a, s, km/s**2, km/s**2, km/s**2]"
+          }
         },
         {
           "t": 1793528648260,
           "dvMps": 0.202649,
           "duraSec": 826.862573,
-          "id": "5"
+          "id": "5",
+          "accX": 0,
+          "accY": -2.4508127248941074e-7,
+          "accZ": 0,
+          "refFrame": "NTW_ROTATING",
+          "basis": "PLANNED",
+          "dcType": "CONTINUOUS",
+          "deviceId": "ALL",
+          "extras": {
+            "MAN_COMPOSITION": "TIME_ABSOLUTE, MAN_DURA, ACC_X, ACC_Y, ACC_Z",
+            "MAN_UNITS": "[n/a, s, km/s**2, km/s**2, km/s**2]"
+          }
         },
         {
           "t": 1793534194509,
           "dvMps": 0.20691,
           "duraSec": 844.252161,
-          "id": "6"
+          "id": "6",
+          "accX": 0,
+          "accY": -2.4508127248941074e-7,
+          "accZ": 0,
+          "refFrame": "NTW_ROTATING",
+          "basis": "PLANNED",
+          "dcType": "CONTINUOUS",
+          "deviceId": "ALL",
+          "extras": {
+            "MAN_COMPOSITION": "TIME_ABSOLUTE, MAN_DURA, ACC_X, ACC_Y, ACC_Z",
+            "MAN_UNITS": "[n/a, s, km/s**2, km/s**2, km/s**2]"
+          }
         },
         {
           "t": 1793539664146,
           "dvMps": 0.270441,
           "duraSec": 1103.473929,
-          "id": "7"
+          "id": "7",
+          "accX": 0,
+          "accY": -2.4508127248941074e-7,
+          "accZ": 0,
+          "refFrame": "NTW_ROTATING",
+          "basis": "PLANNED",
+          "dcType": "CONTINUOUS",
+          "deviceId": "ALL",
+          "extras": {
+            "MAN_COMPOSITION": "TIME_ABSOLUTE, MAN_DURA, ACC_X, ACC_Y, ACC_Z",
+            "MAN_UNITS": "[n/a, s, km/s**2, km/s**2, km/s**2]"
+          }
         },
         {
           "t": 1793547959282,
           "dvMps": 0.205265,
           "duraSec": 837.536647,
-          "id": "8"
+          "id": "8",
+          "accX": 0,
+          "accY": -2.4508127248941074e-7,
+          "accZ": 0,
+          "refFrame": "NTW_ROTATING",
+          "basis": "PLANNED",
+          "dcType": "CONTINUOUS",
+          "purpose": "RELOCATION",
+          "deviceId": "ALL",
+          "extras": {
+            "MAN_COMPOSITION": "TIME_ABSOLUTE, MAN_DURA, ACC_X, ACC_Y, ACC_Z",
+            "MAN_UNITS": "[n/a, s, km/s**2, km/s**2, km/s**2]"
+          }
         },
         {
           "t": 1793556117970,
           "dvMps": 0.411737,
           "duraSec": 1680,
-          "id": "9"
+          "id": "9",
+          "accX": 0,
+          "accY": -2.4508127248941074e-7,
+          "accZ": 0,
+          "refFrame": "NTW_ROTATING",
+          "basis": "PLANNED",
+          "dcType": "CONTINUOUS",
+          "deviceId": "ALL",
+          "extras": {
+            "MAN_COMPOSITION": "TIME_ABSOLUTE, MAN_DURA, ACC_X, ACC_Y, ACC_Z",
+            "MAN_UNITS": "[n/a, s, km/s**2, km/s**2, km/s**2]"
+          }
         },
         {
           "t": 1793565656902,
           "dvMps": 0.243675,
           "duraSec": 994.260342,
-          "id": "10"
+          "id": "10",
+          "accX": 0,
+          "accY": -2.4508127248941074e-7,
+          "accZ": 0,
+          "refFrame": "NTW_ROTATING",
+          "basis": "PLANNED",
+          "dcType": "CONTINUOUS",
+          "purpose": "RELOCATION",
+          "deviceId": "ALL",
+          "extras": {
+            "MAN_COMPOSITION": "TIME_ABSOLUTE, MAN_DURA, ACC_X, ACC_Y, ACC_Z",
+            "MAN_UNITS": "[n/a, s, km/s**2, km/s**2, km/s**2]"
+          }
         },
         {
           "t": 1793574058208,
           "dvMps": 0.330153,
           "duraSec": 1347.116026,
-          "id": "11"
+          "id": "11",
+          "accX": 0,
+          "accY": -2.4508127248941074e-7,
+          "accZ": 0,
+          "refFrame": "NTW_ROTATING",
+          "basis": "PLANNED",
+          "dcType": "CONTINUOUS",
+          "deviceId": "ALL",
+          "extras": {
+            "MAN_COMPOSITION": "TIME_ABSOLUTE, MAN_DURA, ACC_X, ACC_Y, ACC_Z",
+            "MAN_UNITS": "[n/a, s, km/s**2, km/s**2, km/s**2]"
+          }
         },
         {
           "t": 1793583247113,
           "dvMps": 0.332527,
           "duraSec": 1356.802334,
-          "id": "12"
+          "id": "12",
+          "accX": 0,
+          "accY": -2.4508127248941074e-7,
+          "accZ": 0,
+          "refFrame": "NTW_ROTATING",
+          "basis": "PLANNED",
+          "dcType": "CONTINUOUS",
+          "purpose": "RELOCATION",
+          "deviceId": "ALL",
+          "extras": {
+            "MAN_COMPOSITION": "TIME_ABSOLUTE, MAN_DURA, ACC_X, ACC_Y, ACC_Z",
+            "MAN_UNITS": "[n/a, s, km/s**2, km/s**2, km/s**2]"
+          }
         },
         {
           "t": 1793592130777,
           "dvMps": 0.332703,
           "duraSec": 1357.521683,
-          "id": "13"
+          "id": "13",
+          "accX": 0,
+          "accY": -2.4508127248941074e-7,
+          "accZ": 0,
+          "refFrame": "NTW_ROTATING",
+          "basis": "PLANNED",
+          "dcType": "CONTINUOUS",
+          "purpose": "RELOCATION",
+          "deviceId": "ALL",
+          "extras": {
+            "MAN_COMPOSITION": "TIME_ABSOLUTE, MAN_DURA, ACC_X, ACC_Y, ACC_Z",
+            "MAN_UNITS": "[n/a, s, km/s**2, km/s**2, km/s**2]"
+          }
         },
         {
           "t": 1793601155920,
           "dvMps": 0.263006,
           "duraSec": 1073.136985,
-          "id": "14"
+          "id": "14",
+          "accX": 0,
+          "accY": -2.4508127248941074e-7,
+          "accZ": 0,
+          "refFrame": "NTW_ROTATING",
+          "basis": "PLANNED",
+          "dcType": "CONTINUOUS",
+          "purpose": "RELOCATION",
+          "deviceId": "ALL",
+          "extras": {
+            "MAN_COMPOSITION": "TIME_ABSOLUTE, MAN_DURA, ACC_X, ACC_Y, ACC_Z",
+            "MAN_UNITS": "[n/a, s, km/s**2, km/s**2, km/s**2]"
+          }
         },
         {
           "t": 1793609874895,
           "dvMps": 0.342844,
           "duraSec": 1398.89827,
-          "id": "15"
+          "id": "15",
+          "accX": 0,
+          "accY": -2.450812688208894e-7,
+          "accZ": -4.240485495248133e-11,
+          "refFrame": "NTW_ROTATING",
+          "basis": "PLANNED",
+          "dcType": "CONTINUOUS",
+          "purpose": "RELOCATION",
+          "deviceId": "ALL",
+          "extras": {
+            "MAN_COMPOSITION": "TIME_ABSOLUTE, MAN_DURA, ACC_X, ACC_Y, ACC_Z",
+            "MAN_UNITS": "[n/a, s, km/s**2, km/s**2, km/s**2]"
+          }
         },
         {
           "t": 1793618839341,
           "dvMps": 0.301799,
           "duraSec": 1231.425077,
-          "id": "16"
+          "id": "16",
+          "accX": 0,
+          "accY": -2.441482256109228e-7,
+          "accZ": 2.136525347536795e-8,
+          "refFrame": "NTW_ROTATING",
+          "basis": "PLANNED",
+          "dcType": "CONTINUOUS",
+          "purpose": "RELOCATION",
+          "deviceId": "ALL",
+          "extras": {
+            "MAN_COMPOSITION": "TIME_ABSOLUTE, MAN_DURA, ACC_X, ACC_Y, ACC_Z",
+            "MAN_UNITS": "[n/a, s, km/s**2, km/s**2, km/s**2]"
+          }
         },
         {
           "t": 1793627740903,
           "dvMps": 0.291048,
           "duraSec": 1187.558506,
-          "id": "17"
+          "id": "17",
+          "accX": 0,
+          "accY": -2.4508127248941074e-7,
+          "accZ": 0,
+          "refFrame": "NTW_ROTATING",
+          "basis": "PLANNED",
+          "dcType": "CONTINUOUS",
+          "purpose": "RELOCATION",
+          "deviceId": "ALL",
+          "extras": {
+            "MAN_COMPOSITION": "TIME_ABSOLUTE, MAN_DURA, ACC_X, ACC_Y, ACC_Z",
+            "MAN_UNITS": "[n/a, s, km/s**2, km/s**2, km/s**2]"
+          }
         },
         {
           "t": 1793636540647,
           "dvMps": 0.329656,
           "duraSec": 1345.089724,
-          "id": "18"
+          "id": "18",
+          "accX": 0,
+          "accY": -2.4508127248941074e-7,
+          "accZ": 0,
+          "refFrame": "NTW_ROTATING",
+          "basis": "PLANNED",
+          "dcType": "CONTINUOUS",
+          "purpose": "RELOCATION",
+          "deviceId": "ALL",
+          "extras": {
+            "MAN_COMPOSITION": "TIME_ABSOLUTE, MAN_DURA, ACC_X, ACC_Y, ACC_Z",
+            "MAN_UNITS": "[n/a, s, km/s**2, km/s**2, km/s**2]"
+          }
         },
         {
           "t": 1793645453561,
           "dvMps": 0.312244,
           "duraSec": 1274.041719,
-          "id": "19"
+          "id": "19",
+          "accX": 0,
+          "accY": -2.4508127248941074e-7,
+          "accZ": 0,
+          "refFrame": "NTW_ROTATING",
+          "basis": "PLANNED",
+          "dcType": "CONTINUOUS",
+          "purpose": "RELOCATION",
+          "deviceId": "ALL",
+          "extras": {
+            "MAN_COMPOSITION": "TIME_ABSOLUTE, MAN_DURA, ACC_X, ACC_Y, ACC_Z",
+            "MAN_UNITS": "[n/a, s, km/s**2, km/s**2, km/s**2]"
+          }
         },
         {
           "t": 1793654387734,
           "dvMps": 0.283873,
           "duraSec": 1158.282063,
-          "id": "20"
+          "id": "20",
+          "accX": 0,
+          "accY": -2.4508127248941074e-7,
+          "accZ": 0,
+          "refFrame": "NTW_ROTATING",
+          "basis": "PLANNED",
+          "dcType": "CONTINUOUS",
+          "purpose": "RELOCATION",
+          "deviceId": "ALL",
+          "extras": {
+            "MAN_COMPOSITION": "TIME_ABSOLUTE, MAN_DURA, ACC_X, ACC_Y, ACC_Z",
+            "MAN_UNITS": "[n/a, s, km/s**2, km/s**2, km/s**2]"
+          }
         },
         {
           "t": 1793663203659,
           "dvMps": 0.312921,
           "duraSec": 1276.805474,
-          "id": "21"
+          "id": "21",
+          "accX": 0,
+          "accY": -2.4508127248941074e-7,
+          "accZ": 0,
+          "refFrame": "NTW_ROTATING",
+          "basis": "PLANNED",
+          "dcType": "CONTINUOUS",
+          "purpose": "RELOCATION",
+          "deviceId": "ALL",
+          "extras": {
+            "MAN_COMPOSITION": "TIME_ABSOLUTE, MAN_DURA, ACC_X, ACC_Y, ACC_Z",
+            "MAN_UNITS": "[n/a, s, km/s**2, km/s**2, km/s**2]"
+          }
         },
         {
           "t": 1793672045582,
           "dvMps": 0.328676,
           "duraSec": 1341.089207,
-          "id": "22"
+          "id": "22",
+          "accX": 0,
+          "accY": -2.4508127248941074e-7,
+          "accZ": 0,
+          "refFrame": "NTW_ROTATING",
+          "basis": "PLANNED",
+          "dcType": "CONTINUOUS",
+          "purpose": "RELOCATION",
+          "deviceId": "ALL",
+          "extras": {
+            "MAN_COMPOSITION": "TIME_ABSOLUTE, MAN_DURA, ACC_X, ACC_Y, ACC_Z",
+            "MAN_UNITS": "[n/a, s, km/s**2, km/s**2, km/s**2]"
+          }
         },
         {
           "t": 1793680962954,
           "dvMps": 0.306907,
           "duraSec": 1252.264938,
-          "id": "23"
+          "id": "23",
+          "accX": 0,
+          "accY": -2.4508127248941074e-7,
+          "accZ": 0,
+          "refFrame": "NTW_ROTATING",
+          "basis": "PLANNED",
+          "dcType": "CONTINUOUS",
+          "purpose": "RELOCATION",
+          "deviceId": "ALL",
+          "extras": {
+            "MAN_COMPOSITION": "TIME_ABSOLUTE, MAN_DURA, ACC_X, ACC_Y, ACC_Z",
+            "MAN_UNITS": "[n/a, s, km/s**2, km/s**2, km/s**2]"
+          }
         },
         {
           "t": 1793689827381,
           "dvMps": 0.310551,
           "duraSec": 1267.133763,
-          "id": "24"
+          "id": "24",
+          "accX": 0,
+          "accY": -2.4508127248941074e-7,
+          "accZ": 0,
+          "refFrame": "NTW_ROTATING",
+          "basis": "PLANNED",
+          "dcType": "CONTINUOUS",
+          "purpose": "RELOCATION",
+          "deviceId": "ALL",
+          "extras": {
+            "MAN_COMPOSITION": "TIME_ABSOLUTE, MAN_DURA, ACC_X, ACC_Y, ACC_Z",
+            "MAN_UNITS": "[n/a, s, km/s**2, km/s**2, km/s**2]"
+          }
         }
       ],
       "status": "local",
@@ -1350,151 +3187,451 @@
           "t": 1793472536237,
           "dvMps": 0.272934,
           "duraSec": 1186.214988,
-          "id": "0"
+          "id": "0",
+          "accX": 0,
+          "accY": -2.3008835135009165e-7,
+          "accZ": 0,
+          "refFrame": "NTW_ROTATING",
+          "basis": "PLANNED",
+          "dcType": "CONTINUOUS",
+          "purpose": "RELOCATION",
+          "deviceId": "ALL",
+          "extras": {
+            "MAN_COMPOSITION": "TIME_ABSOLUTE, MAN_DURA, ACC_X, ACC_Y, ACC_Z",
+            "MAN_UNITS": "[n/a, s, km/s**2, km/s**2, km/s**2]"
+          }
         },
         {
           "t": 1793481343784,
           "dvMps": 0.303593,
           "duraSec": 1319.461425,
-          "id": "1"
+          "id": "1",
+          "accX": 0,
+          "accY": -2.3008835135009165e-7,
+          "accZ": 0,
+          "refFrame": "NTW_ROTATING",
+          "basis": "PLANNED",
+          "dcType": "CONTINUOUS",
+          "purpose": "RELOCATION",
+          "deviceId": "ALL",
+          "extras": {
+            "MAN_COMPOSITION": "TIME_ABSOLUTE, MAN_DURA, ACC_X, ACC_Y, ACC_Z",
+            "MAN_UNITS": "[n/a, s, km/s**2, km/s**2, km/s**2]"
+          }
         },
         {
           "t": 1793490269261,
           "dvMps": 0.279497,
           "duraSec": 1214.736806,
-          "id": "2"
+          "id": "2",
+          "accX": 0,
+          "accY": -2.3008835135009165e-7,
+          "accZ": 0,
+          "refFrame": "NTW_ROTATING",
+          "basis": "PLANNED",
+          "dcType": "CONTINUOUS",
+          "purpose": "RELOCATION",
+          "deviceId": "ALL",
+          "extras": {
+            "MAN_COMPOSITION": "TIME_ABSOLUTE, MAN_DURA, ACC_X, ACC_Y, ACC_Z",
+            "MAN_UNITS": "[n/a, s, km/s**2, km/s**2, km/s**2]"
+          }
         },
         {
           "t": 1793499140685,
           "dvMps": 0.279802,
           "duraSec": 1216.064926,
-          "id": "3"
+          "id": "3",
+          "accX": 0,
+          "accY": -2.3008835135009165e-7,
+          "accZ": 0,
+          "refFrame": "NTW_ROTATING",
+          "basis": "PLANNED",
+          "dcType": "CONTINUOUS",
+          "purpose": "RELOCATION",
+          "deviceId": "ALL",
+          "extras": {
+            "MAN_COMPOSITION": "TIME_ABSOLUTE, MAN_DURA, ACC_X, ACC_Y, ACC_Z",
+            "MAN_UNITS": "[n/a, s, km/s**2, km/s**2, km/s**2]"
+          }
         },
         {
           "t": 1793508163659,
           "dvMps": 0.209883,
           "duraSec": 912.186464,
-          "id": "4"
+          "id": "4",
+          "accX": 0,
+          "accY": -2.3008835135009165e-7,
+          "accZ": 0,
+          "refFrame": "NTW_ROTATING",
+          "basis": "PLANNED",
+          "dcType": "CONTINUOUS",
+          "purpose": "RELOCATION",
+          "deviceId": "ALL",
+          "extras": {
+            "MAN_COMPOSITION": "TIME_ABSOLUTE, MAN_DURA, ACC_X, ACC_Y, ACC_Z",
+            "MAN_UNITS": "[n/a, s, km/s**2, km/s**2, km/s**2]"
+          }
         },
         {
           "t": 1793517320992,
           "dvMps": 0.07767,
           "duraSec": 337.56392,
-          "id": "5"
+          "id": "5",
+          "accX": 0,
+          "accY": -2.3008835135009165e-7,
+          "accZ": 0,
+          "refFrame": "NTW_ROTATING",
+          "basis": "PLANNED",
+          "dcType": "CONTINUOUS",
+          "purpose": "RELOCATION",
+          "deviceId": "ALL",
+          "extras": {
+            "MAN_COMPOSITION": "TIME_ABSOLUTE, MAN_DURA, ACC_X, ACC_Y, ACC_Z",
+            "MAN_UNITS": "[n/a, s, km/s**2, km/s**2, km/s**2]"
+          }
         },
         {
           "t": 1793526247122,
           "dvMps": 0.051831,
           "duraSec": 225.264807,
-          "id": "6"
+          "id": "6",
+          "accX": 0,
+          "accY": -2.3008835135009165e-7,
+          "accZ": 0,
+          "refFrame": "NTW_ROTATING",
+          "basis": "PLANNED",
+          "dcType": "CONTINUOUS",
+          "purpose": "RELOCATION",
+          "deviceId": "ALL",
+          "extras": {
+            "MAN_COMPOSITION": "TIME_ABSOLUTE, MAN_DURA, ACC_X, ACC_Y, ACC_Z",
+            "MAN_UNITS": "[n/a, s, km/s**2, km/s**2, km/s**2]"
+          }
         },
         {
           "t": 1793534989525,
           "dvMps": 0.110379,
           "duraSec": 479.723963,
-          "id": "7"
+          "id": "7",
+          "accX": 0,
+          "accY": -2.3008835135009165e-7,
+          "accZ": 0,
+          "refFrame": "NTW_ROTATING",
+          "basis": "PLANNED",
+          "dcType": "CONTINUOUS",
+          "purpose": "RELOCATION",
+          "deviceId": "ALL",
+          "extras": {
+            "MAN_COMPOSITION": "TIME_ABSOLUTE, MAN_DURA, ACC_X, ACC_Y, ACC_Z",
+            "MAN_UNITS": "[n/a, s, km/s**2, km/s**2, km/s**2]"
+          }
         },
         {
           "t": 1793543938976,
           "dvMps": 0.073486,
           "duraSec": 319.383348,
-          "id": "8"
+          "id": "8",
+          "accX": 0,
+          "accY": -2.3008835135009165e-7,
+          "accZ": 0,
+          "refFrame": "NTW_ROTATING",
+          "basis": "PLANNED",
+          "dcType": "CONTINUOUS",
+          "purpose": "RELOCATION",
+          "deviceId": "ALL",
+          "extras": {
+            "MAN_COMPOSITION": "TIME_ABSOLUTE, MAN_DURA, ACC_X, ACC_Y, ACC_Z",
+            "MAN_UNITS": "[n/a, s, km/s**2, km/s**2, km/s**2]"
+          }
         },
         {
           "t": 1793552753501,
           "dvMps": 0.09853,
           "duraSec": 428.22774,
-          "id": "9"
+          "id": "9",
+          "accX": 0,
+          "accY": -2.3008835135009165e-7,
+          "accZ": 0,
+          "refFrame": "NTW_ROTATING",
+          "basis": "PLANNED",
+          "dcType": "CONTINUOUS",
+          "purpose": "RELOCATION",
+          "deviceId": "ALL",
+          "extras": {
+            "MAN_COMPOSITION": "TIME_ABSOLUTE, MAN_DURA, ACC_X, ACC_Y, ACC_Z",
+            "MAN_UNITS": "[n/a, s, km/s**2, km/s**2, km/s**2]"
+          }
         },
         {
           "t": 1793561668931,
           "dvMps": 0.07698,
           "duraSec": 334.565732,
-          "id": "10"
+          "id": "10",
+          "accX": 0,
+          "accY": -2.3008835135009165e-7,
+          "accZ": 0,
+          "refFrame": "NTW_ROTATING",
+          "basis": "PLANNED",
+          "dcType": "CONTINUOUS",
+          "purpose": "RELOCATION",
+          "deviceId": "ALL",
+          "extras": {
+            "MAN_COMPOSITION": "TIME_ABSOLUTE, MAN_DURA, ACC_X, ACC_Y, ACC_Z",
+            "MAN_UNITS": "[n/a, s, km/s**2, km/s**2, km/s**2]"
+          }
         },
         {
           "t": 1793570555009,
           "dvMps": 0.068782,
           "duraSec": 298.935236,
-          "id": "11"
+          "id": "11",
+          "accX": 0,
+          "accY": -2.3008835135009165e-7,
+          "accZ": 0,
+          "refFrame": "NTW_ROTATING",
+          "basis": "PLANNED",
+          "dcType": "CONTINUOUS",
+          "purpose": "RELOCATION",
+          "deviceId": "ALL",
+          "extras": {
+            "MAN_COMPOSITION": "TIME_ABSOLUTE, MAN_DURA, ACC_X, ACC_Y, ACC_Z",
+            "MAN_UNITS": "[n/a, s, km/s**2, km/s**2, km/s**2]"
+          }
         },
         {
           "t": 1793579364418,
           "dvMps": 0.095706,
           "duraSec": 415.951739,
-          "id": "12"
+          "id": "12",
+          "accX": 0,
+          "accY": -2.3008835135009165e-7,
+          "accZ": 0,
+          "refFrame": "NTW_ROTATING",
+          "basis": "PLANNED",
+          "dcType": "CONTINUOUS",
+          "purpose": "RELOCATION",
+          "deviceId": "ALL",
+          "extras": {
+            "MAN_COMPOSITION": "TIME_ABSOLUTE, MAN_DURA, ACC_X, ACC_Y, ACC_Z",
+            "MAN_UNITS": "[n/a, s, km/s**2, km/s**2, km/s**2]"
+          }
         },
         {
           "t": 1793588251018,
           "dvMps": 0.086951,
           "duraSec": 377.901339,
-          "id": "13"
+          "id": "13",
+          "accX": 0,
+          "accY": -2.3008835135009165e-7,
+          "accZ": 0,
+          "refFrame": "NTW_ROTATING",
+          "basis": "PLANNED",
+          "dcType": "CONTINUOUS",
+          "purpose": "RELOCATION",
+          "deviceId": "ALL",
+          "extras": {
+            "MAN_COMPOSITION": "TIME_ABSOLUTE, MAN_DURA, ACC_X, ACC_Y, ACC_Z",
+            "MAN_UNITS": "[n/a, s, km/s**2, km/s**2, km/s**2]"
+          }
         },
         {
           "t": 1793597114735,
           "dvMps": 0.088569,
           "duraSec": 384.934654,
-          "id": "14"
+          "id": "14",
+          "accX": 0,
+          "accY": -2.3008835135009165e-7,
+          "accZ": 0,
+          "refFrame": "NTW_ROTATING",
+          "basis": "PLANNED",
+          "dcType": "CONTINUOUS",
+          "purpose": "RELOCATION",
+          "deviceId": "ALL",
+          "extras": {
+            "MAN_COMPOSITION": "TIME_ABSOLUTE, MAN_DURA, ACC_X, ACC_Y, ACC_Z",
+            "MAN_UNITS": "[n/a, s, km/s**2, km/s**2, km/s**2]"
+          }
         },
         {
           "t": 1793606013180,
           "dvMps": 0.074049,
           "duraSec": 321.828223,
-          "id": "15"
+          "id": "15",
+          "accX": 0,
+          "accY": -2.3008835135009165e-7,
+          "accZ": 0,
+          "refFrame": "NTW_ROTATING",
+          "basis": "PLANNED",
+          "dcType": "CONTINUOUS",
+          "purpose": "RELOCATION",
+          "deviceId": "ALL",
+          "extras": {
+            "MAN_COMPOSITION": "TIME_ABSOLUTE, MAN_DURA, ACC_X, ACC_Y, ACC_Z",
+            "MAN_UNITS": "[n/a, s, km/s**2, km/s**2, km/s**2]"
+          }
         },
         {
           "t": 1793614854911,
           "dvMps": 0.085471,
           "duraSec": 371.46919,
-          "id": "16"
+          "id": "16",
+          "accX": 0,
+          "accY": -2.3008835135009165e-7,
+          "accZ": 0,
+          "refFrame": "NTW_ROTATING",
+          "basis": "PLANNED",
+          "dcType": "CONTINUOUS",
+          "purpose": "RELOCATION",
+          "deviceId": "ALL",
+          "extras": {
+            "MAN_COMPOSITION": "TIME_ABSOLUTE, MAN_DURA, ACC_X, ACC_Y, ACC_Z",
+            "MAN_UNITS": "[n/a, s, km/s**2, km/s**2, km/s**2]"
+          }
         },
         {
           "t": 1793623755224,
           "dvMps": 0.069776,
           "duraSec": 303.255693,
-          "id": "17"
+          "id": "17",
+          "accX": 0,
+          "accY": -2.3008835135009165e-7,
+          "accZ": 0,
+          "refFrame": "NTW_ROTATING",
+          "basis": "PLANNED",
+          "dcType": "CONTINUOUS",
+          "purpose": "RELOCATION",
+          "deviceId": "ALL",
+          "extras": {
+            "MAN_COMPOSITION": "TIME_ABSOLUTE, MAN_DURA, ACC_X, ACC_Y, ACC_Z",
+            "MAN_UNITS": "[n/a, s, km/s**2, km/s**2, km/s**2]"
+          }
         },
         {
           "t": 1793632353484,
           "dvMps": 0.192922,
           "duraSec": 838.470148,
-          "id": "18"
+          "id": "18",
+          "accX": 0,
+          "accY": -2.3008835135009165e-7,
+          "accZ": 0,
+          "refFrame": "NTW_ROTATING",
+          "basis": "PLANNED",
+          "dcType": "CONTINUOUS",
+          "purpose": "RELOCATION",
+          "deviceId": "ALL",
+          "extras": {
+            "MAN_COMPOSITION": "TIME_ABSOLUTE, MAN_DURA, ACC_X, ACC_Y, ACC_Z",
+            "MAN_UNITS": "[n/a, s, km/s**2, km/s**2, km/s**2]"
+          }
         },
         {
           "t": 1793640896063,
           "dvMps": 0.341463,
           "duraSec": 1484.053172,
-          "id": "19"
+          "id": "19",
+          "accX": 0,
+          "accY": -2.3008835135009165e-7,
+          "accZ": 0,
+          "refFrame": "NTW_ROTATING",
+          "basis": "PLANNED",
+          "dcType": "CONTINUOUS",
+          "purpose": "RELOCATION",
+          "deviceId": "ALL",
+          "extras": {
+            "MAN_COMPOSITION": "TIME_ABSOLUTE, MAN_DURA, ACC_X, ACC_Y, ACC_Z",
+            "MAN_UNITS": "[n/a, s, km/s**2, km/s**2, km/s**2]"
+          }
         },
         {
           "t": 1793649919272,
           "dvMps": 0.268195,
           "duraSec": 1165.617369,
-          "id": "20"
+          "id": "20",
+          "accX": 0,
+          "accY": -2.3008835135009165e-7,
+          "accZ": 0,
+          "refFrame": "NTW_ROTATING",
+          "basis": "PLANNED",
+          "dcType": "CONTINUOUS",
+          "purpose": "RELOCATION",
+          "deviceId": "ALL",
+          "extras": {
+            "MAN_COMPOSITION": "TIME_ABSOLUTE, MAN_DURA, ACC_X, ACC_Y, ACC_Z",
+            "MAN_UNITS": "[n/a, s, km/s**2, km/s**2, km/s**2]"
+          }
         },
         {
           "t": 1793658789775,
           "dvMps": 0.264743,
           "duraSec": 1150.613431,
-          "id": "21"
+          "id": "21",
+          "accX": 0,
+          "accY": -2.3008835135009165e-7,
+          "accZ": 0,
+          "refFrame": "NTW_ROTATING",
+          "basis": "PLANNED",
+          "dcType": "CONTINUOUS",
+          "purpose": "RELOCATION",
+          "deviceId": "ALL",
+          "extras": {
+            "MAN_COMPOSITION": "TIME_ABSOLUTE, MAN_DURA, ACC_X, ACC_Y, ACC_Z",
+            "MAN_UNITS": "[n/a, s, km/s**2, km/s**2, km/s**2]"
+          }
         },
         {
           "t": 1793667553323,
           "dvMps": 0.310022,
           "duraSec": 1347.404358,
-          "id": "22"
+          "id": "22",
+          "accX": 0,
+          "accY": -2.3008835135009165e-7,
+          "accZ": 0,
+          "refFrame": "NTW_ROTATING",
+          "basis": "PLANNED",
+          "dcType": "CONTINUOUS",
+          "purpose": "RELOCATION",
+          "deviceId": "ALL",
+          "extras": {
+            "MAN_COMPOSITION": "TIME_ABSOLUTE, MAN_DURA, ACC_X, ACC_Y, ACC_Z",
+            "MAN_UNITS": "[n/a, s, km/s**2, km/s**2, km/s**2]"
+          }
         },
         {
           "t": 1793676467848,
           "dvMps": 0.28534,
           "duraSec": 1240.131183,
-          "id": "23"
+          "id": "23",
+          "accX": 0,
+          "accY": -2.3008835135009165e-7,
+          "accZ": 0,
+          "refFrame": "NTW_ROTATING",
+          "basis": "PLANNED",
+          "dcType": "CONTINUOUS",
+          "purpose": "RELOCATION",
+          "deviceId": "ALL",
+          "extras": {
+            "MAN_COMPOSITION": "TIME_ABSOLUTE, MAN_DURA, ACC_X, ACC_Y, ACC_Z",
+            "MAN_UNITS": "[n/a, s, km/s**2, km/s**2, km/s**2]"
+          }
         },
         {
           "t": 1793685371050,
           "dvMps": 0.265396,
           "duraSec": 1153.454308,
-          "id": "24"
+          "id": "24",
+          "accX": 0,
+          "accY": -2.3008835135009165e-7,
+          "accZ": 0,
+          "refFrame": "NTW_ROTATING",
+          "basis": "PLANNED",
+          "dcType": "CONTINUOUS",
+          "purpose": "RELOCATION",
+          "deviceId": "ALL",
+          "extras": {
+            "MAN_COMPOSITION": "TIME_ABSOLUTE, MAN_DURA, ACC_X, ACC_Y, ACC_Z",
+            "MAN_UNITS": "[n/a, s, km/s**2, km/s**2, km/s**2]"
+          }
         }
       ],
       "status": "local",
@@ -1773,175 +3910,502 @@
           "t": 1793500289091,
           "dvMps": 0.011205,
           "duraSec": 47.445842,
-          "id": "0"
+          "id": "0",
+          "accX": 0,
+          "accY": -2.3616184240635297e-7,
+          "accZ": 0,
+          "refFrame": "NTW_ROTATING",
+          "basis": "PLANNED",
+          "dcType": "CONTINUOUS",
+          "deviceId": "ALL",
+          "extras": {
+            "MAN_COMPOSITION": "TIME_ABSOLUTE, MAN_DURA, ACC_X, ACC_Y, ACC_Z",
+            "MAN_UNITS": "[n/a, s, km/s**2, km/s**2, km/s**2]"
+          }
         },
         {
           "t": 1793505723883,
           "dvMps": 0.078864,
           "duraSec": 333.942331,
-          "id": "1"
+          "id": "1",
+          "accX": 0,
+          "accY": -2.3616184240635297e-7,
+          "accZ": 0,
+          "refFrame": "NTW_ROTATING",
+          "basis": "PLANNED",
+          "dcType": "CONTINUOUS",
+          "deviceId": "ALL",
+          "extras": {
+            "MAN_COMPOSITION": "TIME_ABSOLUTE, MAN_DURA, ACC_X, ACC_Y, ACC_Z",
+            "MAN_UNITS": "[n/a, s, km/s**2, km/s**2, km/s**2]"
+          }
         },
         {
           "t": 1793511275573,
           "dvMps": 0.082064,
           "duraSec": 347.488579,
-          "id": "2"
+          "id": "2",
+          "accX": 0,
+          "accY": -2.3616184240635297e-7,
+          "accZ": 0,
+          "refFrame": "NTW_ROTATING",
+          "basis": "PLANNED",
+          "dcType": "CONTINUOUS",
+          "deviceId": "ALL",
+          "extras": {
+            "MAN_COMPOSITION": "TIME_ABSOLUTE, MAN_DURA, ACC_X, ACC_Y, ACC_Z",
+            "MAN_UNITS": "[n/a, s, km/s**2, km/s**2, km/s**2]"
+          }
         },
         {
           "t": 1793516966838,
           "dvMps": 0.025923,
           "duraSec": 109.769658,
-          "id": "3"
+          "id": "3",
+          "accX": 0,
+          "accY": -2.3616184240635297e-7,
+          "accZ": 0,
+          "refFrame": "NTW_ROTATING",
+          "basis": "PLANNED",
+          "dcType": "CONTINUOUS",
+          "deviceId": "ALL",
+          "extras": {
+            "MAN_COMPOSITION": "TIME_ABSOLUTE, MAN_DURA, ACC_X, ACC_Y, ACC_Z",
+            "MAN_UNITS": "[n/a, s, km/s**2, km/s**2, km/s**2]"
+          }
         },
         {
           "t": 1793522458424,
           "dvMps": 0.06543,
           "duraSec": 277.054103,
-          "id": "4"
+          "id": "4",
+          "accX": 0,
+          "accY": -2.3616184240635297e-7,
+          "accZ": 0,
+          "refFrame": "NTW_ROTATING",
+          "basis": "PLANNED",
+          "dcType": "CONTINUOUS",
+          "deviceId": "ALL",
+          "extras": {
+            "MAN_COMPOSITION": "TIME_ABSOLUTE, MAN_DURA, ACC_X, ACC_Y, ACC_Z",
+            "MAN_UNITS": "[n/a, s, km/s**2, km/s**2, km/s**2]"
+          }
         },
         {
           "t": 1793528017010,
           "dvMps": 0.07125,
           "duraSec": 301.70023,
-          "id": "5"
+          "id": "5",
+          "accX": 0,
+          "accY": -2.3616184240635297e-7,
+          "accZ": 0,
+          "refFrame": "NTW_ROTATING",
+          "basis": "PLANNED",
+          "dcType": "CONTINUOUS",
+          "deviceId": "ALL",
+          "extras": {
+            "MAN_COMPOSITION": "TIME_ABSOLUTE, MAN_DURA, ACC_X, ACC_Y, ACC_Z",
+            "MAN_UNITS": "[n/a, s, km/s**2, km/s**2, km/s**2]"
+          }
         },
         {
           "t": 1793533603997,
           "dvMps": 0.062194,
           "duraSec": 263.354692,
-          "id": "6"
+          "id": "6",
+          "accX": 0,
+          "accY": -2.3616184240635297e-7,
+          "accZ": 0,
+          "refFrame": "NTW_ROTATING",
+          "basis": "PLANNED",
+          "dcType": "CONTINUOUS",
+          "deviceId": "ALL",
+          "extras": {
+            "MAN_COMPOSITION": "TIME_ABSOLUTE, MAN_DURA, ACC_X, ACC_Y, ACC_Z",
+            "MAN_UNITS": "[n/a, s, km/s**2, km/s**2, km/s**2]"
+          }
         },
         {
           "t": 1793539195791,
           "dvMps": 0.052851,
           "duraSec": 223.791765,
-          "id": "7"
+          "id": "7",
+          "accX": 0,
+          "accY": -2.3616184240635297e-7,
+          "accZ": 0,
+          "refFrame": "NTW_ROTATING",
+          "basis": "PLANNED",
+          "dcType": "CONTINUOUS",
+          "deviceId": "ALL",
+          "extras": {
+            "MAN_COMPOSITION": "TIME_ABSOLUTE, MAN_DURA, ACC_X, ACC_Y, ACC_Z",
+            "MAN_UNITS": "[n/a, s, km/s**2, km/s**2, km/s**2]"
+          }
         },
         {
           "t": 1793544746501,
           "dvMps": 0.062839,
           "duraSec": 266.083585,
-          "id": "8"
+          "id": "8",
+          "accX": 0,
+          "accY": -2.3616184240635297e-7,
+          "accZ": 0,
+          "refFrame": "NTW_ROTATING",
+          "basis": "PLANNED",
+          "dcType": "CONTINUOUS",
+          "deviceId": "ALL",
+          "extras": {
+            "MAN_COMPOSITION": "TIME_ABSOLUTE, MAN_DURA, ACC_X, ACC_Y, ACC_Z",
+            "MAN_UNITS": "[n/a, s, km/s**2, km/s**2, km/s**2]"
+          }
         },
         {
           "t": 1793550336475,
           "dvMps": 0.053873,
           "duraSec": 228.118934,
-          "id": "9"
+          "id": "9",
+          "accX": 0,
+          "accY": -2.3616184240635297e-7,
+          "accZ": 0,
+          "refFrame": "NTW_ROTATING",
+          "basis": "PLANNED",
+          "dcType": "CONTINUOUS",
+          "deviceId": "ALL",
+          "extras": {
+            "MAN_COMPOSITION": "TIME_ABSOLUTE, MAN_DURA, ACC_X, ACC_Y, ACC_Z",
+            "MAN_UNITS": "[n/a, s, km/s**2, km/s**2, km/s**2]"
+          }
         },
         {
           "t": 1793555900933,
           "dvMps": 0.058594,
           "duraSec": 248.109178,
-          "id": "10"
+          "id": "10",
+          "accX": 0,
+          "accY": -2.3616184240635297e-7,
+          "accZ": 0,
+          "refFrame": "NTW_ROTATING",
+          "basis": "PLANNED",
+          "dcType": "CONTINUOUS",
+          "deviceId": "ALL",
+          "extras": {
+            "MAN_COMPOSITION": "TIME_ABSOLUTE, MAN_DURA, ACC_X, ACC_Y, ACC_Z",
+            "MAN_UNITS": "[n/a, s, km/s**2, km/s**2, km/s**2]"
+          }
         },
         {
           "t": 1793561502423,
           "dvMps": 0.049584,
           "duraSec": 209.956119,
-          "id": "11"
+          "id": "11",
+          "accX": 0,
+          "accY": -2.3616184240635297e-7,
+          "accZ": 0,
+          "refFrame": "NTW_ROTATING",
+          "basis": "PLANNED",
+          "dcType": "CONTINUOUS",
+          "deviceId": "ALL",
+          "extras": {
+            "MAN_COMPOSITION": "TIME_ABSOLUTE, MAN_DURA, ACC_X, ACC_Y, ACC_Z",
+            "MAN_UNITS": "[n/a, s, km/s**2, km/s**2, km/s**2]"
+          }
         },
         {
           "t": 1793567051784,
           "dvMps": 0.056344,
           "duraSec": 238.581386,
-          "id": "12"
+          "id": "12",
+          "accX": 0,
+          "accY": -2.3616184240635297e-7,
+          "accZ": 0,
+          "refFrame": "NTW_ROTATING",
+          "basis": "PLANNED",
+          "dcType": "CONTINUOUS",
+          "deviceId": "ALL",
+          "extras": {
+            "MAN_COMPOSITION": "TIME_ABSOLUTE, MAN_DURA, ACC_X, ACC_Y, ACC_Z",
+            "MAN_UNITS": "[n/a, s, km/s**2, km/s**2, km/s**2]"
+          }
         },
         {
           "t": 1793572617568,
           "dvMps": 0.055055,
           "duraSec": 233.123476,
-          "id": "13"
+          "id": "13",
+          "accX": 0,
+          "accY": -2.3616184240635297e-7,
+          "accZ": 0,
+          "refFrame": "NTW_ROTATING",
+          "basis": "PLANNED",
+          "dcType": "CONTINUOUS",
+          "deviceId": "ALL",
+          "extras": {
+            "MAN_COMPOSITION": "TIME_ABSOLUTE, MAN_DURA, ACC_X, ACC_Y, ACC_Z",
+            "MAN_UNITS": "[n/a, s, km/s**2, km/s**2, km/s**2]"
+          }
         },
         {
           "t": 1793578188758,
           "dvMps": 0.053753,
           "duraSec": 227.61192,
-          "id": "14"
+          "id": "14",
+          "accX": 0,
+          "accY": -2.3616184240635297e-7,
+          "accZ": 0,
+          "refFrame": "NTW_ROTATING",
+          "basis": "PLANNED",
+          "dcType": "CONTINUOUS",
+          "deviceId": "ALL",
+          "extras": {
+            "MAN_COMPOSITION": "TIME_ABSOLUTE, MAN_DURA, ACC_X, ACC_Y, ACC_Z",
+            "MAN_UNITS": "[n/a, s, km/s**2, km/s**2, km/s**2]"
+          }
         },
         {
           "t": 1793583668159,
           "dvMps": 0.093143,
           "duraSec": 394.405344,
-          "id": "15"
+          "id": "15",
+          "accX": 0,
+          "accY": -2.3616184240635297e-7,
+          "accZ": 0,
+          "refFrame": "NTW_ROTATING",
+          "basis": "PLANNED",
+          "dcType": "CONTINUOUS",
+          "deviceId": "ALL",
+          "extras": {
+            "MAN_COMPOSITION": "TIME_ABSOLUTE, MAN_DURA, ACC_X, ACC_Y, ACC_Z",
+            "MAN_UNITS": "[n/a, s, km/s**2, km/s**2, km/s**2]"
+          }
         },
         {
           "t": 1793589174694,
           "dvMps": 0.128875,
           "duraSec": 545.705609,
-          "id": "16"
+          "id": "16",
+          "accX": 0,
+          "accY": -2.3616184240635297e-7,
+          "accZ": 0,
+          "refFrame": "NTW_ROTATING",
+          "basis": "PLANNED",
+          "dcType": "CONTINUOUS",
+          "deviceId": "ALL",
+          "extras": {
+            "MAN_COMPOSITION": "TIME_ABSOLUTE, MAN_DURA, ACC_X, ACC_Y, ACC_Z",
+            "MAN_UNITS": "[n/a, s, km/s**2, km/s**2, km/s**2]"
+          }
         },
         {
           "t": 1793594591419,
           "dvMps": 0.198344,
           "duraSec": 839.864805,
-          "id": "17"
+          "id": "17",
+          "accX": 0,
+          "accY": -2.3616184240635297e-7,
+          "accZ": 0,
+          "refFrame": "NTW_ROTATING",
+          "basis": "PLANNED",
+          "dcType": "CONTINUOUS",
+          "deviceId": "ALL",
+          "extras": {
+            "MAN_COMPOSITION": "TIME_ABSOLUTE, MAN_DURA, ACC_X, ACC_Y, ACC_Z",
+            "MAN_UNITS": "[n/a, s, km/s**2, km/s**2, km/s**2]"
+          }
         },
         {
           "t": 1793600184125,
           "dvMps": 0.185328,
           "duraSec": 784.751309,
-          "id": "18"
+          "id": "18",
+          "accX": 0,
+          "accY": -2.3616184240635297e-7,
+          "accZ": 0,
+          "refFrame": "NTW_ROTATING",
+          "basis": "PLANNED",
+          "dcType": "CONTINUOUS",
+          "deviceId": "ALL",
+          "extras": {
+            "MAN_COMPOSITION": "TIME_ABSOLUTE, MAN_DURA, ACC_X, ACC_Y, ACC_Z",
+            "MAN_UNITS": "[n/a, s, km/s**2, km/s**2, km/s**2]"
+          }
         },
         {
           "t": 1793605770907,
           "dvMps": 0.185338,
           "duraSec": 784.790276,
-          "id": "19"
+          "id": "19",
+          "accX": 0,
+          "accY": -2.3616184240635297e-7,
+          "accZ": 0,
+          "refFrame": "NTW_ROTATING",
+          "basis": "PLANNED",
+          "dcType": "CONTINUOUS",
+          "deviceId": "ALL",
+          "extras": {
+            "MAN_COMPOSITION": "TIME_ABSOLUTE, MAN_DURA, ACC_X, ACC_Y, ACC_Z",
+            "MAN_UNITS": "[n/a, s, km/s**2, km/s**2, km/s**2]"
+          }
         },
         {
           "t": 1793611092954,
           "dvMps": 0.299048,
           "duraSec": 1266.28334,
-          "id": "20"
+          "id": "20",
+          "accX": 0,
+          "accY": -2.3616184240635297e-7,
+          "accZ": 0,
+          "refFrame": "NTW_ROTATING",
+          "basis": "PLANNED",
+          "dcType": "CONTINUOUS",
+          "deviceId": "ALL",
+          "extras": {
+            "MAN_COMPOSITION": "TIME_ABSOLUTE, MAN_DURA, ACC_X, ACC_Y, ACC_Z",
+            "MAN_UNITS": "[n/a, s, km/s**2, km/s**2, km/s**2]"
+          }
         },
         {
           "t": 1793622411415,
           "dvMps": 0.290985,
           "duraSec": 1232.14037,
-          "id": "21"
+          "id": "21",
+          "accX": 0,
+          "accY": -2.3616184240635297e-7,
+          "accZ": 0,
+          "refFrame": "NTW_ROTATING",
+          "basis": "PLANNED",
+          "dcType": "CONTINUOUS",
+          "purpose": "RELOCATION",
+          "deviceId": "ALL",
+          "extras": {
+            "MAN_COMPOSITION": "TIME_ABSOLUTE, MAN_DURA, ACC_X, ACC_Y, ACC_Z",
+            "MAN_UNITS": "[n/a, s, km/s**2, km/s**2, km/s**2]"
+          }
         },
         {
           "t": 1793631263470,
           "dvMps": 0.313106,
           "duraSec": 1325.81247,
-          "id": "22"
+          "id": "22",
+          "accX": 0,
+          "accY": -2.3616184240635297e-7,
+          "accZ": 0,
+          "refFrame": "NTW_ROTATING",
+          "basis": "PLANNED",
+          "dcType": "CONTINUOUS",
+          "purpose": "RELOCATION",
+          "deviceId": "ALL",
+          "extras": {
+            "MAN_COMPOSITION": "TIME_ABSOLUTE, MAN_DURA, ACC_X, ACC_Y, ACC_Z",
+            "MAN_UNITS": "[n/a, s, km/s**2, km/s**2, km/s**2]"
+          }
         },
         {
           "t": 1793640147057,
           "dvMps": 0.319887,
           "duraSec": 1354.525977,
-          "id": "23"
+          "id": "23",
+          "accX": 0,
+          "accY": -2.3616184240635297e-7,
+          "accZ": 0,
+          "refFrame": "NTW_ROTATING",
+          "basis": "PLANNED",
+          "dcType": "CONTINUOUS",
+          "purpose": "RELOCATION",
+          "deviceId": "ALL",
+          "extras": {
+            "MAN_COMPOSITION": "TIME_ABSOLUTE, MAN_DURA, ACC_X, ACC_Y, ACC_Z",
+            "MAN_UNITS": "[n/a, s, km/s**2, km/s**2, km/s**2]"
+          }
         },
         {
           "t": 1793649157231,
           "dvMps": 0.266374,
           "duraSec": 1127.930387,
-          "id": "24"
+          "id": "24",
+          "accX": 0,
+          "accY": -2.3616184240635297e-7,
+          "accZ": 0,
+          "refFrame": "NTW_ROTATING",
+          "basis": "PLANNED",
+          "dcType": "CONTINUOUS",
+          "purpose": "RELOCATION",
+          "deviceId": "ALL",
+          "extras": {
+            "MAN_COMPOSITION": "TIME_ABSOLUTE, MAN_DURA, ACC_X, ACC_Y, ACC_Z",
+            "MAN_UNITS": "[n/a, s, km/s**2, km/s**2, km/s**2]"
+          }
         },
         {
           "t": 1793657929594,
           "dvMps": 0.324678,
           "duraSec": 1374.812606,
-          "id": "25"
+          "id": "25",
+          "accX": 0,
+          "accY": -2.3616184240635297e-7,
+          "accZ": 0,
+          "refFrame": "NTW_ROTATING",
+          "basis": "PLANNED",
+          "dcType": "CONTINUOUS",
+          "purpose": "RELOCATION",
+          "deviceId": "ALL",
+          "extras": {
+            "MAN_COMPOSITION": "TIME_ABSOLUTE, MAN_DURA, ACC_X, ACC_Y, ACC_Z",
+            "MAN_UNITS": "[n/a, s, km/s**2, km/s**2, km/s**2]"
+          }
         },
         {
           "t": 1793666934163,
           "dvMps": 0.272786,
           "duraSec": 1155.079049,
-          "id": "26"
+          "id": "26",
+          "accX": 0,
+          "accY": -2.3616184240635297e-7,
+          "accZ": 0,
+          "refFrame": "NTW_ROTATING",
+          "basis": "PLANNED",
+          "dcType": "CONTINUOUS",
+          "purpose": "RELOCATION",
+          "deviceId": "ALL",
+          "extras": {
+            "MAN_COMPOSITION": "TIME_ABSOLUTE, MAN_DURA, ACC_X, ACC_Y, ACC_Z",
+            "MAN_UNITS": "[n/a, s, km/s**2, km/s**2, km/s**2]"
+          }
         },
         {
           "t": 1793675797738,
           "dvMps": 0.286992,
           "duraSec": 1215.235126,
-          "id": "27"
+          "id": "27",
+          "accX": 0,
+          "accY": -2.3616184240635297e-7,
+          "accZ": 0,
+          "refFrame": "NTW_ROTATING",
+          "basis": "PLANNED",
+          "dcType": "CONTINUOUS",
+          "purpose": "RELOCATION",
+          "deviceId": "ALL",
+          "extras": {
+            "MAN_COMPOSITION": "TIME_ABSOLUTE, MAN_DURA, ACC_X, ACC_Y, ACC_Z",
+            "MAN_UNITS": "[n/a, s, km/s**2, km/s**2, km/s**2]"
+          }
         },
         {
           "t": 1793684649926,
           "dvMps": 0.306061,
           "duraSec": 1295.980763,
-          "id": "28"
+          "id": "28",
+          "accX": 0,
+          "accY": -2.3616184240635297e-7,
+          "accZ": 0,
+          "refFrame": "NTW_ROTATING",
+          "basis": "PLANNED",
+          "dcType": "CONTINUOUS",
+          "purpose": "RELOCATION",
+          "deviceId": "ALL",
+          "extras": {
+            "MAN_COMPOSITION": "TIME_ABSOLUTE, MAN_DURA, ACC_X, ACC_Y, ACC_Z",
+            "MAN_UNITS": "[n/a, s, km/s**2, km/s**2, km/s**2]"
+          }
         }
       ],
       "status": "local",

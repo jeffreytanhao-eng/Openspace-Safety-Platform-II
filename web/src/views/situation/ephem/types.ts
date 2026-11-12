@@ -37,6 +37,16 @@ export interface EphemManSegment {
   /** 估算 Δv m/s（|acc|×dura），可选 */
   dvMps?: number
   id?: string
+  /** ACC_X/Y/Z in the file MAN_REF_FRAME (typically km/s²) */
+  acc?: [number, number, number]
+  /** File MAN_REF_FRAME, e.g. NTW_ROTATING — do not silently relabel as RTN */
+  refFrame?: string
+  basis?: string
+  dcType?: string
+  purpose?: string
+  deviceId?: string
+  /** Other MAN key-values kept as-is */
+  extras?: Record<string, string>
 }
 
 /** 一条完整的星历序列 */

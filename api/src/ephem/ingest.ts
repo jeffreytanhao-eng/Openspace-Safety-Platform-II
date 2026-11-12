@@ -114,7 +114,21 @@ function buildRow(args: {
       mans.length === 0
         ? '无'
         : `${mans.length} 处 · max Δv ${Math.max(...mans.map((m) => m.dvMps)).toFixed(4)} m/s`,
-    maneuverEpochs: mans.map((m) => ({ t: m.t, dvMps: m.dvMps, duraSec: m.duraSec, id: m.id })),
+    maneuverEpochs: mans.map((m) => ({
+      t: m.t,
+      dvMps: m.dvMps,
+      duraSec: m.duraSec,
+      id: m.id,
+      accX: m.accX,
+      accY: m.accY,
+      accZ: m.accZ,
+      refFrame: m.refFrame,
+      basis: m.basis,
+      dcType: m.dcType,
+      purpose: m.purpose,
+      deviceId: m.deviceId,
+      extras: m.extras
+    })),
     status: 'local',
     updatedAt: updatedAtOf(meta.created),
     originator: meta.originator,

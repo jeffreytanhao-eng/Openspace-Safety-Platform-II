@@ -26,6 +26,12 @@ export interface SatTlePreview {
   incl: number | null
   apogee: number | null
   perigee: number | null
+  /** Orbital period from sat_tle, minutes */
+  period?: number | null
+  /** SATCAT launch date (YYYY-MM-DD) when present in sat_tle */
+  launch_date?: string | null
+  /** SATCAT decay date (YYYY-MM-DD) when present in sat_tle */
+  decay_date?: string | null
   tle_line1: string
   tle_line2: string
 }
@@ -56,9 +62,45 @@ export interface ManagedObject {
   org_name?: string
 }
 
+/** Local catalog dossier fields (filled from the on-disk catalog cache, never live-fetched). */
+export interface CatalogProfile {
+  owner?: string | null
+  ownerCode?: string | null
+  country?: string | null
+  countryCode?: string | null
+  purpose?: string | null
+  purposeCodes?: string[]
+  payload?: string | null
+  manufacturer?: string | null
+  manufacturerCode?: string | null
+  catalogSize?: string | null
+  lengthM?: number | null
+  diameterM?: number | null
+  spanM?: number | null
+  launchSite?: string | null
+  launchSiteCode?: string | null
+  launchVehicle?: string | null
+  launchDate?: string | null
+  shape?: string | null
+  bus?: string | null
+  catalogMassKg?: number | null
+  photoUrl?: string | null
+}
+
+export interface DossierMeta {
+  canEdit: boolean
+  canReset: boolean
+  hasOrgOverlay: boolean
+  familyId: number | null
+  familyName: string | null
+  isSuperAdmin: boolean
+}
+
 /** 目标详情：档案 + 最新轨道要素 + 绑定星历 + 业主自定义 CA 参数 */
 export interface ObjectDetail extends ManagedObject {
   sat: SatTlePreview | null
+  catalogProfile?: CatalogProfile | null
+  dossierMeta?: DossierMeta | null
   ephemerides: Array<{
     id: string
     name: string
@@ -74,6 +116,7 @@ export interface ObjectDetail extends ManagedObject {
 
 export interface LookupResult {
   sat: SatTlePreview
+  catalogProfile?: CatalogProfile | null
   /** 该 NORAD 的授权认领（卫星业主，全局唯一） */
   owner_claim: { id: number; orgId: number; isMine: boolean } | null
   /** 本组织对该 NORAD 的认领（normal/owner，最多一条） */
@@ -167,6 +210,34 @@ export function claimObject(payload: {
 
 export function getObject(id: number): Promise<ObjectDetail> {
   return cgiCall<ObjectDetail>({ method: 'GET', url: `/objects/${id}`, headers: headers() })
+}
+
+/** VIP / super-admin catalog-dossier patch. Never writes unit-archive mass or RCS. */
+export function updateObjectDossier(
+  id: number,
+  patch: Partial<CatalogProfile>
+): Promise<ObjectDetail> {
+  return cgiCall<ObjectDetail>({ method: 'PATCH', url: `/objects/${id}/dossier`, data: patch, headers: headers() })
+}
+
+/** VIP: clear this org's dossier overlay so display falls back to platform data. */
+export function resetObjectDossier(id: number): Promise<ObjectDetail> {
+  return cgiCall<ObjectDetail>({ method: 'DELETE', url: `/objects/${id}/dossier`, headers: headers() })
+}
+
+/** Upload a dossier photo (raw image body). Super-admin family by default; VIP writes the org overlay. */
+export function uploadDossierPhoto(id: number, file: File, objectOnly = false): Promise<ObjectDetail> {
+  const qs = objectOnly ? '?objectOnly=1' : ''
+  return cgiCall<ObjectDetail>({
+    method: 'POST',
+    url: `/objects/${id}/dossier-photo${qs}`,
+    data: file,
+    headers: {
+      ...headers(),
+      'Content-Type': file.type || 'application/octet-stream',
+      'X-Filename': encodeURIComponent(file.name || 'photo')
+    }
+  })
 }
 
 export interface ObjectAliasItem {

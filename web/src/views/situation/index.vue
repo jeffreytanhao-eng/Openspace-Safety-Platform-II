@@ -27,6 +27,7 @@ import { listEvents, type ConjunctionEvent } from '@/api/events'
 import { parseEphemeris } from './ephem/parse'
 import { putSet } from './ephem/store'
 import type { EphemSet } from './ephem/types'
+import { epochToSegment, fmtDvMps } from './ephem/maneuverDisplay'
 import type { CatalogTle } from '@/composables/useCatalog'
 import { useCatalog } from '@/composables/useCatalog'
 import { useObjectAliases } from '@/composables/useObjectAliases'
@@ -222,16 +223,29 @@ async function paintUserEphem(opts?: { track?: boolean }) {
   sceneRef.value?.showEphemManeuver?.(maneuverStates.value, maneuverBurnMs.value)
 }
 
-/** 机动卡片定位：相机对准对应琥珀机动块（不改仿真时刻）；idx=null 取消高亮与标签 */
+/** 机动卡片定位：相机对准对应琥珀机动块，仿真时刻跳到 t0（不自动播放）；idx=null 取消高亮与标签 */
+function jumpSimToManeuverStart(t0: number) {
+  const half = SIM_HALF_SPAN_MS
+  if (t0 < simAnchorMs.value - half || t0 > simAnchorMs.value + half) {
+    simAnchorMs.value = t0
+  }
+  simTimeMs.value = t0
+  sceneRef.value?.setSimTime(t0)
+}
+
 function onLocateMan(
   idx: number | null,
-  info: { t0: number; duraSec: number; lat: string; lon: string } | null
+  info: { t0: number; duraSec: number; lat: string; lon: string; dvMps?: number; purpose?: string; dirText?: string } | null
 ) {
   if (idx == null || !info) {
     sceneRef.value?.focusEphemManIndex?.(null)
     return
   }
-  const label = `${fmtSimTime(info.t0)} UTC · ${info.duraSec} s\n${info.lat} / ${info.lon}`
+  jumpSimToManeuverStart(info.t0)
+  const mid = [info.dirText || fmtDvMps(info.dvMps), info.purpose].filter((s) => s && s !== '—').join(' · ')
+  const label = mid
+    ? `${fmtSimTime(info.t0)} UTC · ${info.duraSec} s\n${mid}\n${info.lat} / ${info.lon}`
+    : `${fmtSimTime(info.t0)} UTC · ${info.duraSec} s\n${info.lat} / ${info.lon}`
   const ok = sceneRef.value?.focusEphemManIndex?.(idx, label)
   if (!ok) {
     // 兜底：MAN 高亮尚未就绪（如 IDB 旧数据）→ 现场重绘后再定位一次
@@ -249,6 +263,7 @@ function onViewportReady() {
   paintUserEphem(activeEphem.value ? { track: true } : undefined)
   viewportReady.value = true
   void runPendingEventDeepLink()
+  void runPendingNoradDeepLink()
 }
 
 /* ---------------- 交会危险事件云（E4） ---------------- */
@@ -432,6 +447,43 @@ async function runPendingEventDeepLink() {
   selEvent.value = hit
 }
 
+/* 深链 /situation?norad=20580：定位编目目标并画出其轨道（不自动播放时间轴，不拉开左侧面板） */
+let pendingNoradDeepLink: number | null = null
+
+watch(
+  () => route.query.norad,
+  (norad) => {
+    const raw = Array.isArray(norad) ? norad[0] : norad
+    const n = Number(raw)
+    if (!Number.isFinite(n) || n <= 0) return
+    pendingNoradDeepLink = Math.trunc(n)
+    void runPendingNoradDeepLink()
+  },
+  { immediate: true }
+)
+
+async function runPendingNoradDeepLink() {
+  const n = pendingNoradDeepLink
+  if (!n || !viewportReady.value) return
+  pendingNoradDeepLink = null
+  // Keep default 1× playback running (same as a normal situation visit).
+  // Maneuver locate / jump-to-t0 must not be changed — only this 打开仿真 deep-link plays.
+  simPlaying.value = true
+  try {
+    const { fetchTleByNorad, cloudList, loadConstellation } = useCatalog()
+    if (!cloudList.value.length) await loadConstellation()
+    const hit = await fetchTleByNorad(n)
+    if (!hit) {
+      ElMessage.warning(t('sit.locateMiss'))
+      return
+    }
+    await sceneRef.value?.selectCatalogItem(hit)
+  } catch (e) {
+    console.warn('[situation] norad locate failed', e)
+    ElMessage.warning(t('sit.locateMiss'))
+  }
+}
+
 /** 关联入库前去掉逐点协方差，避免 OCM 撑爆 IndexedDB；轨道绘制不需要 cov（保留集合级 hasCov 标记） */
 function stripStatesCov<T extends { states: { t: number; r: [number, number, number]; v: [number, number, number]; cov?: Float64Array }[]; hasCov?: boolean }>(set: T): T {
   const hadCov = set.states.some((s) => !!s.cov) || set.hasCov === true
@@ -445,22 +497,14 @@ function stripStatesCov<T extends { states: { t: number; r: [number, number, num
 /** 把 index 里的 MAN 历元挂到 EphemSet（parse 已带 maneuvers 时不覆盖） */
 function attachMansFromIndex(
   set: EphemSet,
-  epochs: { t: number; dvMps?: number; duraSec?: number; id?: string }[] | undefined
+  epochs: { t: number; dvMps?: number; duraSec?: number; id?: string; accX?: number; accY?: number; accZ?: number; refFrame?: string; basis?: string; dcType?: string; purpose?: string; deviceId?: string; extras?: Record<string, string> }[] | undefined
 ) {
   if (set.maneuvers?.length) return set
   if (!epochs?.length) return set
   const t0 = set.states[0]?.t ?? set.start
   const t1 = set.states[set.states.length - 1]?.t ?? set.stop
   const segs = epochs
-    .map((m) => {
-      const dura = m.duraSec && m.duraSec > 0 ? m.duraSec : 1
-      return {
-        t0: m.t,
-        t1: m.t + dura * 1000,
-        dvMps: m.dvMps,
-        id: m.id
-      }
-    })
+    .map((m) => epochToSegment(m))
     .filter((s) => s.t1 >= t0 && s.t0 <= t1)
   if (segs.length) set.maneuvers = segs
   return set

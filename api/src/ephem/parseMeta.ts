@@ -19,6 +19,15 @@ export interface EphemManeuverEpoch {
   dvMps: number
   duraSec: number
   id?: string
+  accX?: number
+  accY?: number
+  accZ?: number
+  refFrame?: string
+  basis?: string
+  dcType?: string
+  purpose?: string
+  deviceId?: string
+  extras?: Record<string, string>
 }
 
 export interface EphemMetaParsed {
@@ -156,7 +165,23 @@ export function parseOcmMeta(text: string, fileName: string): EphemMetaParsed {
   let section = 'none'
   let prevTrajT: number | null = null
   const maneuvers: EphemManeuverEpoch[] = []
-  let manAcc: { id: string | null; dura: number | null; acc: number[] | null; t: number | null } | null = null
+  type ManAcc = {
+    id: string | null
+    dura: number | null
+    acc: number[] | null
+    t: number | null
+    refFrame: string | null
+    basis: string | null
+    dcType: string | null
+    purpose: string | null
+    deviceId: string | null
+    extras: Record<string, string>
+  }
+  const emptyMan = (): ManAcc => ({
+    id: null, dura: null, acc: null, t: null,
+    refFrame: null, basis: null, dcType: null, purpose: null, deviceId: null, extras: {}
+  })
+  let manAcc: ManAcc | null = null
 
   for (const raw of lines) {
     const line = raw.trim()
@@ -178,18 +203,28 @@ export function parseOcmMeta(text: string, fileName: string): EphemMetaParsed {
     }
     if (upper.startsWith('MAN_START')) {
       section = 'man'
-      manAcc = { id: null, dura: null, acc: null, t: null }
+      manAcc = emptyMan()
       continue
     }
     if (upper.startsWith('MAN_STOP')) {
       if (manAcc && manAcc.t != null) {
         const ax = manAcc.acc ? Math.hypot(manAcc.acc[0], manAcc.acc[1], manAcc.acc[2]) : 0
         const dvMps = (manAcc.dura || 0) * ax * 1000 // km/s^2 * s → m/s
+        const extras = Object.keys(manAcc.extras).length ? { ...manAcc.extras } : undefined
         maneuvers.push({
           t: manAcc.t,
           dvMps: Number(dvMps.toFixed(6)),
           duraSec: manAcc.dura || 0,
-          id: manAcc.id ?? undefined
+          id: manAcc.id ?? undefined,
+          accX: manAcc.acc ? manAcc.acc[0] : undefined,
+          accY: manAcc.acc ? manAcc.acc[1] : undefined,
+          accZ: manAcc.acc ? manAcc.acc[2] : undefined,
+          refFrame: manAcc.refFrame ?? undefined,
+          basis: manAcc.basis ?? undefined,
+          dcType: manAcc.dcType ?? undefined,
+          purpose: manAcc.purpose ?? undefined,
+          deviceId: manAcc.deviceId ?? undefined,
+          extras
         })
       }
       manAcc = null
@@ -209,7 +244,30 @@ export function parseOcmMeta(text: string, fileName: string): EphemMetaParsed {
       else if (key === 'STOP_TIME') stop = parseIso(value)
       else if (key === 'STEP_SIZE') stepSec = Number(value) || stepSec
       else if (key === 'COV_REF_FRAME') covFrame = value
-      else if (key === 'MAN_ID' && manAcc) manAcc.id = value
+      else if (section === 'man' && manAcc) {
+        if (key === 'MAN_ID') manAcc.id = value
+        else if (key === 'MAN_BASIS') manAcc.basis = value
+        else if (key === 'DC_TYPE' || key === 'MAN_DC_TYPE') manAcc.dcType = value
+        else if (key === 'MAN_PURPOSE') manAcc.purpose = value
+        else if (key === 'MAN_DEVICE_ID') manAcc.deviceId = value
+        else if (key === 'MAN_REF_FRAME') manAcc.refFrame = value
+        else if (key === 'MAN_DURA' && NUM_RE.test(value)) manAcc.dura = Number(value)
+        else if ((key === 'TIME_ABSOLUTE' || key === 'MAN_EPOCH') && manAcc.t == null) {
+          const mt = parseIso(value)
+          if (mt != null) manAcc.t = mt
+        } else if ((key === 'ACC_X' || key === 'MAN_ACC_X') && NUM_RE.test(value)) {
+          if (!manAcc.acc) manAcc.acc = [0, 0, 0]
+          manAcc.acc[0] = Number(value)
+        } else if ((key === 'ACC_Y' || key === 'MAN_ACC_Y') && NUM_RE.test(value)) {
+          if (!manAcc.acc) manAcc.acc = [0, 0, 0]
+          manAcc.acc[1] = Number(value)
+        } else if ((key === 'ACC_Z' || key === 'MAN_ACC_Z') && NUM_RE.test(value)) {
+          if (!manAcc.acc) manAcc.acc = [0, 0, 0]
+          manAcc.acc[2] = Number(value)
+        } else {
+          manAcc.extras[key] = value
+        }
+      }
       continue
     }
 

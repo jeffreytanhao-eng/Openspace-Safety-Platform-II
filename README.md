@@ -11,16 +11,16 @@
 | 模块 | 路径 | 说明 |
 | --- | --- | --- |
 | 总览 | `/` | 组织级统计、高危/警告交会数、今日筛查与星历新鲜度、数据源健康面板、日报/关注事件包 CSV 导出 |
-| 目标 | `/objects` | 全库编目检索；业主认领 / 关注目标；绑定精密星历；目标侧栏 Pc–TCA 散点 |
+| 目标 | `/objects` | 全库编目检索；业主认领 / 关注目标；目标档案（四层叠加 + 照片 + 编辑）；绑定精密星历；目标侧栏 Pc–TCA 散点 |
 | 轨迹 | `/trajectories` | 目标轨道与轨迹查询 |
 | 交会 | `/conjunctions` | 即将交会总览（Pc–TCA 散点 + 事件列表），支持 CDM / TLE / Ephem / AOE 四种数据源、TCA 与 Pc 排序、范围筛选 |
 | 筛查 | `/screens`、`/screens/:id` | 发起主星 × 副星碰撞筛查任务，查看进度、事件与取消 |
-| 星历 | `/ephemerides` | ITC / OCM 星历上传、分页检索、版本归档、OCM × TLE/AOE 精度比对 |
+| 星历 | `/ephemerides` | ITC / OCM 星历上传、分页检索、版本归档、OCM × TLE/AOE 精度比对、机动（Δv / 方向 / 目的）明细 |
 | 我的文档 | `/docs` | 文档库：上传 / 正文预览 / 删除（需登录） |
 | 态势 | `/situation` | Cesium + Three 双引擎三维地球，卫星、轨道、碎片与交会云 |
 | 账号 | `/account` | 组织信息、档位与配额、成员管理、升级申请 |
 | 设置 | `/settings` | 认领/关注参数、Pc 算法、通知设置 |
-| 超管后台 | `/admin/*` | 组织与配额覆盖、认领审核、升级审批、审计日志、数据运维（日更 / StarLink 拉取） |
+| 超管后台 | `/admin/*` | 组织与配额覆盖、认领审核、升级审批、审计日志、数据运维（日更 / StarLink 拉取 / 公开目录导入） |
 | 登录 | `/login` | 邮箱或用户名 + 密码登录；未登录访问根路径跳转 `/login?redirect=/` |
 
 ---
@@ -137,6 +137,9 @@ Nginx ── 静态资源 ──▶ /opt/openspace/web/dist（Vue 打包产物�
 - 星历绑定：业主认领的目标可绑定 OCM / ITC 星历，供筛查（主星源 ephem）与精度比对使用。
 - 批量取消关注：`POST /cgi/objects/batch-unwatch`，仅释放本组织 `normal` 关注目标（单次上限 500，解绑星历与 CA 参数）；业主认领目标跳过，须在详情页单独释放。
 - 组织内别名：`PATCH /cgi/objects/:id/alias` 设置/清除，仅本组织可见（跨组织查询不返回该列值）；别名组织内唯一（冲突 409），为空时展示回退官方名称，`GET /cgi/objects/aliases` 返回本组织别名表。`003_object_aliases.sql` 供对照，启动时惰性补列。
+- 目标档案（目录档案）：按「目录基线 → 型号家族 → 单目标覆盖 → 本组织覆盖」四层叠加展示，对应 `sat_catalog_profile` / `catalog_family(_profile)` / `catalog_object_override` / `org_object_dossier`；只读展示，绝不写回 `objects.mass_kg` / `cross_section_m2`。
+  - 接口：`PATCH/DELETE /cgi/objects/:id/dossier`（本组织覆盖）、`GET/POST /cgi/objects/:id/dossier-photo`（照片 ≤8 MB，JPEG/PNG/WebP/GIF）。
+  - 写权限：平台超管，或 VIP + 本组织 owner 且已认领；`004_catalog_profile.sql` / `005_dossier_layers.sql` 为对照脚本，运行期惰性建表。
 
 ### 4.2 交会事件
 
@@ -171,6 +174,7 @@ Nginx ── 静态资源 ──▶ /opt/openspace/web/dist（Vue 打包产物�
   - 预报时效窗：完整重叠或 3/6/12/24 h（窗沿 ±45 min）；
   - RMS 跟随当前绘制的点；
   - 马氏距离仅在 TLE/AOE 一侧使用筛查龄期模型 σ 时给出。
+- 机动信息：解析 OCM 的 `MAN_*`（参考系、基质、加速度/时长、目的、器件等）写入元数据；星历表格展示 Δv、方向（加速/减速）与目的并可展开明细；态势中机动卡片与三维推力箭头（NTW/RTN 换算），点击机动会把仿真时刻跳到该段 `t0`。
 
 ### 4.5 数据同步
 
@@ -180,9 +184,11 @@ Nginx ── 静态资源 ──▶ /opt/openspace/web/dist（Vue 打包产物�
 | Space-Track CDM | 每日 06:00 UTC | 公报 CDM 入库 `sat_cdm` |
 | AOE（spacemapper） | 每日同批 | `AOE_TOKEN` 缺失则跳过该源，不报错 |
 | StarLink 公开星历 | UTC 00:00（配置开启时） | 读取 MANIFEST，按配置数量拉取 OCM/ITC；gzip Range 8 段并行下载后本地解压 |
+| 公开目录（GCAT） | 每周一 00:00（北京时） | 下载 6 个 TSV（约 30 MB）入库 `sat_catalog_profile`；启动 8 s 后补跑一次，不受配置开关控制 |
 
 - 调度器每 30 s 对表 UTC 时刻，同一天只触发一次；均支持超管在 `/admin/data-ops` 手动触发并查看进度。
 - StarLink 下载器直接使用 `node:https` 取原始 gzip 字节（fetch 会自动解压导致无法拼接），先 `Range: bytes=0-0` 探测总大小，再分段下载、校验 ETag / `x-goog-generation` 一致性，失败回退整包下载。
+- GCAT 也可手动导入：`npm run ingest:gcat -- --download`（或 `--dir <目录>` / `GCAT_DATA_DIR` 指向已下载的 TSV）；超管可在 `/admin/data-ops` 查看状态并手动触发（`GET /cgi/jobs/gcat/status`、`POST /cgi/jobs/gcat/ingest`，异步、409 互斥、写审计 `catalog.gcat.ingest`）。`data/gcat/*.tsv` 不入库。目录来源仅作内部数据基线，产品界面不展示其名称。
 
 ### 4.6 三维态势
 
@@ -190,6 +196,7 @@ Nginx ── 静态资源 ──▶ /opt/openspace/web/dist（Vue 打包产物�
 - 卫星模型按型号分组使用 InstancedMesh，按可见数量自动切换 low/med/high LOD；低配设备自动降到 low 档；未知类型使用十二面体占位模型。
 - 底图使用项目内离线 NaturalEarth 影像，启动不请求境外 ArcGIS，避免网络受限环境启动卡顿。
 - 从交会进入态势时只加载本次事件的星历轨道与交会云；离开态势时统一复位（停用临时星历轨道、关闭交会云、仿真钟回到当前时刻、速率复位），不会叠加历史会话内容。
+- 深链 `/situation?norad=<NORAD>`：直接注入并选中该编目目标（即使类型筛选已关闭也会绘制），目标档案页的「态势」按钮即走此入口。
 
 ### 4.7 通知与报告
 
@@ -294,6 +301,7 @@ systemctl status openspace-api --no-pager
 - 解压为叠加语义：仓库中删除或改名的文件不会自动从服务器消失，需手动清理旧路径。
 - 发布前先备份 `/opt/openspace` 的 `api` 与 `web/dist`，便于回退。
 - 数据库表多为惰性建表，新库首次访问对应接口时自动创建。
+- 公开目录照片目录（默认 `data/catalog-photos`）运行期自动创建，属主须与 `openspace` 运行用户一致；公开目录周更需服务器能访问 `planet4589.org`（每次约 30 MB）。
 - 不要 `chmod -R 777 /opt/openspace`、不要把监听改回 `0.0.0.0`、不要删除 systemd drop-in、不要开启 ufw（安全组挡 1234/3306 即可）。
 
 `deploy/` 下的 Docker Compose 为早期可选方案，生产未使用。
@@ -313,6 +321,9 @@ systemctl status openspace-api --no-pager
 | POST | `/cgi/auth/upgrade-request` | 提交 VIP 升级申请 |
 | GET | `/cgi/events` | 交会事件（`window`、`scope`、`eventSource`） |
 | GET/POST | `/cgi/objects` | 编目检索、认领 / 关注、批量取消关注、组织内别名 |
+| PATCH/DELETE | `/cgi/objects/:id/dossier` | 本组织目标档案覆盖（超管 / VIP 业主） |
+| GET/POST | `/cgi/objects/:id/dossier-photo` | 目标照片读取 / 上传（≤8 MB） |
+| GET/POST | `/cgi/jobs/gcat/status`、`/cgi/jobs/gcat/ingest` | 公开目录导入状态 / 手动触发（超管） |
 | GET/POST | `/cgi/screens` | 筛查任务列表 / 创建 |
 | GET | `/cgi/ephemerides` | 星历分页、文件与版本（需登录） |
 | POST | `/cgi/ephemerides/accuracy/compare` | 精度比对 |
@@ -337,6 +348,8 @@ systemctl status openspace-api --no-pager
 | `DAILY_FETCH_CRON` | `0 6 * * *` | 日更时刻（UTC） |
 | `DAILY_REPORT_CRON` | `30 6 * * *` | 组织日报生成时刻（UTC） |
 | `STATIC_BASE` | 空 | 静态资源前缀 |
+| `GCAT_DATA_DIR` | 空（`data/gcat`） | 公开目录 TSV 目录（`ingest:gcat` 读取/下载） |
+| `CATALOG_PHOTOS_DIR` | 空（`data/catalog-photos`） | 目标/家族照片落盘目录，运行期自动创建 |
 
 前端：`VITE_BASE`（部署子路径，默认 `/`）、`VITE_PROXY_TARGET`（开发代理目标）。
 

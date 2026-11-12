@@ -37,7 +37,16 @@ import { putSet, getSet } from '@/views/situation/ephem/store'
 import { interpolateAt } from '@/views/situation/ephem/interp'
 import { gmstRad } from '@/views/situation/ephem/time'
 import { twoBodyPropagate } from '@/views/situation/ephem/screening'
-import type { EphemSet, Vec3 } from '@/views/situation/ephem/types'
+import type { EphemManSegment, EphemSet, Vec3 } from '@/views/situation/ephem/types'
+import {
+  epochToSegment,
+  fmtDvWithSense,
+  manBasisLabel,
+  manDcTypeLabel,
+  manDirectionAxisPhrase,
+  manSpeedSense,
+  segmentToEpoch
+} from '@/views/situation/ephem/maneuverDisplay'
 
 const { t } = useI18n()
 const route = useRoute()
@@ -102,12 +111,7 @@ const importedRows = computed<EphListItem[]>(() =>
       covFrame: m.hasCov ? m.frame : undefined,
       maneuvers: m.maneuvers?.length || 0,
       maneuverSummary: m.maneuvers?.length ? t('eph.maneuverCount', { n: m.maneuvers.length }) : '',
-      maneuverEpochs: (m.maneuvers || []).map((s) => ({
-        t: s.t0,
-        dvMps: s.dvMps || 0,
-        duraSec: Math.max(0, Math.round((s.t1 - s.t0) / 1000)),
-        id: s.id
-      })),
+      maneuverEpochs: (m.maneuvers || []).map((s) => segmentToEpoch(s)),
       updatedAt: new Date(m.createdAt).toLocaleString(),
       originator: t('eph.localImport'),
       file: ''
@@ -481,21 +485,13 @@ function stripStatesCovForSituation<T extends { states: { t: number; r: Vec3; v:
 }
 
 /** 把 index 里的 MAN 历元挂到 EphemSet（parse 已带 maneuvers 时不覆盖） */
-function attachMansFromIndex(set: EphemSet, epochs: { t: number; dvMps?: number; duraSec?: number; id?: string }[] | undefined) {
+function attachMansFromIndex(set: EphemSet, epochs: { t: number; dvMps?: number; duraSec?: number; id?: string; accX?: number; accY?: number; accZ?: number; refFrame?: string; basis?: string; dcType?: string; purpose?: string; deviceId?: string; extras?: Record<string, string> }[] | undefined) {
   if (set.maneuvers?.length) return set
   if (!epochs?.length) return set
   const t0 = set.states[0]?.t ?? set.start
   const t1 = set.states[set.states.length - 1]?.t ?? set.stop
   const segs = epochs
-    .map((m) => {
-      const dura = m.duraSec && m.duraSec > 0 ? m.duraSec : 1
-      return {
-        t0: m.t,
-        t1: m.t + dura * 1000,
-        dvMps: m.dvMps,
-        id: m.id
-      }
-    })
+    .map((m) => epochToSegment(m))
     // 与星历窗口有交集即可（MAN 可能略早于 TRAJ_START，会被绘制层裁掉）
     .filter((s) => s.t1 >= t0 && s.t0 <= t1)
   if (segs.length) set.maneuvers = segs
@@ -655,13 +651,32 @@ async function openInSituation() {
 
 interface ManRow {
   t0: number
+  t1: number
   duraSec: number
   lat: string
   lon: string
+  dvMps?: number
+  acc?: [number, number, number]
+  refFrame?: string
+  basis?: string
+  dcType?: string
+  purpose?: string
+  id?: string
+  dirText: string
+  dvText: string
 }
 const manRows = ref<ManRow[]>([])
 const manLoading = ref(false)
 const manCache = new Map<string, ManRow[]>()
+const expandedMan = ref<number | null>(null)
+
+function toggleManExpand(i: number) {
+  expandedMan.value = expandedMan.value === i ? null : i
+}
+
+const tMan = (key: string, params?: Record<string, string | number>) => t(key as never, params)
+function basisText(basis?: string) { return manBasisLabel(basis, tMan) }
+function dcText(dc?: string) { return manDcTypeLabel(dc, tMan) }
 
 /** 纬度 → 「北纬 x.x° / 南纬 x.x°」 */
 function fmtLat(lat: number): string {
@@ -682,19 +697,43 @@ function eciToLatLon(r: Vec3, tMs: number): { lat: number; lon: number } {
 }
 
 /** 单次机动行：窗口内直接插值；窗口外（OCM 的 MAN 常早于首点）用最近端点二体推进近似 */
-function manRowOf(set: EphemSet, t0: number, duraSec: number): ManRow {
+function manRowOf(set: EphemSet, seg: Pick<EphemManSegment, 't0' | 't1' | 'dvMps' | 'acc' | 'refFrame' | 'basis' | 'dcType' | 'purpose' | 'id'> & { duraSec?: number }): ManRow {
+  const t0 = seg.t0
+  const duraSec = seg.duraSec != null ? seg.duraSec : Math.max(1, Math.round((seg.t1 - seg.t0) / 1000))
   let r: Vec3 | null = null
+  let v: Vec3 | null = null
   const st = interpolateAt(set.states, t0)
-  if (st) r = st.r
-  else if (set.states.length) {
+  if (st) {
+    r = st.r
+    v = st.v
+  } else if (set.states.length) {
     const s0 = set.states[0]
     const sN = set.states[set.states.length - 1]
     const base = t0 < s0.t ? s0 : sN
     const prop = twoBodyPropagate(base.r, base.v, (t0 - base.t) / 1000)
-    if (prop) r = prop.r
+    if (prop) {
+      r = prop.r
+      v = prop.v
+    }
   }
   const ll = r ? eciToLatLon(r, t0) : null
-  return { t0, duraSec, lat: ll ? fmtLat(ll.lat) : '—', lon: ll ? fmtLon(ll.lon) : '—' }
+  const sense = r && v && seg.acc ? manSpeedSense(r, v, seg.acc, seg.refFrame) : null
+  return {
+    t0,
+    t1: seg.t1 ?? (t0 + duraSec * 1000),
+    duraSec,
+    lat: ll ? fmtLat(ll.lat) : '—',
+    lon: ll ? fmtLon(ll.lon) : '—',
+    dvMps: seg.dvMps,
+    acc: seg.acc,
+    refFrame: seg.refFrame,
+    basis: seg.basis,
+    dcType: seg.dcType,
+    purpose: seg.purpose,
+    id: seg.id,
+    dirText: manDirectionAxisPhrase(seg, tMan),
+    dvText: fmtDvWithSense(seg.dvMps, sense, tMan)
+  }
 }
 
 /** 选中行变化 → 拉取星历并计算每次机动的经纬度（按 id 缓存） */
@@ -702,6 +741,7 @@ watch(
   selected,
   async (row) => {
     manRows.value = []
+    expandedMan.value = null
     if (!row || !row.maneuverEpochs?.length) return
     const hit = manCache.get(row.id)
     if (hit) {
@@ -724,10 +764,10 @@ watch(
       }
       if (set?.states.length) {
         // 与态势页同源：优先用解析结果里的 MAN 段；索引无解析值时回退 maneuverEpochs
-        const segs = set.maneuvers?.length
-          ? set.maneuvers.map((s) => ({ t: s.t0, duraSec: Math.max(1, Math.round((s.t1 - s.t0) / 1000)) }))
-          : row.maneuverEpochs.map((m) => ({ t: m.t, duraSec: Math.max(1, Math.round(m.duraSec || 0)) }))
-        const rows = segs.map((m) => manRowOf(set as EphemSet, m.t, m.duraSec))
+        const segs: EphemManSegment[] = set.maneuvers?.length
+          ? set.maneuvers
+          : row.maneuverEpochs.map((m) => epochToSegment(m))
+        const rows = segs.map((m) => manRowOf(set as EphemSet, m))
         manRows.value = rows
         manCache.set(row.id, rows)
       }
@@ -1131,16 +1171,43 @@ onMounted(() => {
             </div>
             <table v-if="manRows.length" class="man-table">
               <thead>
-                <tr><th>#</th><th>{{ t('eph.timeUtc') }}</th><th>Duration</th><th>{{ t('eph.lat') }}</th><th>{{ t('eph.lon') }}</th></tr>
+                <tr>
+                  <th>#</th>
+                  <th>{{ t('eph.timeUtc') }}</th>
+                  <th>{{ t('eph.duration') }}</th>
+                  <th>{{ t('eph.dv') }}</th>
+                  <th>{{ t('eph.direction') }}</th>
+                  <th>{{ t('eph.purpose') }}</th>
+                  <th :title="t('eph.latLonDerived')">{{ t('eph.lat') }}</th>
+                  <th :title="t('eph.latLonDerived')">{{ t('eph.lon') }}</th>
+                </tr>
               </thead>
               <tbody>
-                <tr v-for="(m, i) in manRows" :key="i">
-                  <td>{{ i + 1 }}</td>
-                  <td class="mono">{{ fmtUtc(m.t0, true) }}</td>
-                  <td>{{ m.duraSec }} s</td>
-                  <td>{{ m.lat }}</td>
-                  <td>{{ m.lon }}</td>
-                </tr>
+                <template v-for="(m, i) in manRows" :key="i">
+                  <tr
+                    class="man-primary"
+                    :class="{ open: expandedMan === i }"
+                    :aria-expanded="expandedMan === i"
+                    @click="toggleManExpand(i)"
+                  >
+                    <td>{{ i + 1 }}</td>
+                    <td class="mono">{{ fmtUtc(m.t0, true) }}</td>
+                    <td>{{ m.duraSec }} s</td>
+                    <td class="mono">{{ m.dvText }}</td>
+                    <td>{{ m.dirText }}</td>
+                    <td>{{ m.purpose || '—' }}</td>
+                    <td :title="t('eph.latLonDerived')">{{ m.lat }}</td>
+                    <td :title="t('eph.latLonDerived')">{{ m.lon }}</td>
+                  </tr>
+                  <tr v-if="expandedMan === i" class="man-detail">
+                    <td colspan="8">
+                      <span>{{ t('eph.endTime') }} {{ fmtUtc(m.t1, true) }}</span>
+                      <span>{{ t('eph.basis') }} {{ basisText(m.basis) }}</span>
+                      <span>{{ t('eph.dcType') }} {{ dcText(m.dcType) }}</span>
+                      <span>{{ t('eph.manId') }} {{ m.id || '—' }}</span>
+                    </td>
+                  </tr>
+                </template>
               </tbody>
             </table>
             <p v-else class="man-none">{{ manLoading ? t('eph.calculating') : t('eph.none') }}</p>
@@ -1401,6 +1468,14 @@ h1 { margin: 0; font-size: 16px; font-weight: 650; }
 .man-table td { padding: 4px 10px 4px 0; border-bottom: 1px dashed var(--border); color: var(--text); }
 .man-table tr:last-child td { border-bottom: none; }
 .man-table td.mono { font-family: var(--mono); font-size: 10px; }
+.man-table tr.man-primary { cursor: pointer; }
+.man-table tr.man-primary:hover td { background: rgba(255, 180, 84, 0.08); }
+.man-table tr.man-primary.open td { border-bottom-style: dotted; }
+.man-table tr.man-detail td {
+  padding: 2px 10px 8px 0; font-size: 10px; color: var(--text-dim);
+  border-bottom: 1px dashed var(--border);
+}
+.man-table tr.man-detail span { margin-right: 14px; white-space: nowrap; }
 .man-none { margin: 8px 0 0; font-size: 12px; color: var(--text-dim); }
 /* 版本历史（G1 归档账本：蓝青色调与机动块区分） */
 .ver-block {

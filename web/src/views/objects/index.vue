@@ -1,6 +1,15 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, ref, watch } from 'vue'
 import { useI18n } from '@/composables/useI18n'
+import {
+  catalogOrgLabel,
+  catalogSiteLabel,
+  catalogVehicleLabel,
+  catalogPayloadLabel,
+  catalogCountryCode,
+  catalogPurposeCodes,
+  catalogSizeFallback
+} from '@/i18n/catalogLabels'
 import { useAuthStore } from '@/stores/auth'
 import {
   listObjects,
@@ -15,10 +24,14 @@ import {
   unwatchObjects,
   bindEphem,
   unbindEphem,
+  updateObjectDossier,
+  resetObjectDossier,
+  uploadDossierPhoto,
   type ManagedObject,
   type ObjectDetail,
   type LookupResult,
-  type ClaimType
+  type ClaimType,
+  type CatalogProfile
 } from '@/api/objects'
 import { searchCatalogLite, type CatalogLiteRow } from '@/api/objects'
 import { listLocalEphemerides, type EphListItem } from '@/api/ephemerides'
@@ -45,7 +58,7 @@ import { getCaProfiles, type CaParams } from '@/api/ca'
 import PcTcaChart from '@/components/PcTcaChart.vue'
 import CompactPager from '@/components/CompactPager.vue'
 
-const { t } = useI18n()
+const { t, isZh } = useI18n()
 
 const q = ref('')
 const loading = ref(false)
@@ -699,6 +712,10 @@ const cdmStats = computed(() => {
 /** 含 MAN 段的星历（最多列 5 条） */
 const manEph = computed(() => noradEph.value.filter((e) => e.maneuvers > 0).slice(0, 5))
 
+const canOpenEphem = computed(() => noradEph.value.length > 0)
+const canOpenConj = computed(() => relEvents.value.length > 0)
+const canOpenSim = computed(() => Number(selected.value?.norad_id) > 0)
+
 const TYPE_KEY: Record<string, Parameters<typeof t>[0]> = {
   PAYLOAD: 'obj.tp.payload',
   DEBRIS: 'obj.tp.debris',
@@ -714,6 +731,232 @@ function typeLabel(tp?: string | null): string {
 /** 轨道高度显示保留 1 位小数，避免浮点长尾 */
 function fmtKm(v: number | null | undefined): string {
   return v == null ? '—' : v.toFixed(1)
+}
+
+function fmtPeriodMin(v: number | null | undefined): string {
+  if (v == null || !Number.isFinite(Number(v))) return '—'
+  const n = Number(v)
+  return n >= 100 ? n.toFixed(1) : n.toFixed(2)
+}
+
+function fmtDateOnly(v: string | null | undefined): string {
+  if (!v) return '—'
+  const m = /^(\d{4}-\d{2}-\d{2})/.exec(String(v))
+  return m ? m[1] : String(v)
+}
+
+type MsgKey = Parameters<typeof t>[0]
+
+function translateOr(key: string, fallback: string): string {
+  const translated = t(key as MsgKey)
+  return translated === key ? fallback : translated
+}
+
+function purposeLabel(p?: CatalogProfile | null): string | null {
+  const codes = catalogPurposeCodes(p?.purposeCodes, p?.purpose)
+  if (codes.length) {
+    const labels = codes.map((code) => translateOr(`obj.purp.${code}`, code))
+    return labels.join(' / ')
+  }
+  return p?.purpose?.trim() || null
+}
+
+function countryLabel(p?: CatalogProfile | null): string | null {
+  const code = catalogCountryCode(p?.countryCode, p?.country)
+  if (code) {
+    const translated = translateOr(`obj.cc.${code}`, '')
+    if (translated) return translated
+  }
+  return p?.country?.trim() || null
+}
+
+function sizeLabel(p?: CatalogProfile | null): string | null {
+  const len = p?.lengthM
+  const dia = p?.diameterM
+  const span = p?.spanM
+  const fmt = (n: number) => {
+    const r = Math.round(n * 10) / 10
+    return Number.isInteger(r) ? String(r) : r.toFixed(1)
+  }
+  const parts: string[] = []
+  if (len != null && dia != null) parts.push(`${fmt(len)} × ${fmt(dia)} m`)
+  else if (len != null) parts.push(`${fmt(len)} m`)
+  else if (dia != null) parts.push(`${fmt(dia)} m`)
+  const body = Math.max(len || 0, dia || 0)
+  if (span != null && span > body + 0.05) {
+    parts.push(t('obj.sizeSpan', { n: fmt(span) }))
+  }
+  if (parts.length) return parts.join(', ')
+  return catalogSizeFallback(p?.catalogSize, isZh.value)
+}
+
+const catalogProfile = computed<CatalogProfile>(() => {
+  const raw = selected.value?.catalogProfile
+  const zh = isZh.value
+  if (!raw) return {}
+  return {
+    ...raw,
+    owner: catalogOrgLabel(raw.ownerCode, raw.owner, zh),
+    manufacturer: catalogOrgLabel(raw.manufacturerCode, raw.manufacturer, zh),
+    launchSite: catalogSiteLabel(raw.launchSiteCode, raw.launchSite, zh),
+    launchVehicle: catalogVehicleLabel(raw.launchVehicle, zh),
+    payload: catalogPayloadLabel(raw.payload, zh),
+    country: countryLabel(raw),
+    purpose: purposeLabel(raw),
+    catalogSize: sizeLabel(raw),
+    photoUrl: raw.photoUrl ?? null
+  }
+})
+
+const canEditDossier = computed(() => !!selected.value?.dossierMeta?.canEdit)
+const canResetDossier = computed(() => !!selected.value?.dossierMeta?.canReset)
+const dossierEditing = ref(false)
+const dossierSaving = ref(false)
+const dossierDraft = ref({
+  owner: '',
+  country: '',
+  purpose: '',
+  payload: '',
+  manufacturer: '',
+  catalogSize: '',
+  launchSite: '',
+  launchVehicle: ''
+})
+const photoInput = ref<HTMLInputElement | null>(null)
+const photoSrc = ref<string | null>(null)
+let photoBlobUrl = ''
+
+function startDossierEdit() {
+  // Prefill raw catalog text, not localized labels, so a save does not persist translations.
+  const p = selected.value?.catalogProfile
+  dossierDraft.value = {
+    owner: p?.owner || '',
+    country: p?.country || '',
+    purpose: p?.purpose || '',
+    payload: p?.payload || '',
+    manufacturer: p?.manufacturer || '',
+    catalogSize: p?.catalogSize || '',
+    launchSite: p?.launchSite || '',
+    launchVehicle: p?.launchVehicle || ''
+  }
+  dossierEditing.value = true
+}
+
+function cancelDossierEdit() {
+  dossierEditing.value = false
+}
+
+async function applyDossierResult(d: ObjectDetail) {
+  selected.value = d
+  dossierEditing.value = false
+}
+
+async function saveDossier() {
+  if (!selected.value || dossierSaving.value) return
+  dossierSaving.value = true
+  try {
+    const draft = dossierDraft.value
+    await updateObjectDossier(selected.value.id, {
+      owner: draft.owner.trim() || null,
+      country: draft.country.trim() || null,
+      purpose: draft.purpose.trim() || null,
+      payload: draft.payload.trim() || null,
+      manufacturer: draft.manufacturer.trim() || null,
+      catalogSize: draft.catalogSize.trim() || null,
+      launchSite: draft.launchSite.trim() || null,
+      launchVehicle: draft.launchVehicle.trim() || null
+    })
+    const fresh = await getObject(selected.value.id)
+    await applyDossierResult(fresh)
+  } catch (e) {
+    detailError.value = e instanceof Error ? e.message : t('obj.dossierSaveFail')
+  } finally {
+    dossierSaving.value = false
+  }
+}
+
+async function resetDossier() {
+  if (!selected.value || dossierSaving.value) return
+  if (!window.confirm(t('obj.resetDossierConfirm'))) return
+  dossierSaving.value = true
+  try {
+    await resetObjectDossier(selected.value.id)
+    const fresh = await getObject(selected.value.id)
+    await applyDossierResult(fresh)
+  } catch (e) {
+    detailError.value = e instanceof Error ? e.message : t('obj.dossierSaveFail')
+  } finally {
+    dossierSaving.value = false
+  }
+}
+
+async function onDossierPhoto(ev: Event) {
+  const input = ev.target as HTMLInputElement
+  const file = input.files?.[0]
+  input.value = ''
+  if (!file || !selected.value) return
+  dossierSaving.value = true
+  try {
+    await uploadDossierPhoto(selected.value.id, file, false)
+    const fresh = await getObject(selected.value.id)
+    await applyDossierResult(fresh)
+  } catch (e) {
+    detailError.value = e instanceof Error ? e.message : t('obj.dossierSaveFail')
+  } finally {
+    dossierSaving.value = false
+  }
+}
+
+async function refreshPhotoSrc() {
+  if (photoBlobUrl) {
+    URL.revokeObjectURL(photoBlobUrl)
+    photoBlobUrl = ''
+  }
+  const url = catalogProfile.value.photoUrl
+  if (!url) {
+    photoSrc.value = null
+    return
+  }
+  try {
+    const headers: Record<string, string> = {}
+    try {
+      const token = localStorage.getItem('osp-token')
+      if (token) headers.Authorization = `Bearer ${token}`
+    } catch {
+      /* ignore */
+    }
+    const res = await fetch(url, { headers })
+    if (!res.ok) {
+      photoSrc.value = null
+      return
+    }
+    const blob = await res.blob()
+    photoBlobUrl = URL.createObjectURL(blob)
+    photoSrc.value = photoBlobUrl
+  } catch {
+    photoSrc.value = null
+  }
+}
+
+watch(
+  () => [selected.value?.id, catalogProfile.value.photoUrl] as const,
+  () => { void refreshPhotoSrc() }
+)
+
+
+function catVal(v?: string | number | null): string {
+  if (v == null) return t('obj.noData')
+  const s = String(v).trim()
+  return s ? s : t('obj.noData')
+}
+
+function isEmptyCat(v?: string | number | null): boolean {
+  return catVal(v) === t('obj.noData')
+}
+
+function orbitApsis(sat: { apogee?: number | null; perigee?: number | null } | null | undefined): string {
+  if (!sat || (sat.apogee == null && sat.perigee == null)) return t('obj.noData')
+  return `${fmtKm(sat.apogee)} × ${fmtKm(sat.perigee)}`
 }
 
 function resetArchiveAux() {
@@ -1253,7 +1496,7 @@ function lvLabel(v?: string | null): string {
 
     <!-- 档案抽屉 -->
     <aside v-if="selected" class="drawer" @click.self="closeDetail">
-      <div class="drawer-panel">
+      <div class="drawer-panel detail-panel">
         <header class="dh">
           <div>
             <div class="d-title">
@@ -1272,61 +1515,144 @@ function lvLabel(v?: string | null): string {
         <div v-if="detailError" class="hint err">{{ detailError }}</div>
         <div v-if="detailLoading" class="empty-pad">{{ t('obj.loading') }}</div>
         <template v-else>
-          <section class="block sec">
-            <div class="sec-h"><span class="bt">{{ t('obj.sec.identity') }}</span></div>
-            <div class="pv-grid">
-              <div class="alias-field">
-                <dt>{{ t('obj.alias.label') }}</dt>
-                <dd>
-                  <template v-if="editingAliasId === selected.id">
-                    <div class="name-editor" @click.stop>
-                      <input
-                        ref="aliasInput"
-                        v-model="aliasDraft"
-                        type="text"
-                        :maxlength="ALIAS_MAX_LEN"
-                        :placeholder="t('obj.alias.placeholder')"
-                        :disabled="aliasSaving"
-                        @keydown.enter.prevent="saveAlias(selected, false, $event)"
-                        @keydown.esc.prevent="cancelAlias($event)"
-                      />
-                      <div class="name-editor-actions">
-                        <button type="button" class="btn tight" :disabled="aliasSaving" @click="saveAlias(selected, false, $event)">{{ t('obj.alias.save') }}</button>
-                        <button v-if="selected.alias" type="button" class="btn tight" :disabled="aliasSaving" @click="saveAlias(selected, true, $event)">{{ t('obj.alias.clear') }}</button>
-                        <button type="button" class="btn tight" :disabled="aliasSaving" @click="cancelAlias($event)">{{ t('obj.alias.cancel') }}</button>
-                      </div>
-                      <div v-if="aliasError" class="alias-err">{{ aliasError }}</div>
-                    </div>
-                  </template>
-                  <template v-else>
-                    <span v-if="selected.alias">{{ selected.alias }}</span>
-                    <span v-else class="dim">{{ t('obj.alias.empty') }}</span>
-                    <button
-                      v-if="!isPlatform"
-                      type="button"
-                      class="link-btn"
-                      @click="startEditAlias(selected, $event)"
-                    >{{ t('obj.alias.edit') }}</button>
-                  </template>
-                  <p class="alias-hint">{{ t('obj.alias.hint') }}</p>
-                </dd>
+          <div class="detail-catalog">
+          <div class="col-h catalog-head">
+            <span>{{ t('obj.sec.catalog') }}</span>
+            <span v-if="canEditDossier || canResetDossier" class="catalog-actions">
+              <button v-if="canEditDossier && !dossierEditing" type="button" class="mini" @click="startDossierEdit">{{ t('obj.editDossier') }}</button>
+              <button v-if="canEditDossier && dossierEditing" type="button" class="mini primary" :disabled="dossierSaving" @click="saveDossier">{{ t('obj.saveDossier') }}</button>
+              <button v-if="canEditDossier && dossierEditing" type="button" class="mini" :disabled="dossierSaving" @click="cancelDossierEdit">{{ t('obj.cancelEdit') }}</button>
+              <button v-if="canResetDossier" type="button" class="mini" :disabled="dossierSaving" @click="resetDossier">{{ t('obj.resetDossier') }}</button>
+            </span>
+          </div>
+          <div v-if="canEditDossier && selected.dossierMeta?.isSuperAdmin && selected.dossierMeta?.familyName" class="hint tight">{{ t('obj.familyHint', { name: selected.dossierMeta.familyName }) }}</div>
+          <div v-else-if="canEditDossier && selected.dossierMeta?.isSuperAdmin" class="hint tight">{{ t('obj.familyHintNew') }}</div>
+
+          <section class="block sec catalog-band catalog-identity">
+            <div class="id-band">
+              <div class="photo-slot" data-field="photo">
+                <img v-if="photoSrc" :src="photoSrc" alt="" />
+                <div v-else class="photo-empty" :title="t('obj.photo')">
+                  <svg viewBox="0 0 48 36" aria-hidden="true">
+                    <rect x="1.5" y="4.5" width="45" height="27" rx="3" fill="none" stroke="currentColor" stroke-width="1.5"/>
+                    <circle cx="24" cy="18" r="7" fill="none" stroke="currentColor" stroke-width="1.5"/>
+                    <circle cx="24" cy="18" r="2.5" fill="currentColor"/>
+                    <rect x="33" y="8" width="6" height="3.5" rx="1" fill="currentColor"/>
+                  </svg>
+                  <span>{{ t('obj.photo') }}</span>
+                </div>
+                <div v-if="canEditDossier" class="photo-actions">
+                  <input ref="photoInput" type="file" accept="image/jpeg,image/png,image/webp,image/gif" class="sr-only" @change="onDossierPhoto" />
+                  <button type="button" class="link-btn" :disabled="dossierSaving" @click="photoInput?.click()">{{ t('obj.photoUpload') }}</button>
+                </div>
               </div>
-              <div><dt>{{ t('obj.alias.official') }}</dt><dd>{{ selected.name }}</dd></div>
-              <div><dt>{{ t('obj.col.norad') }}</dt><dd class="mono">{{ selected.norad_id }}</dd></div>
-              <div><dt>{{ t('obj.type') }}</dt><dd>{{ typeLabel(selected.sat?.object_type) }}</dd></div>
-              <div><dt>{{ t('obj.intlDesig') }}</dt><dd class="mono">{{ selected.sat?.intl_desig || t('obj.noData') }}</dd></div>
-              <template v-if="selected.sat">
-                <div><dt>{{ t('obj.regime') }}</dt><dd>{{ selected.sat.regime || '—' }}</dd></div>
-                <div><dt>{{ t('obj.incl') }}</dt><dd class="mono">{{ selected.sat.incl ?? '—' }}</dd></div>
-                <div><dt>{{ t('obj.apogee') }}</dt><dd class="mono">{{ fmtKm(selected.sat.apogee) }}</dd></div>
-                <div><dt>{{ t('obj.perigee') }}</dt><dd class="mono">{{ fmtKm(selected.sat.perigee) }}</dd></div>
-                <div><dt>{{ t('obj.epoch') }}</dt><dd class="mono">{{ selected.sat.epoch || '—' }}</dd></div>
-              </template>
+              <div class="pv-grid cat-grid id-grid">
+                <div class="alias-field">
+                  <dt>{{ t('obj.alias.label') }}</dt>
+                  <dd>
+                    <template v-if="editingAliasId === selected.id">
+                      <div class="name-editor" @click.stop>
+                        <input
+                          ref="aliasInput"
+                          v-model="aliasDraft"
+                          type="text"
+                          :maxlength="ALIAS_MAX_LEN"
+                          :placeholder="t('obj.alias.placeholder')"
+                          :disabled="aliasSaving"
+                          @keydown.enter.prevent="saveAlias(selected, false, $event)"
+                          @keydown.esc.prevent="cancelAlias($event)"
+                        />
+                        <div class="name-editor-actions">
+                          <button type="button" class="btn tight" :disabled="aliasSaving" @click="saveAlias(selected, false, $event)">{{ t('obj.alias.save') }}</button>
+                          <button v-if="selected.alias" type="button" class="btn tight" :disabled="aliasSaving" @click="saveAlias(selected, true, $event)">{{ t('obj.alias.clear') }}</button>
+                          <button type="button" class="btn tight" :disabled="aliasSaving" @click="cancelAlias($event)">{{ t('obj.alias.cancel') }}</button>
+                        </div>
+                        <div v-if="aliasError" class="alias-err">{{ aliasError }}</div>
+                      </div>
+                    </template>
+                    <template v-else>
+                      <span v-if="selected.alias">{{ selected.alias }}</span>
+                      <span v-else class="is-empty">{{ t('obj.alias.empty') }}</span>
+                      <button
+                        v-if="!isPlatform"
+                        type="button"
+                        class="link-btn"
+                        :title="t('obj.alias.hint')"
+                        @click="startEditAlias(selected, $event)"
+                      >{{ t('obj.alias.edit') }}</button>
+                    </template>
+                  </dd>
+                </div>
+                <div>
+                  <dt>{{ t('obj.alias.official') }}</dt>
+                  <dd>{{ selected.name }}</dd>
+                </div>
+                <div>
+                  <dt>{{ t('obj.col.norad') }}</dt>
+                  <dd class="mono">{{ selected.norad_id }}</dd>
+                </div>
+                <div>
+                  <dt>{{ t('obj.intlDesig') }}</dt>
+                  <dd class="mono" :class="{ 'is-empty': !selected.sat?.intl_desig }">{{ catVal(selected.sat?.intl_desig) }}</dd>
+                </div>
+                <div>
+                  <dt>{{ t('obj.type') }}</dt>
+                  <dd>{{ typeLabel(selected.sat?.object_type) }}</dd>
+                </div>
+              </div>
             </div>
-            <p v-if="!selected.sat" class="empty">{{ t('obj.noData') }}</p>
           </section>
 
-          <section class="block sec">
+          <section class="block sec catalog-band">
+            <div class="sec-h"><span class="bt">{{ t('obj.sec.opsMission') }}</span></div>
+            <div class="pv-grid cat-grid">
+              <div data-field="owner"><dt>{{ t('obj.operator') }}</dt><dd v-if="dossierEditing" class="dossier-edit"><input v-model="dossierDraft.owner" type="text" :disabled="dossierSaving" /></dd>
+              <dd v-else :class="{ 'is-empty': isEmptyCat(catalogProfile.owner) }">{{ catVal(catalogProfile.owner) }}</dd></div>
+              <div data-field="country"><dt>{{ t('obj.country') }}</dt><dd v-if="dossierEditing" class="dossier-edit"><input v-model="dossierDraft.country" type="text" :disabled="dossierSaving" /></dd>
+              <dd v-else :class="{ 'is-empty': isEmptyCat(catalogProfile.country) }">{{ catVal(catalogProfile.country) }}</dd></div>
+              <div data-field="purpose"><dt>{{ t('obj.purpose') }}</dt><dd v-if="dossierEditing" class="dossier-edit"><input v-model="dossierDraft.purpose" type="text" :disabled="dossierSaving" /></dd>
+              <dd v-else :class="{ 'is-empty': isEmptyCat(catalogProfile.purpose) }">{{ catVal(catalogProfile.purpose) }}</dd></div>
+              <div data-field="payload"><dt>{{ t('obj.payload') }}</dt><dd v-if="dossierEditing" class="dossier-edit"><input v-model="dossierDraft.payload" type="text" :disabled="dossierSaving" /></dd>
+              <dd v-else :class="{ 'is-empty': isEmptyCat(catalogProfile.payload) }">{{ catVal(catalogProfile.payload) }}</dd></div>
+              <div data-field="manufacturer"><dt>{{ t('obj.manufacturer') }}</dt><dd v-if="dossierEditing" class="dossier-edit"><input v-model="dossierDraft.manufacturer" type="text" :disabled="dossierSaving" /></dd>
+              <dd v-else :class="{ 'is-empty': isEmptyCat(catalogProfile.manufacturer) }">{{ catVal(catalogProfile.manufacturer) }}</dd></div>
+              <div data-field="size"><dt>{{ t('obj.size') }}</dt><dd v-if="dossierEditing" class="dossier-edit"><input v-model="dossierDraft.catalogSize" type="text" :disabled="dossierSaving" /></dd>
+              <dd v-else :class="{ 'is-empty': isEmptyCat(catalogProfile.catalogSize) }">{{ catVal(catalogProfile.catalogSize) }}</dd></div>
+            </div>
+          </section>
+
+          <section class="block sec catalog-band">
+            <div class="sec-h"><span class="bt">{{ t('obj.sec.launch') }}</span></div>
+            <div class="pv-grid cat-grid cat-grid-3">
+              <div data-field="launch-date">
+                <dt>{{ t('obj.launchDate') }}</dt>
+                <dd class="mono" :class="{ 'is-empty': !(selected.sat?.launch_date || catalogProfile.launchDate) }">{{ (selected.sat?.launch_date || catalogProfile.launchDate) ? fmtDateOnly(selected.sat?.launch_date || catalogProfile.launchDate || null) : t('obj.noData') }}</dd>
+              </div>
+              <div data-field="launch-site"><dt>{{ t('obj.launchSite') }}</dt><dd v-if="dossierEditing" class="dossier-edit"><input v-model="dossierDraft.launchSite" type="text" :disabled="dossierSaving" /></dd>
+              <dd v-else :class="{ 'is-empty': isEmptyCat(catalogProfile.launchSite) }">{{ catVal(catalogProfile.launchSite) }}</dd></div>
+              <div data-field="launch-vehicle"><dt>{{ t('obj.launchVehicle') }}</dt><dd v-if="dossierEditing" class="dossier-edit"><input v-model="dossierDraft.launchVehicle" type="text" :disabled="dossierSaving" /></dd>
+              <dd v-else :class="{ 'is-empty': isEmptyCat(catalogProfile.launchVehicle) }">{{ catVal(catalogProfile.launchVehicle) }}</dd></div>
+            </div>
+          </section>
+
+          <section class="block sec catalog-band">
+            <div class="sec-h"><span class="bt">{{ t('obj.sec.orbit') }}</span></div>
+            <div class="pv-grid cat-grid">
+              <div><dt>{{ t('obj.regime') }}</dt><dd :class="{ 'is-empty': !selected.sat?.regime }">{{ catVal(selected.sat?.regime) }}</dd></div>
+              <div><dt>{{ t('obj.epoch') }}</dt><dd class="mono" :class="{ 'is-empty': !selected.sat?.epoch }">{{ catVal(selected.sat?.epoch) }}</dd></div>
+              <div><dt>{{ t('obj.incl') }}</dt><dd class="mono" :class="{ 'is-empty': selected.sat?.incl == null }">{{ selected.sat?.incl == null ? t('obj.noData') : selected.sat.incl }}</dd></div>
+              <div><dt>{{ t('obj.apsis') }}</dt><dd class="mono" :class="{ 'is-empty': !selected.sat || (selected.sat.apogee == null && selected.sat.perigee == null) }">{{ orbitApsis(selected.sat) }}</dd></div>
+              <div><dt>{{ t('obj.period') }}</dt><dd class="mono" :class="{ 'is-empty': selected.sat?.period == null }">{{ selected.sat?.period == null ? t('obj.noData') : fmtPeriodMin(selected.sat.period) }}</dd></div>
+              <div><dt>{{ t('obj.decayDate') }}</dt><dd class="mono" :class="{ 'is-empty': !selected.sat?.decay_date }">{{ selected.sat?.decay_date ? fmtDateOnly(selected.sat.decay_date) : t('obj.noData') }}</dd></div>
+            </div>
+          </section>
+
+          </div>
+
+          <div class="col-h ops-h">{{ t('obj.sec.ops') }}</div>
+          <div class="detail-ops">
+            <div class="ops-forms">
+          <section class="block sec ops-card">
             <div class="sec-h">
               <span class="bt">{{ t('obj.sec.orgArchive') }}</span>
               <span class="pill" :class="selected.claim_status === 'pending' ? 'missing' : isOwnerClaim ? 'fresh' : 'missing'">
@@ -1342,7 +1668,7 @@ function lvLabel(v?: string | null): string {
             <div v-if="selected.claim_status === 'pending'" class="hint warn">{{ t('obj.claimPendingHint') }}</div>
             <div v-if="!isOwnerClaim" class="hint warn">{{ t('obj.ownerOnly') }}</div>
             <div v-else-if="ownerFrozen" class="hint warn">{{ t('obj.ownerFrozen') }}</div>
-            <div class="form">
+            <div class="form form-archive">
               <label><span>{{ t('obj.col.name') }}</span><input v-model="editForm.name" type="text" maxlength="100" :disabled="!ownerEditable" /></label>
               <label><span>{{ t('obj.mass') }}</span><OspNumberInput v-model="editForm.massKg" min="0" step="any" :disabled="!ownerEditable" /></label>
               <label><span>{{ t('obj.crossSection') }}</span><OspNumberInput v-model="editForm.crossSectionM2" min="0" step="any" :disabled="!ownerEditable" /></label>
@@ -1360,7 +1686,7 @@ function lvLabel(v?: string | null): string {
           </section>
 
           <!-- 第 3 项：业主自定义参数（仅对认领业主生效，不影响关注/搜到本目标的其它用户） -->
-          <section v-if="isOwnerClaim" class="block sec">
+          <section v-if="isOwnerClaim" class="block sec ops-card">
             <div class="sec-h">
               <span class="bt">{{ t('obj.caTitle') }}</span>
               <span class="pill" :class="caHasCustom ? 'fresh' : 'missing'">
@@ -1368,8 +1694,8 @@ function lvLabel(v?: string | null): string {
               </span>
             </div>
             <p class="type-hint">{{ t('obj.caNote') }}</p>
-            <div class="form">
-              <label>
+            <div class="form form-2col">
+              <label class="span2">
                 <span>{{ t('ca.f.hbrMode') }}</span>
                 <span class="radio-row">
                   <label class="radio"><input v-model="caForm.hbrMode" type="radio" value="single" :disabled="!ownerEditable" /> {{ t('ca.single') }}</label>
@@ -1402,7 +1728,7 @@ function lvLabel(v?: string | null): string {
                   <OspNumberInput v-model="caForm.stepS" min="1" max="3600" step="1" :disabled="!ownerEditable" /> s
                 </span>
               </label>
-              <label>
+              <label class="span2">
                 <span>{{ t('ca.f.methods') }}</span>
                 <span class="radio-row">
                   <label class="radio"><input v-model="caForm.foster" type="checkbox" :disabled="!ownerEditable" /> Foster</label>
@@ -1420,7 +1746,9 @@ function lvLabel(v?: string | null): string {
             </div>
           </section>
 
-          <section class="block sec">
+            </div>
+            <div class="ops-summaries">
+          <section class="block sec ops-card">
             <div class="sec-h">
               <span class="bt">{{ t('obj.sec.recentConj') }}</span>
               <span v-if="relWorst" class="lv" :class="`lv-${relWorst}`">{{ lvLabel(relWorst) }}</span>
@@ -1447,7 +1775,7 @@ function lvLabel(v?: string | null): string {
             <RouterLink v-if="relEvents.length" class="more" to="/conjunctions">{{ t('obj.viewAllConj') }}</RouterLink>
           </section>
 
-          <section class="block sec">
+          <section class="block sec ops-card">
             <div class="sec-h">
               <span class="bt">{{ t('obj.sec.ephemManeuver') }}</span>
               <span class="meta">{{ t('obj.ephCount') }} {{ noradEph.length }}</span>
@@ -1491,7 +1819,7 @@ function lvLabel(v?: string | null): string {
             </div>
           </section>
 
-          <section class="block sec">
+          <section class="block sec ops-card">
             <div class="sec-h"><span class="bt">{{ t('obj.sec.cdm') }}</span></div>
             <p v-if="cdmLoading" class="empty">{{ t('obj.loading') }}</p>
             <div v-else-if="cdmStats.count" class="pv-grid">
@@ -1502,7 +1830,7 @@ function lvLabel(v?: string | null): string {
             <p v-else class="empty">{{ t('obj.cdmNone') }}</p>
           </section>
 
-          <section class="block sec">
+          <section class="block sec ops-card">
             <div class="bt-row sec-h">
               <div class="bt">{{ t('obj.sec.maneuver') }}</div>
               <button v-if="!isPlatform" type="button" class="mini" @click="mvFormOpen ? (mvFormOpen = false) : openMvForm()">
@@ -1617,9 +1945,16 @@ function lvLabel(v?: string | null): string {
             <p v-else class="empty">{{ t('mv.empty') }}</p>
           </section>
 
+            </div>
+          </div>
+
           <div class="block actions">
-            <RouterLink class="btn" :to="`/ephemerides?q=${selected.norad_id}`">{{ t('obj.openEphem') }}</RouterLink>
-            <RouterLink class="btn" to="/conjunctions">{{ t('obj.relatedConj') }}</RouterLink>
+            <button v-if="!canOpenEphem" type="button" class="btn" disabled>{{ t('obj.openEphem') }}</button>
+            <RouterLink v-else class="btn" :to="`/ephemerides?q=${selected.norad_id}`">{{ t('obj.openEphem') }}</RouterLink>
+            <button v-if="!canOpenConj" type="button" class="btn" disabled>{{ t('obj.relatedConj') }}</button>
+            <RouterLink v-else class="btn" to="/conjunctions">{{ t('obj.relatedConj') }}</RouterLink>
+            <button v-if="!canOpenSim" type="button" class="btn" disabled>{{ t('obj.openSim') }}</button>
+            <RouterLink v-else class="btn" :to="`/situation?norad=${selected.norad_id}`">{{ t('obj.openSim') }}</RouterLink>
             <button
               v-if="!isPlatform && isOwnerClaim"
               type="button"
@@ -1770,6 +2105,126 @@ th.chk-col input, td.chk-col input { cursor: pointer; }
   width: min(440px, 100%); height: 100%; background: var(--bg-panel);
   border-left: 1px solid var(--border); padding: 14px; overflow: auto;
 }
+.drawer-panel.detail-panel {
+  width: min(880px, 100%);
+  container-type: inline-size;
+  container-name: obj-detail;
+}
+.detail-catalog { margin-bottom: 4px; }
+.col-h {
+  font-size: 11px;
+  font-weight: 650;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+  margin: 0 0 6px;
+}
+.ops-h { margin-top: 10px; }
+.catalog-band { margin-bottom: 8px; padding-top: 8px; }
+.catalog-band:first-of-type,
+.catalog-identity { margin-bottom: 8px; padding-top: 0; border-top: none; }
+.catalog-band .sec-h { margin-bottom: 6px; }
+.cat-grid {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  margin-bottom: 0;
+}
+.cat-grid > div {
+  min-height: 48px;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  box-sizing: border-box;
+}
+.cat-grid dd.is-empty,
+.cat-grid .is-empty { font-weight: 500; color: var(--text-dim); }
+.id-band {
+  display: grid;
+  grid-template-columns: 132px minmax(0, 1fr);
+  gap: 8px;
+  align-items: stretch;
+}
+.photo-slot {
+  width: 132px;
+  aspect-ratio: 4 / 3;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg-panel-2);
+  overflow: hidden;
+  display: flex;
+  align-items: stretch;
+  justify-content: stretch;
+}
+.photo-slot img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.photo-empty {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  color: var(--text-dim);
+  font-size: 10px;
+  letter-spacing: 0.04em;
+}
+.photo-empty svg { width: 36px; height: 27px; opacity: 0.7; }
+.id-grid { margin-bottom: 0; }
+.id-grid .alias-field { grid-column: span 2; }
+.detail-ops { display: flex; flex-direction: column; gap: 10px; }
+.ops-forms,
+.ops-summaries {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px 20px;
+  align-items: start;
+}
+.ops-forms:has(> :only-child) { grid-template-columns: 1fr; }
+.ops-card {
+  margin-bottom: 0;
+  align-self: start;
+  min-height: 0;
+}
+.ops-card .empty { margin: 0; }
+.ops-summaries .pv-grid { margin-bottom: 0; }
+.form-2col {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px 12px;
+}
+.form-2col label.span2,
+.pv-grid .span2 { grid-column: 1 / -1; }
+.detail-panel .actions {
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border);
+}
+@container obj-detail (max-width: 680px) {
+  .id-band { grid-template-columns: 1fr; }
+  .photo-slot { width: 132px; }
+  .cat-grid,
+  .id-grid { grid-template-columns: 1fr 1fr; }
+  .id-grid .alias-field { grid-column: 1 / -1; }
+  .ops-forms,
+  .ops-summaries { grid-template-columns: 1fr; }
+  .form.form-archive { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+@media (max-width: 700px) {
+  .id-band { grid-template-columns: 1fr; }
+  .photo-slot { width: 132px; }
+  .cat-grid,
+  .id-grid { grid-template-columns: 1fr 1fr; }
+  .id-grid .alias-field { grid-column: 1 / -1; }
+  .ops-forms,
+  .ops-summaries { grid-template-columns: 1fr; }
+  .form.form-archive { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+@media (max-width: 420px) {
+  .form.form-archive,
+  .form.form-2col { grid-template-columns: 1fr; }
+}
+@container obj-detail (max-width: 420px) {
+  .form.form-archive,
+  .form.form-2col { grid-template-columns: 1fr; }
+}
 /* 认领/关注弹窗：列表区撑满至窗口底部，分页条固定在末尾 */
 .claim-panel { display: flex; flex-direction: column; overflow: hidden; }
 .claim-panel .disc-block { flex: 1; min-height: 0; display: flex; flex-direction: column; margin-bottom: 0; }
@@ -1836,6 +2291,28 @@ th.chk-col input, td.chk-col input { cursor: pointer; }
 .pv-grid dt { margin: 0; font-size: 10px; color: var(--text-dim); }
 .pv-grid dd { margin: 3px 0 0; font-size: 12px; font-weight: 600; }
 .form { display: flex; flex-direction: column; gap: 8px; margin-bottom: 12px; }
+.form.form-archive {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px 12px;
+}
+.form.form-2col {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px 12px;
+}
+.form.form-archive label,
+.form.form-2col label { min-width: 0; }
+.form.form-archive input,
+.form.form-archive select,
+.form.form-archive :deep(.osp-num),
+.form.form-2col input,
+.form.form-2col select,
+.form.form-2col :deep(.osp-num) {
+  width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
+}
 .form label { display: flex; flex-direction: column; gap: 3px; }
 .form label span { font-size: 11px; color: var(--text-dim); }
 .claim-type { display: flex; flex-direction: column; gap: 6px; margin-bottom: 10px; }
@@ -1949,4 +2426,11 @@ li {
 .btn.primary { background: rgba(74, 125, 154, 0.35); border-color: rgba(74, 125, 154, 0.7); }
 .btn.wide { width: 100%; }
 .btn.danger { border-color: rgba(214, 84, 124, 0.5); color: var(--danger, #d38); }
+
+.catalog-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.catalog-actions { display: flex; flex-wrap: wrap; gap: 6px; font-weight: 400; }
+.hint.tight { margin: 0 0 8px; font-size: 12px; }
+.photo-actions { margin-top: 4px; text-align: center; }
+.dossier-edit input { width: 100%; min-width: 0; box-sizing: border-box; }
+.sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0,0,0,0); border: 0; }
 </style>
