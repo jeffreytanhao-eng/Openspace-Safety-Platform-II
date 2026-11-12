@@ -189,6 +189,7 @@ Nginx ── 静态资源 ──▶ /opt/openspace/web/dist（Vue 打包产物�
 - 调度器每 30 s 对表 UTC 时刻，同一天只触发一次；均支持超管在 `/admin/data-ops` 手动触发并查看进度。
 - StarLink 下载器直接使用 `node:https` 取原始 gzip 字节（fetch 会自动解压导致无法拼接），先 `Range: bytes=0-0` 探测总大小，再分段下载、校验 ETag / `x-goog-generation` 一致性，失败回退整包下载。
 - GCAT 也可手动导入：`npm run ingest:gcat -- --download`（或 `--dir <目录>` / `GCAT_DATA_DIR` 指向已下载的 TSV）；超管可在 `/admin/data-ops` 查看状态并手动触发（`GET /cgi/jobs/gcat/status`、`POST /cgi/jobs/gcat/ingest`，异步、409 互斥、写审计 `catalog.gcat.ingest`）。`data/gcat/*.tsv` 不入库。目录来源仅作内部数据基线，产品界面不展示其名称。
+- 下载策略：先 `HEAD` 取远端长度、再用 `Range` 读首行 `# Updated …` 与本地比对，未变化直接跳过（每次约 600 字节）；有变化才按 `Range` 断点续传（写到 `*.part`，单连接 90 s 无数据自动重试，最多 4 次），完成后校验 `Content-Length` 再原子改名。
 
 ### 4.6 三维态势
 

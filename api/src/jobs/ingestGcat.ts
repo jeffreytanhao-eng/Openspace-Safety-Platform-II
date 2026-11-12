@@ -68,28 +68,154 @@ function parseArgs(argv: string[]): { download: boolean; dir?: string } {
   return out
 }
 
-async function downloadFile(url: string, dest: string): Promise<void> {
-  const res = await fetch(url)
-  if (!res.ok) throw new Error(`下载失败 ${res.status} ${url}`)
-  const buf = Buffer.from(await res.arrayBuffer())
-  fs.writeFileSync(dest, buf)
-  console.log(`[gcat] downloaded ${path.basename(dest)} (${(buf.length / 1024 / 1024).toFixed(1)} MiB)`)
+/** 单次连接连续无数据超过该时长即中断重试（不限总时长，兼容慢链路） */
+const IDLE_TIMEOUT_MS = 90_000
+const MAX_ATTEMPTS = 4
+
+interface RemoteMeta {
+  length: number | null
+  lastModified: string | null
+  etag: string | null
+}
+
+/** HEAD 取远端长度与校验标记；源站不支持 HEAD 时返回空值，退回直接下载 */
+async function headFile(url: string): Promise<RemoteMeta> {
+  try {
+    const res = await fetch(url, { method: 'HEAD', signal: AbortSignal.timeout(30_000) })
+    if (!res.ok) return { length: null, lastModified: null, etag: null }
+    const raw = Number(res.headers.get('content-length'))
+    return {
+      length: Number.isFinite(raw) && raw > 0 ? raw : null,
+      lastModified: res.headers.get('last-modified'),
+      etag: res.headers.get('etag')
+    }
+  } catch {
+    return { length: null, lastModified: null, etag: null }
+  }
+}
+
+/** 只取前 500 字节读首行 `# Updated …`，用于判断远端是否有更新 */
+async function probeUpdated(url: string): Promise<string | null> {
+  try {
+    const res = await fetch(url, {
+      headers: { Range: 'bytes=0-500' },
+      signal: AbortSignal.timeout(30_000)
+    })
+    if (!res.ok) return null
+    const m = (await res.text()).match(/^#\s*Updated\s+(.+)$/im)
+    return m ? m[1].trim() : null
+  } catch {
+    return null
+  }
+}
+
+/** 读取本地文件首行的 `# Updated …` */
+function localUpdated(file: string): string | null {
+  try {
+    const fd = fs.openSync(file, 'r')
+    const buf = Buffer.alloc(500)
+    const n = fs.readSync(fd, buf, 0, buf.length, 0)
+    fs.closeSync(fd)
+    const m = buf.subarray(0, n).toString('utf8').match(/^#\s*Updated\s+(.+)$/im)
+    return m ? m[1].trim() : null
+  } catch {
+    return null
+  }
+}
+
+/** 从 `${dest}.part` 现有字节续传；连接空闲超时或异常时按剩余字节重试 */
+async function writeRange(url: string, part: string, start: number, meta: RemoteMeta): Promise<void> {
+  const headers: Record<string, string> = {}
+  if (start > 0) {
+    headers.Range = `bytes=${start}-`
+    const validator = meta.etag || meta.lastModified
+    if (validator) headers['If-Range'] = validator
+  }
+  const controller = new AbortController()
+  let idleTimer: NodeJS.Timeout | null = null
+  const touch = () => {
+    if (idleTimer) clearTimeout(idleTimer)
+    idleTimer = setTimeout(() => controller.abort(), IDLE_TIMEOUT_MS)
+  }
+  touch()
+  try {
+    const res = await fetch(url, { headers, signal: controller.signal })
+    if (!res.ok) throw new Error(`HTTP ${res.status}`)
+    const reader = res.body?.getReader()
+    if (!reader) throw new Error('响应体为空')
+    // 服务端忽略 Range 时会回 200，此时必须从头覆盖而不是追加
+    const append = start > 0 && res.status === 206
+    const fd = fs.openSync(part, append ? 'a' : 'w')
+    try {
+      for (;;) {
+        const { done, value } = await reader.read()
+        if (done) break
+        if (value?.length) {
+          fs.writeSync(fd, value)
+          touch()
+        }
+      }
+    } finally {
+      fs.closeSync(fd)
+    }
+  } finally {
+    if (idleTimer) clearTimeout(idleTimer)
+  }
+}
+
+async function downloadFile(url: string, dest: string, meta: RemoteMeta): Promise<number> {
+  const part = `${dest}.part`
+  const name = path.basename(dest)
+  for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+    let have = fs.existsSync(part) ? fs.statSync(part).size : 0
+    if (meta.length != null && have > meta.length) {
+      fs.rmSync(part, { force: true })
+      have = 0
+    }
+    if (meta.length != null && have === meta.length) break
+    try {
+      await writeRange(url, part, have, meta)
+      const size = fs.existsSync(part) ? fs.statSync(part).size : 0
+      if (meta.length != null && size !== meta.length) throw new Error(`长度不符 ${size}/${meta.length}`)
+      break
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e)
+      if (attempt === MAX_ATTEMPTS) throw new Error(`下载失败 ${name}: ${msg}`)
+      console.warn(`[gcat] ${name} 第 ${attempt} 次下载中断，续传重试：${msg}`)
+      await new Promise((r) => setTimeout(r, 1500 * attempt))
+    }
+  }
+  const size = fs.existsSync(part) ? fs.statSync(part).size : 0
+  if (meta.length != null && size !== meta.length) throw new Error(`下载不完整 ${name} ${size}/${meta.length}`)
+  fs.renameSync(part, dest)
+  return size
 }
 
 async function ensureFiles(dir: string, download: boolean): Promise<void> {
   fs.mkdirSync(dir, { recursive: true })
-  const missing: Array<keyof typeof GCAT_FILES> = []
-  for (const key of Object.keys(GCAT_FILES) as Array<keyof typeof GCAT_FILES>) {
-    const p = path.join(dir, GCAT_FILES[key])
-    if (!fs.existsSync(p)) missing.push(key)
+  const keys = Object.keys(GCAT_FILES) as Array<keyof typeof GCAT_FILES>
+  const pending = download ? keys : keys.filter((k) => !fs.existsSync(path.join(dir, GCAT_FILES[k])))
+  if (!pending.length) return
+  console.log(`[gcat] checking ${pending.length} file(s) at planet4589.org …`)
+  let changed = 0
+  for (const key of pending) {
+    const file = GCAT_FILES[key]
+    const dest = path.join(dir, file)
+    const remote = await headFile(GCAT_URLS[key])
+    if (download && fs.existsSync(dest)) {
+      const size = fs.statSync(dest).size
+      const remoteUpd = await probeUpdated(GCAT_URLS[key])
+      const same = !!remoteUpd && remoteUpd === localUpdated(dest) && (remote.length == null || size === remote.length)
+      if (same) {
+        console.log(`[gcat] ${file} 无更新（${remoteUpd}），跳过下载`)
+        continue
+      }
+    }
+    const bytes = await downloadFile(GCAT_URLS[key], dest, remote)
+    changed++
+    console.log(`[gcat] downloaded ${file} (${(bytes / 1024 / 1024).toFixed(1)} MiB)`)
   }
-  if (!missing.length && !download) return
-  const toFetch = download ? (Object.keys(GCAT_FILES) as Array<keyof typeof GCAT_FILES>) : missing
-  if (!toFetch.length) return
-  console.log(`[gcat] fetching ${toFetch.length} file(s) from planet4589.org …`)
-  for (const key of toFetch) {
-    await downloadFile(GCAT_URLS[key], path.join(dir, GCAT_FILES[key]))
-  }
+  if (!changed) console.log('[gcat] 远端文件均无更新，跳过下载')
 }
 
 function readTsv(dir: string, file: string) {
