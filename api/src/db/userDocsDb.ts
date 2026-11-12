@@ -23,7 +23,7 @@ export const DOCS_QUOTA_PERSONAL = 50
 export const DOCS_QUOTA_VIP_ORG = 500
 
 export type DocScope = 'personal' | 'org' | 'pinned'
-export type DocSourceType = 'report' | 'ephemeris' | 'upload' | 'pinned'
+export type DocSourceType = 'report' | 'event-package' | 'ephemeris' | 'upload' | 'pinned'
 
 export interface DocsViewer {
   userId: number

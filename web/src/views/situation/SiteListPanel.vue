@@ -1,10 +1,12 @@
 <script setup lang="ts">
 /** 左侧「发射站列表」面板外壳：数据接入前显示空状态 */
 import { ref } from 'vue'
+import { useI18n } from '@/composables/useI18n'
 
 defineProps<{ open: boolean }>()
 const emit = defineEmits<{ (e: 'close'): void }>()
 
+const { t } = useI18n()
 const keyword = ref('')
 </script>
 
@@ -13,17 +15,17 @@ const keyword = ref('')
     <aside v-if="open" class="side-panel">
       <div class="sp-head">
         <div class="sp-head-main">
-          <b class="sp-title">发射站列表</b>
-          <span class="sp-count">0 个发射站</span>
+          <b class="sp-title">{{ t('sitp.siteTitle') }}</b>
+          <span class="sp-count">{{ t('sitp.siteCount') }}</span>
         </div>
-        <button class="sp-close" title="收起（点左缘浮标可再次展开）" @click="emit('close')">»</button>
+        <button class="sp-close" :title="t('sitp.collapse')" @click="emit('close')">»</button>
       </div>
       <div class="sp-search">
-        <input v-model="keyword" class="sp-input" type="text" placeholder="检索发射站名称" spellcheck="false" />
+        <input v-model="keyword" class="sp-input" type="text" :placeholder="t('sitp.siteSearchPh')" spellcheck="false" />
         <span v-if="keyword" class="sp-clear" @click="keyword = ''">×</span>
       </div>
       <div class="sp-list">
-        <div class="sp-empty">暂无发射站数据<br />发射站接口接入后将在此展示</div>
+        <div class="sp-empty">{{ t('sitp.siteEmpty') }}<br />{{ t('sitp.siteHint') }}</div>
       </div>
     </aside>
   </transition>

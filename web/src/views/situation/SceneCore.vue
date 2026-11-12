@@ -10,6 +10,7 @@
  */
 import { onBeforeUnmount, onMounted, ref } from 'vue'
 import * as THREE from 'three'
+import { useI18n } from '@/composables/useI18n'
 import { buildStarfield } from './starfield'
 import {
   configureEarthBase,
@@ -72,6 +73,7 @@ import {
 } from './eventCloudThree'
 
 const emit = defineEmits<{ (e: 'viewport-ready'): void; (e: 'event-pick', key: string | null): void }>()
+const { t } = useI18n()
 import type { EphemSet, EphemState } from './ephem/types'
 import { resolveCatalogNorad } from './ephem/useUserEphemeris'
 import { useCatalog, type CatalogTle } from '@/composables/useCatalog'
@@ -517,7 +519,7 @@ async function applyCesiumBase(el: HTMLElement): Promise<boolean> {
     onMoveEnd: () => { interacting = false }
   }).catch(() => false)
   if (!ok || disposed || !threeScene || !renderer) {
-    error.value = '三维地球底座初始化失败，请检查网络与 WebGL 环境'
+    error.value = t('sitp.glInitFail')
     loading.value = false
     return false
   }
@@ -575,10 +577,11 @@ async function paintFromSnapshot(types: string[]) {
   }
 }
 
-/** 空间站 NORAD → 卡片中文名（准星标签与列表卡片一致） */
-const STATION_NAMES: Record<number, string> = {
-  48274: '天宫空间站',
-  25544: '国际空间站'
+/** 空间站 NORAD → 卡片名（准星标签与列表卡片一致） */
+function stationName(norad: number): string | undefined {
+  if (norad === 48274) return t('sitp.stCssName')
+  if (norad === 25544) return t('sitp.stIssName')
+  return undefined
 }
 
 /** 空间站「位置展示」：独立通道，不影响类型芯片 / 星座展示。再点同一站收起。 */
@@ -601,7 +604,7 @@ async function showStation(norad: number) {
   if (hit) {
     ensureCloudSelected(hit, simMs)
     // 拉近 + 跟踪 + 呼吸光环 + 名称（与星历选中一致，t201u）；标签与卡片名一致
-    startCatalogTrack(hit, STATION_NAMES[norad])
+    startCatalogTrack(hit, stationName(norad))
   } else {
     refreshCloudVisibility(simMs)
   }
@@ -667,7 +670,7 @@ function selectCatalogItem(item: CatalogTle | null) {
   ensureCloudSelected(item, simMs)
   // 拉近 + 跟踪 + 呼吸光环 + 名称（与星历选中一致，t201u）
   // 空间站沿用卡片中文名（pickStation 会同时 emit select，避免标签被 TLE 英文名回写）
-  startCatalogTrack(item, STATION_NAMES[item.norad_id])
+  startCatalogTrack(item, stationName(item.norad_id))
 }
 
 function filterCatalogTypes(types: string[]) {
@@ -1086,7 +1089,7 @@ defineExpose({
     <div v-if="loading" class="scene-mask">
       <div class="loading-box">
         <span class="spin"></span>
-        <span class="loading-txt">正在启动三维地球…</span>
+        <span class="loading-txt">{{ t('sitp.loading3d') }}</span>
       </div>
     </div>
     <div v-else-if="error" class="scene-mask">

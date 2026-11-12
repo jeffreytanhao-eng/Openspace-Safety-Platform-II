@@ -1,4 +1,4 @@
-﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿/**
+﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿/**
  * 目标路由（Epic D1）：组织认领 NORAD 目标并维护档案。
  * 全部 requireAuth；认领挂 checkQuota('objects_max')（免费档 3 个，超限 403 + 升级提示）。
  */
@@ -22,9 +22,13 @@ import {
   resubmitObjectClaim,
   upgradeNormalToOwner,
   updateObject,
+  updateObjectAlias,
   deleteObject,
   countBoundEphem,
   checkClaimScope,
+  normalizeAlias,
+  findAliasConflict,
+  listOrgAliases,
   type ClaimType,
   type ObjectRow
 } from '../db/objectsDb.js'
@@ -38,6 +42,7 @@ import {
   mergeCaParams
 } from '../db/caDb.js'
 import { sanitizeCaPatch } from './ca.js'
+import { writeUserAudit } from '../db/adminDb.js'
 import { ensurePersonalWorkspace, isVipUser } from '../db/orgDb.js'
 
 const router = Router()
@@ -73,6 +78,17 @@ function requireOrg(req: ScopedRequest, res: Response, next: NextFunction): void
   }
   next()
 }
+
+
+function objectAuditLabel(row: { id?: number; name?: string; norad_id?: number; alias?: string | null }): string {
+  const name = String(row.alias || row.name || '').trim()
+  const bits: string[] = []
+  if (name) bits.push(name)
+  if (row.norad_id) bits.push(`NORAD ${row.norad_id}`)
+  if (row.id) bits.push(`id=${row.id}`)
+  return bits.join('，') || '目标'
+}
+
 
 /** 平台账号（超管/运维）：业务页走全平台只读视图 */
 function isPlatformAccount(req: ScopedRequest): boolean {
@@ -212,7 +228,8 @@ router.get('/objects/lookup/:noradId', async (req, res) => {
             id: mine.id,
             claimType: mine.claim_type,
             claimStatus: mine.claim_status,
-            reviewNote: mine.review_note
+            reviewNote: mine.review_note,
+            alias: mine.alias ?? null
           }
         : null,
       owner_scope: scope ? { configured: scope.configured, allowed: scope.allowed, matched: scope.matched } : null
@@ -318,6 +335,17 @@ router.post('/objects', async (req: ScopedRequest, res) => {
       return
     }
     const row = await getObjectById(mine.id)
+    await writeUserAudit(req.auth, 'object.claim.submit', {
+      after: {
+        summary: `关注升级为业主认领申请：${objectAuditLabel(row ?? mine)}，待审核`,
+        id: row?.id ?? mine.id,
+        norad,
+        name: row?.name ?? mine.name,
+        claimType: 'owner',
+        from: 'watch',
+        status: 'pending'
+      }
+    })
     res.json(
       ok({
         ...row,
@@ -350,6 +378,17 @@ router.post('/objects', async (req: ScopedRequest, res) => {
       }
       const row = await getObjectById(mine.id)
       if (claimType === 'owner') {
+        await writeUserAudit(req.auth, 'object.claim.submit', {
+          after: {
+            summary: `重新提交业主认领申请：${objectAuditLabel(row ?? mine)}，待审核`,
+            id: row?.id ?? mine.id,
+            norad,
+            name: row?.name ?? mine.name,
+            claimType: 'owner',
+            resubmit: true,
+            status: 'pending'
+          }
+        })
         res.json(
           ok({
             ...row,
@@ -360,6 +399,16 @@ router.post('/objects', async (req: ScopedRequest, res) => {
         )
         return
       }
+      await writeUserAudit(req.auth, 'object.watch', {
+        after: {
+          summary: `关注目标 ${objectAuditLabel(row ?? mine)}`,
+          id: row?.id ?? mine.id,
+          norad,
+          name: row?.name ?? mine.name,
+          claimType: 'normal',
+          resubmit: true
+        }
+      })
       res.json(ok({ ...row, sat: tle }))
       return
     }
@@ -376,6 +425,16 @@ router.post('/objects', async (req: ScopedRequest, res) => {
       propulsion: typeof body.propulsion === 'string' ? body.propulsion.slice(0, 60) : ''
     })
     if (claimType === 'owner') {
+      await writeUserAudit(req.auth, 'object.claim.submit', {
+        after: {
+          summary: `提交业主认领申请：${objectAuditLabel(row)}，待审核`,
+          id: row.id,
+          norad,
+          name: row.name,
+          claimType: 'owner',
+          status: 'pending'
+        }
+      })
       res.json(
         ok({
           ...row,
@@ -386,6 +445,15 @@ router.post('/objects', async (req: ScopedRequest, res) => {
       )
       return
     }
+    await writeUserAudit(req.auth, 'object.watch', {
+      after: {
+        summary: `关注目标 ${objectAuditLabel(row)}`,
+        id: row.id,
+        norad,
+        name: row.name,
+        claimType: 'normal'
+      }
+    })
     res.json(ok({ ...row, sat: tle }))
   } catch (e) {
     if ((e as { code?: string }).code === 'ER_DUP_ENTRY') {
@@ -524,6 +592,17 @@ router.post('/objects/batch-claim', async (req: ScopedRequest, res) => {
       skipped.push({ norad, reason: 'error' })
     }
   }
+  if (created.length) {
+    await writeUserAudit(req.auth, 'object.watch.batch', {
+      after: {
+        summary: `批量关注 ${created.length} 个目标` + (skipped.length ? `，跳过 ${skipped.length} 个` : ''),
+        count: created.length,
+        created: created.slice(0, 50),
+        skippedCount: skipped.length,
+        skipped: skipped.slice(0, 20)
+      }
+    })
+  }
   res.json(
     ok({
       created,
@@ -536,6 +615,76 @@ router.post('/objects/batch-claim', async (req: ScopedRequest, res) => {
       }
     })
   )
+})
+
+/** 批量取消关注：仅本组织 claim_type=normal；业主认领必须走详情单独释放，此处跳过。 */
+router.post('/objects/batch-unwatch', requireOrg, async (req: ScopedRequest, res) => {
+  const orgId = Number(req.auth!.user.orgId)
+  const rawIds = (req.body as { ids?: unknown })?.ids
+  const ids = [
+    ...new Set(
+      (Array.isArray(rawIds) ? rawIds : [])
+        .map((x) => Number(x))
+        .filter((n) => Number.isInteger(n) && n > 0)
+    )
+  ].slice(0, 500)
+  if (!ids.length) {
+    res.status(400).json(fail(400, '请选择要取消关注的目标'))
+    return
+  }
+  const [rows] = await pool.query<Array<RowDataPacket & { id: number; org_id: number; claim_type: string; name: string; norad_id: number }>>(
+    `SELECT id, org_id, claim_type, name, norad_id FROM objects WHERE id IN (?)`,
+    [ids]
+  )
+  const byId = new Map(rows.map((r) => [Number(r.id), r]))
+  const released: number[] = []
+  const skipped: Array<{ id: number; reason: string }> = []
+  for (const id of ids) {
+    const row = byId.get(id)
+    if (!row || Number(row.org_id) !== orgId) {
+      skipped.push({ id, reason: 'not_found' })
+      continue
+    }
+    if (String(row.claim_type) !== 'normal') {
+      skipped.push({ id, reason: 'owner' })
+      continue
+    }
+    try {
+      await pool.query('UPDATE ephemeris SET bound_object_id = NULL WHERE bound_object_id = ?', [id])
+      await deleteObjectCaParams(id)
+      await deleteObject(id)
+      released.push(id)
+    } catch {
+      skipped.push({ id, reason: 'error' })
+    }
+  }
+  if (released.length) {
+    const releasedRows = released.map((id) => {
+      const r = byId.get(id)
+      return { id, norad: r?.norad_id, name: r?.name }
+    })
+    await writeUserAudit(req.auth, 'object.unwatch.batch', {
+      after: {
+        summary: `批量取消关注 ${released.length} 个目标` + (skipped.length ? `，跳过 ${skipped.length} 个` : ''),
+        count: released.length,
+        ids: released,
+        objects: releasedRows.slice(0, 50),
+        skippedCount: skipped.length,
+        skipped: skipped.slice(0, 20)
+      }
+    })
+  }
+  res.json(ok({ released, skipped }))
+})
+
+/** 本组织认领/关注目标的别名表（仅当前组织；无组织或平台跨组织视图返回空） */
+router.get('/objects/aliases', async (req: ScopedRequest, res) => {
+  if (!req.auth?.org || !req.auth.user.orgId) {
+    res.json(ok([]))
+    return
+  }
+  const items = await listOrgAliases(Number(req.auth.user.orgId))
+  res.json(ok(items))
 })
 
 /** 目标详情：档案 + 最新轨道要素 + 绑定星历（平台账号只读任意组织目标） */
@@ -560,7 +709,8 @@ router.get('/objects/:id', async (req: ScopedRequest, res) => {
   // 目标级自定义参数（仅业主维护；随详情返回给本组织界面展示）
   const caParams = await getObjectCaParams(id)
   const orgName = platform ? await getObjectOrgName(row.org_id) : ''
-  res.json(ok({ ...row, sat, ephemerides: ephems, ca_params: caParams, org_name: orgName }))
+  const includeAlias = !platform || Number(req.auth?.user.orgId || 0) === row.org_id
+  res.json(ok({ ...row, alias: includeAlias ? (row.alias ?? null) : null, sat, ephemerides: ephems, ca_params: caParams, org_name: orgName }))
 })
 
 /** 档案编辑 */
@@ -583,6 +733,7 @@ router.patch('/objects/:id', requireOrg, async (req: ScopedRequest, res) => {
     const n = Number(v)
     return Number.isFinite(n) ? n : null
   }
+  const existingCa = await getObjectCaParams(id)
   await updateObject(id, {
     name: typeof b.name === 'string' && b.name.trim() ? b.name.trim().slice(0, 100) : undefined,
     massKg: numOrNull(b.massKg),
@@ -593,6 +744,8 @@ router.patch('/objects/:id', requireOrg, async (req: ScopedRequest, res) => {
   })
   // 目标级自定义参数：仅授权认领业主可保存，且只对该业主生效（按 object_id 存储，不影响其它用户）
   const rawParams = b.params
+  let caChanged = false
+  let savedCa = existingCa
   if (rawParams && typeof rawParams === 'object') {
     const { patch: caPatch, error } = sanitizeCaPatch(rawParams as Record<string, unknown>)
     if (error) {
@@ -600,11 +753,86 @@ router.patch('/objects/:id', requireOrg, async (req: ScopedRequest, res) => {
       return
     }
     const defaults = await getCaDefaults(row.org_id)
-    const existing = await getObjectCaParams(id)
-    const params = mergeCaParams(existing ?? caDefaultsToParams(defaults), caPatch)
+    const params = mergeCaParams(existingCa ?? caDefaultsToParams(defaults), caPatch)
     await saveObjectCaParams(id, row.org_id, params, req.auth!.user.email)
+    savedCa = params
+    caChanged = true
   }
-  res.json(ok({ ...(await getObjectById(id)), ca_params: await getObjectCaParams(id) }))
+  const updated = await getObjectById(id)
+  const caNow = savedCa ?? (await getObjectCaParams(id))
+  const action = caChanged ? 'object.ca_params.set' : 'object.update'
+  await writeUserAudit(req.auth, action, {
+    before: {
+      name: row.name,
+      massKg: row.mass_kg,
+      crossSectionM2: row.cross_section_m2,
+      propulsion: row.propulsion,
+      acceptedPc: row.accepted_pc,
+      acceptedMissKm: row.accepted_miss_km,
+      params: existingCa
+    },
+    after: {
+      summary: caChanged
+        ? `更新目标定制参数 ${objectAuditLabel(updated ?? row)}`
+        : `更新目标档案 ${objectAuditLabel(updated ?? row)}`,
+      id,
+      norad: row.norad_id,
+      name: updated?.name ?? row.name,
+      massKg: updated?.mass_kg,
+      crossSectionM2: updated?.cross_section_m2,
+      propulsion: updated?.propulsion,
+      acceptedPc: updated?.accepted_pc,
+      acceptedMissKm: updated?.accepted_miss_km,
+      params: caNow
+    }
+  })
+  res.json(ok({ ...(updated ?? row), ca_params: caNow }))
+})
+
+/** 设置/清除本组织别名：仅认领或关注中的本组织目标；官方名称不变 */
+router.patch('/objects/:id/alias', async (req: ScopedRequest, res) => {
+  if (!(await ensureBusinessOrg(req, res))) return
+  const id = Number(req.params.id)
+  const row = Number.isInteger(id) ? await getObjectById(id) : null
+  if (
+    !row ||
+    row.org_id !== Number(req.auth!.user.orgId) ||
+    (row.claim_status !== 'claimed' && row.claim_status !== 'pending')
+  ) {
+    res.status(404).json(fail(404, '目标不存在'))
+    return
+  }
+  const parsed = normalizeAlias((req.body as { alias?: unknown }).alias)
+  if (!parsed.ok) {
+    res.status(400).json(fail(400, parsed.error))
+    return
+  }
+  if (parsed.value) {
+    const conflict = await findAliasConflict(row.org_id, parsed.value, row.id)
+    if (conflict) {
+      res.status(409).json(fail(409, `别名「${parsed.value}」已被本组织目标 NORAD ${conflict.norad_id} 使用`))
+      return
+    }
+  }
+  try {
+    const updated = await updateObjectAlias(id, parsed.value)
+    const cleared = !parsed.value
+    await writeUserAudit(req.auth, cleared ? 'object.alias.clear' : 'object.alias.set', {
+      before: { alias: row.alias ?? null },
+      after: {
+        summary: cleared
+          ? `清除组织别名 ${objectAuditLabel(row)}`
+          : `设置组织别名 ${objectAuditLabel(row)} → ${parsed.value}`,
+        id,
+        norad: row.norad_id,
+        name: row.name,
+        alias: parsed.value
+      }
+    })
+    res.json(ok({ ...(updated ?? row), alias: parsed.value }))
+  } catch (e) {
+    res.status(500).json(fail(500, (e as Error).message || '保存别名失败'))
+  }
 })
 
 /** 释放认领 */
@@ -619,9 +847,18 @@ router.delete('/objects/:id', requireOrg, async (req: ScopedRequest, res) => {
     res.status(403).json(fail(403, '无权释放其他组织的目标'))
     return
   }
+  const releaseAction = row.claim_type === 'owner' ? 'object.claim.release' : 'object.unwatch'
+  const releaseSummary =
+    row.claim_type === 'owner'
+      ? `释放认领 ${objectAuditLabel(row)}`
+      : `取消关注 ${objectAuditLabel(row)}`
   await pool.query('UPDATE ephemeris SET bound_object_id = NULL WHERE bound_object_id = ?', [id])
   await deleteObjectCaParams(id)
   await deleteObject(id)
+  await writeUserAudit(req.auth, releaseAction, {
+    before: { id: row.id, norad: row.norad_id, name: row.name, claimType: row.claim_type, status: row.claim_status },
+    after: { summary: releaseSummary, released: id, norad: row.norad_id, name: row.name, claimType: row.claim_type }
+  })
   res.json(ok({ released: id }))
 })
 
@@ -656,6 +893,16 @@ router.post('/objects/:id/bind-ephem', requireOrg, async (req: ScopedRequest, re
     return
   }
   await pool.query('UPDATE ephemeris SET bound_object_id = ? WHERE id = ?', [id, ephemId])
+  await writeUserAudit(req.auth, 'object.ephem.bind', {
+    after: {
+      summary: `绑定星历 ${ephemId} 到 ${objectAuditLabel(row)}`,
+      objectId: id,
+      norad: row.norad_id,
+      name: row.name,
+      ephemId,
+      ephemName: eph[0].name ?? null
+    }
+  })
   res.json(ok({ bound: ephemId, to: id }))
 })
 
@@ -674,6 +921,15 @@ router.post('/objects/:id/unbind-ephem', requireOrg, async (req: ScopedRequest, 
     return
   }
   await pool.query('UPDATE ephemeris SET bound_object_id = NULL WHERE id = ? AND bound_object_id = ?', [ephemId, id])
+  await writeUserAudit(req.auth, 'object.ephem.unbind', {
+    after: {
+      summary: `解绑星历 ${ephemId}（${objectAuditLabel(row)}）`,
+      objectId: id,
+      norad: row.norad_id,
+      name: row.name,
+      ephemId
+    }
+  })
   res.json(ok({ unbound: ephemId }))
 })
 

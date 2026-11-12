@@ -22,6 +22,7 @@ import {
   type CovMode,
   type Propagator
 } from '../db/caDb.js'
+import { writeUserAudit } from '../db/adminDb.js'
 
 const router = Router()
 
@@ -141,8 +142,18 @@ router.put('/ca/defaults', (req: ScopedRequest, res) => {
       return
     }
 
+    const before = await getCaDefaults(auth.org.id)
     const defaults = await upsertCaDefaults(auth.org.id, patch, auth.user.email)
     console.log(`[ca] defaults saved org=${auth.org.id} by=${auth.user.email} fields=${Object.keys(patch).join(',') || 'none'}`)
+    const fields = Object.keys(patch).join(', ') || 'none'
+    await writeUserAudit(auth, 'ca.defaults.update', {
+      before,
+      after: {
+        summary: `更新组织默认 CA 参数（${fields}）`,
+        patch,
+        defaults
+      }
+    })
     res.json(ok({ defaults }))
   })().catch((e) => res.status(500).json(fail(500, (e as Error).message)))
 })
@@ -187,9 +198,20 @@ router.put('/ca/profiles/:slot', (req: ScopedRequest, res) => {
       return
     }
     const orgDefaults = auth.org ? await getCaDefaults(auth.org.id) : null
+    const existing = (await listUserCaParams(auth.user.id)).find((s) => s.slot === slot)?.params ?? null
     const params = mergeCaParams(caDefaultsToParams(orgDefaults), patch)
     await saveUserCaParams(auth.user.id, slot, params)
     console.log(`[ca] user params saved user=${auth.user.id} slot=${slot} fields=${Object.keys(patch).join(',') || 'none'}`)
+    const fields = Object.keys(patch).join(', ') || 'none'
+    await writeUserAudit(auth, 'ca.profile.set', {
+      before: existing,
+      after: {
+        summary: `保存个人定制参数组 ${slot}（${fields}）`,
+        slot,
+        patch,
+        params
+      }
+    })
     res.json(ok({ slot, params }))
   })().catch((e) => res.status(500).json(fail(500, (e as Error).message)))
 })
@@ -206,7 +228,12 @@ router.delete('/ca/profiles/:slot', (req: ScopedRequest, res) => {
       res.status(400).json(fail(400, 'slot 仅支持 1 / 2'))
       return
     }
+    const existing = (await listUserCaParams(req.auth.user.id)).find((s) => s.slot === slot)?.params ?? null
     await deleteUserCaParams(req.auth.user.id, slot)
+    await writeUserAudit(req.auth, 'ca.profile.clear', {
+      before: existing,
+      after: { summary: `清除个人定制参数组 ${slot}，改回默认`, slot, deleted: true }
+    })
     res.json(ok({ slot, deleted: true }))
   })().catch((e) => res.status(500).json(fail(500, (e as Error).message)))
 })

@@ -67,6 +67,14 @@ export function saveEphemerisDocument(payload: { path: string; name?: string }):
   return cgiCall<UserDocument>({ method: 'POST', url: '/documents/from-ephemeris', data: payload, headers: headers() })
 }
 
+export function saveEventPackageDocument(payload: {
+  format: 'md' | 'html' | 'csv'
+  content: string
+  titleBase: string
+}): Promise<UserDocument> {
+  return cgiCall<UserDocument>({ method: 'POST', url: '/documents/from-event-package', data: payload, headers: headers() })
+}
+
 export function unpinDocument(id: string): Promise<UserDocument> {
   return cgiCall<UserDocument>({ method: 'POST', url: `/documents/${encodeURIComponent(id)}/unpin`, headers: headers() })
 }

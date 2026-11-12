@@ -3,9 +3,10 @@ import { computed, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useI18n } from '@/composables/useI18n'
 import { AuthError } from '@/api/auth'
+import type { MessageKey } from '@/i18n/messages'
 import { useAuthStore } from '@/stores/auth'
 
-const { t } = useI18n()
+const { t, locale, setLocale } = useI18n()
 const router = useRouter()
 const route = useRoute()
 const auth = useAuthStore()
@@ -19,6 +20,28 @@ const email = ref('')
 const password = ref('')
 const displayName = ref('')
 const showPassword = ref(false)
+
+/** 后端认证错误文案 → 英文界面用本地化文案（中文界面原样展示后端文案） */
+const AUTH_ERR_KEYS: Record<string, MessageKey> = {
+  '邮箱格式不正确': 'auth.errEmail',
+  '密码至少 8 位': 'auth.errPwdShort',
+  '该邮箱已被注册': 'auth.errEmailTaken',
+  '注册失败': 'auth.errRegister',
+  '请输入账号和密码': 'auth.errEmpty',
+  '账号或密码错误': 'auth.errBadCred',
+  '账号已停用，请联系平台管理员': 'auth.errUserDisabled',
+  '组织已被暂停，请联系平台管理员': 'auth.errOrgSuspended',
+  '组织已关闭，请联系平台管理员': 'auth.errOrgClosed',
+  '登录失败': 'auth.errLogin',
+  '数据库不可用': 'auth.errDb'
+}
+
+function authErrorMessage(e: unknown): string {
+  const raw = e instanceof AuthError ? e.message : String((e as Error).message || e)
+  if (locale.value !== 'en') return raw
+  const key = AUTH_ERR_KEYS[raw.trim()]
+  return key ? t(key) : raw
+}
 
 const redirectTarget = computed(() => {
   const r = route.query.redirect
@@ -53,7 +76,7 @@ async function submit() {
       router.push('/')
     }
   } catch (e) {
-    error.value = e instanceof AuthError ? e.message : String((e as Error).message || e)
+    error.value = authErrorMessage(e)
   } finally {
     busy.value = false
   }
@@ -62,6 +85,21 @@ async function submit() {
 
 <template>
   <div class="login">
+    <!-- 语言切换：登录前即可切中英文，不需要先登录 -->
+    <div class="lang" role="group" :aria-label="t('langToggle')">
+      <button
+        type="button"
+        class="lang-btn"
+        :class="{ on: locale === 'zh' }"
+        @click="setLocale('zh')"
+      >{{ t('langZh') }}</button>
+      <button
+        type="button"
+        class="lang-btn"
+        :class="{ on: locale === 'en' }"
+        @click="setLocale('en')"
+      >{{ t('langEn') }}</button>
+    </div>
     <div class="brand">{{ t('auth.platformName') }}</div>
     <div class="card">
       <div class="badge">{{ t('auth.badge') }}</div>
@@ -193,6 +231,41 @@ async function submit() {
   inset: 0;
   background: rgba(0, 0, 0, 0.7);
   pointer-events: none;
+}
+/* 语言切换：固定右上角，登录前可用 */
+.lang {
+  position: absolute;
+  top: 16px;
+  right: 16px;
+  z-index: 2;
+  display: inline-flex;
+  border: 1px solid rgba(255, 255, 255, 0.28);
+  border-radius: 4px;
+  overflow: hidden;
+  background: rgba(0, 0, 0, 0.35);
+}
+.lang-btn {
+  appearance: none;
+  border: 0;
+  background: transparent;
+  color: rgba(255, 255, 255, 0.72);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  padding: 4px 10px;
+  cursor: pointer;
+  line-height: 1.2;
+}
+.lang-btn + .lang-btn {
+  border-left: 1px solid rgba(255, 255, 255, 0.28);
+}
+.lang-btn:hover {
+  color: #fff;
+  background: rgba(255, 255, 255, 0.1);
+}
+.lang-btn.on {
+  color: #fff;
+  background: rgba(255, 255, 255, 0.2);
 }
 .brand {
   position: relative;

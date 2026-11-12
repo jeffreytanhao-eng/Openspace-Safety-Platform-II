@@ -19,6 +19,7 @@ import type { RowDataPacket } from 'mysql2/promise'
 import { pool } from '../db/pool.js'
 import { ok, fail } from '../utils/response.js'
 import { requireAuth, type AuthContext } from './auth.js'
+import { writeUserAudit } from '../db/adminDb.js'
 import { quotaExceeded } from '../middleware/plan.js'
 import { parseCdmText } from '../services/cdmParse.js'
 import { resolvePoolPolicy, poolBadge } from '../services/systemPool.js'
@@ -447,6 +448,15 @@ router.post('/events/import', requireAuth, async (req: ScopedRequest, res) => {
 
   const by = req.auth?.user.email ?? ''
   console.log(`[events] CDM import by ${by}: +${inserted} ~${updated} skip=${skipped}`)
+  await writeUserAudit(req.auth, 'event.cdm_import', {
+    after: {
+      summary: `导入 CDM ${parsed.length} 条（新增 ${inserted}，更新 ${updated}，跳过 ${skipped}）`,
+      parsed: parsed.length,
+      inserted,
+      updated,
+      skipped
+    }
+  })
   res.json(ok({ parsed: parsed.length, inserted, updated, skipped }))
 })
 
@@ -1041,6 +1051,19 @@ router.post('/events/:key/recompute', requireAuth, async (req: ScopedRequest, re
     `[events] recompute run=${runId} org=${auth.org.id} ${a}:${b} hbr=${hbrM}m methods=${methods.join('+')} ` +
       `pc=${result.rows.find((r) => r.method !== 'official')?.pc ?? '—'} by=${auth.user.email}`
   )
+  await writeUserAudit(auth, 'event.recompute', {
+    after: {
+      summary: `重算交会事件 ${a}:${b}，run=#${runId}，HBR ${hbrM}m，${methods.join('+')}`,
+      runId,
+      noradA: a,
+      noradB: b,
+      tcaMs,
+      hbrM,
+      methods,
+      paramsSource,
+      params: resolvedParams
+    }
+  })
 
   res.json(ok({
     run: { id: runId, created_at: new Date().toISOString(), params: resolvedParams },

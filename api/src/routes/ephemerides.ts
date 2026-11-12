@@ -30,6 +30,7 @@ import { requireSuperAdmin } from './admin.js'
 import { isOrgFlagEnabled } from '../db/planDb.js'
 import { quotaExceeded } from '../middleware/plan.js'
 import { getOwnerClaim } from '../db/objectsDb.js'
+import { writeUserAudit } from '../db/adminDb.js'
 
 const router = Router()
 
@@ -403,6 +404,17 @@ router.post(
         visibility,
         uploadedBy: user.email
       })
+      await writeUserAudit(req.auth, 'ephemeris.upload', {
+        after: {
+          summary: `上传星历「${name}」，NORAD ${norad}，可见性 ${visibility}`,
+          id: r.id,
+          name,
+          norad,
+          format: meta.format,
+          visibility,
+          bytes: buf.length
+        }
+      })
       res.json(ok({ ...r, visibility }))
     } catch (e) {
       res.status(400).json(fail(400, (e as Error).message || '上传入库失败'))
@@ -434,6 +446,16 @@ router.patch('/ephemerides/:id', requireAuth, async (req: Request, res: Response
       return
     }
     await setEphemerisVisibilityDb(row.id, visibility)
+    await writeUserAudit(req.auth, 'ephemeris.visibility.update', {
+      before: { id: row.id, visibility: row.visibility, name: row.name, norad: row.norad },
+      after: {
+        summary: `更改星历可见性「${row.name || row.id}」${row.visibility || ''}→${visibility}，NORAD ${row.norad}`,
+        id: row.id,
+        name: row.name,
+        norad: row.norad,
+        visibility
+      }
+    })
     res.json(ok({ id: row.id, visibility }))
   } catch (e) {
     res.status(500).json(fail(500, (e as Error).message || '更新星历可见性失败'))
@@ -467,6 +489,16 @@ router.delete('/ephemerides/:id', requireAuth, async (req: Request, res: Respons
         console.warn('[ephem] unlink failed:', (e as Error).message)
       }
     }
+    await writeUserAudit(req.auth, 'ephemeris.delete', {
+      before: { id: row.id, name: row.name, norad: row.norad, visibility: row.visibility },
+      after: {
+        summary: `删除星历「${row.name || row.id}」，NORAD ${row.norad}`,
+        id: row.id,
+        name: row.name,
+        norad: row.norad,
+        deleted: !!deleted
+      }
+    })
     res.json(ok({ id: row.id, deleted: !!deleted }))
   } catch (e) {
     res.status(500).json(fail(500, (e as Error).message || '删除星历失败'))
@@ -482,6 +514,9 @@ router.post('/ephemerides/rebuild', requireAuth, requireSuperAdmin, async (req: 
   try {
     const force = req.query.force === '1' || req.query.force === 'true'
     const r = await scanAndIngest({ exportJson: true, force })
+    await writeUserAudit(req.auth, 'ephemeris.rebuild', {
+      after: { summary: force ? '强制全量重建星历索引' : '扫描重建星历索引', force, result: r }
+    })
     res.json(ok(r))
   } catch (e) {
     res.status(503).json(fail(503, (e as Error).message || '扫描入库失败'))
@@ -569,11 +604,20 @@ router.delete('/ephemerides/versions/:id', requireAuth, async (req: Request, res
   }
   try {
     const id = Number(req.params.id) || 0
+    const ver = await getEphemerisVersionDb(id)
     const done = await softDeleteVersionDb(id)
     if (!done) {
       res.status(404).json(fail(404, '版本不存在或已删除'))
       return
     }
+    await writeUserAudit(req.auth, 'ephemeris.version.delete', {
+      after: {
+        summary: `软删星历版本 #${id}` + (ver ? `，NORAD ${ver.norad}` : ''),
+        id,
+        norad: ver?.norad,
+        format: ver?.format
+      }
+    })
     res.json(ok({ id, deletedAt: Date.now() }))
   } catch (e) {
     res.status(500).json(fail(500, (e as Error).message || '软删版本失败'))

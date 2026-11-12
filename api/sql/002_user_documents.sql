@@ -17,7 +17,7 @@ CREATE TABLE IF NOT EXISTS `user_documents` (
   `storage_key`   varchar(80) NOT NULL COMMENT '磁盘文件名（UUID，不含用户文件名）',
   `size_bytes`    bigint NOT NULL,
   `mime`          varchar(127) NOT NULL,
-  `source_type`   varchar(32) NOT NULL COMMENT 'report | ephemeris | upload | pinned',
+  `source_type`   varchar(32) NOT NULL COMMENT 'report | event-package | ephemeris | upload | pinned',
   `pinned`        tinyint(1) NOT NULL DEFAULT 0,
   `scope`         varchar(16) NOT NULL COMMENT 'personal | org | pinned',
   `created_by`    bigint NOT NULL,

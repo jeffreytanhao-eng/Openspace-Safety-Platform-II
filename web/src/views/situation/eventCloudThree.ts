@@ -12,6 +12,8 @@ import { twoline2satrec, propagate, gstime } from 'satellite.js'
 import { eciToScene } from './scene'
 import { twoBodyPropagate } from './ephem/screening'
 import { useCatalog } from '@/composables/useCatalog'
+import { useLocaleStore } from '@/stores/locale'
+import type { MessageKey } from '@/i18n/messages'
 import { loadSharedModelGeom, resolveCatalogModelKey } from './catalogCloudThree'
 
 export interface EventCloudItem {
@@ -160,8 +162,11 @@ const OBJECT_TYPE_LABEL: Record<string, string> = {
   UNKNOWN: '未知'
 }
 
-function objectTypeLabel(t: string): string {
-  return OBJECT_TYPE_LABEL[t] || '未知'
+function objectTypeLabel(raw: string): string {
+  const key = raw in OBJECT_TYPE_LABEL ? raw : 'UNKNOWN'
+  const store = useLocaleStore()
+  if (store.locale !== 'en') return OBJECT_TYPE_LABEL[key]
+  return store.t(`objType.${key}` as MessageKey)
 }
 
 const WGS84_A_KM = 6378.137

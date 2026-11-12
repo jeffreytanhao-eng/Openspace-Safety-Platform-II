@@ -1,8 +1,11 @@
 <script setup lang="ts">
-import { onMounted, ref } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 import { AuthError } from '@/api/auth'
 import { adminListAudit, type AuditItem } from '@/api/admin'
+import CompactPager from '@/components/CompactPager.vue'
+import { useI18n } from '@/composables/useI18n'
 
+const { t } = useI18n()
 const items = ref<AuditItem[]>([])
 const total = ref(0)
 const page = ref(1)
@@ -24,12 +27,52 @@ async function load() {
   }
 }
 
-const pages = () => Math.max(Math.ceil(total.value / limit), 1)
+const totalPages = computed(() => Math.max(Math.ceil(total.value / limit), 1))
+
+watch(page, () => {
+  void load()
+})
+watch(totalPages, (n) => {
+  if (page.value > n) page.value = n
+  if (page.value < 1) page.value = 1
+})
+
+function parseMaybe(raw: string | null): unknown {
+  if (!raw) return null
+  try {
+    return JSON.parse(raw)
+  } catch {
+    return raw
+  }
+}
+
+function compact(v: unknown): string {
+  if (v == null || v === '') return ''
+  if (typeof v === 'string') return v
+  try {
+    return JSON.stringify(v)
+  } catch {
+    return String(v)
+  }
+}
+
+function summaryOf(v: unknown): string {
+  if (v && typeof v === 'object' && 'summary' in v && typeof (v as { summary?: unknown }).summary === 'string') {
+    return String((v as { summary: string }).summary)
+  }
+  return ''
+}
 
 function fmt(before: string | null, after: string | null): string {
+  const b = parseMaybe(before)
+  const a = parseMaybe(after)
+  const summary = summaryOf(a) || summaryOf(b)
+  if (summary) return summary
   const parts: string[] = []
-  if (before) parts.push('前: ' + before)
-  if (after) parts.push('后: ' + after)
+  const bs = compact(b)
+  const as = compact(a)
+  if (bs) parts.push('前: ' + bs)
+  if (as) parts.push('后: ' + as)
   return parts.join('　') || '—'
 }
 
@@ -57,10 +100,10 @@ onMounted(load)
   <div class="page">
     <div class="head">
       <div>
-        <h1>审计日志</h1>
-        <p class="sub">平台写操作只读记录（actor / org / action / before / after）。</p>
+        <h1>{{ t('adm.audit.title') }}</h1>
+        <p class="sub">{{ t('adm.audit.sub') }}</p>
       </div>
-      <button type="button" class="btn" :disabled="loading" @click="load">刷新</button>
+      <button type="button" class="btn" :disabled="loading" @click="load">{{ t('adm.audit.refresh') }}</button>
     </div>
 
     <div v-if="error" class="error">{{ error }}</div>
@@ -68,11 +111,18 @@ onMounted(load)
     <div class="card">
       <table class="tbl">
         <thead>
-          <tr><th>ID</th><th>时间</th><th>操作人</th><th>组织</th><th>动作</th><th>变更内容</th></tr>
+          <tr>
+            <th>ID</th>
+            <th>{{ t('adm.audit.col.time') }}</th>
+            <th>{{ t('adm.audit.col.actor') }}</th>
+            <th>{{ t('adm.audit.col.org') }}</th>
+            <th>{{ t('adm.audit.col.action') }}</th>
+            <th>{{ t('adm.audit.col.delta') }}</th>
+          </tr>
         </thead>
         <tbody>
-          <tr v-if="loading"><td colspan="6" class="empty">加载中…</td></tr>
-          <tr v-else-if="!items.length"><td colspan="6" class="empty">暂无记录</td></tr>
+          <tr v-if="loading"><td colspan="6" class="empty">{{ t('adm.audit.loading') }}</td></tr>
+          <tr v-else-if="!items.length"><td colspan="6" class="empty">{{ t('adm.audit.empty') }}</td></tr>
           <tr v-for="a in items" :key="a.id">
             <td class="mono">{{ a.id }}</td>
             <td class="mono">{{ fmtTime(a.created_at) }}</td>
@@ -83,13 +133,21 @@ onMounted(load)
           </tr>
         </tbody>
       </table>
-      <div class="pager">
-        <button type="button" class="btn small" :disabled="page <= 1" @click="page--; load()">上一页</button>
-        <span>第 {{ page }} / {{ pages() }} 页 · 共 {{ total }} 条</span>
-        <button type="button" class="btn small" :disabled="page >= pages()" @click="page++; load()">下一页</button>
+      <div class="pager-wrap">
+        <CompactPager v-model:page="page" :total-pages="totalPages" :disabled="loading" />
       </div>
     </div>
   </div>
 </template>
 
 <style scoped lang="scss" src="./admin.scss"></style>
+<style scoped>
+.pager-wrap {
+  padding: 8px 12px 10px;
+  min-width: 0;
+}
+.delta {
+  max-width: 520px;
+  overflow-wrap: anywhere;
+}
+</style>

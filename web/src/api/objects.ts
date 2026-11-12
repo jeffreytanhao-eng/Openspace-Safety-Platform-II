@@ -39,6 +39,8 @@ export interface ManagedObject {
   org_id: number
   norad_id: number
   name: string
+  /** 本组织别名；仅当前组织的列表/详情返回，其他组织不可见 */
+  alias?: string | null
   mass_kg: number | null
   cross_section_m2: number | null
   propulsion: string
@@ -81,6 +83,7 @@ export interface LookupResult {
     /** 第 5 项：业主认领需超管审核（pending/claimed/rejected） */
     claimStatus?: 'pending' | 'claimed' | 'rejected'
     reviewNote?: string | null
+    alias?: string | null
   } | null
   /** C1：VIP 组织的业主授权范围判定（非 VIP 为 null） */
   owner_scope?: { configured: boolean; allowed: boolean; matched: { scope_type: string; scope_value: string } | null } | null
@@ -166,6 +169,26 @@ export function getObject(id: number): Promise<ObjectDetail> {
   return cgiCall<ObjectDetail>({ method: 'GET', url: `/objects/${id}`, headers: headers() })
 }
 
+export interface ObjectAliasItem {
+  id: number
+  noradId: number
+  name: string
+  alias: string | null
+}
+
+export function listObjectAliases(): Promise<ObjectAliasItem[]> {
+  return cgiCall<ObjectAliasItem[]>({ method: 'GET', url: '/objects/aliases', headers: headers() })
+}
+
+export function updateObjectAlias(id: number, alias: string | null): Promise<ManagedObject> {
+  return cgiCall<ManagedObject>({
+    method: 'PATCH',
+    url: `/objects/${id}/alias`,
+    data: { alias },
+    headers: headers()
+  })
+}
+
 export function updateObject(
   id: number,
   patch: {
@@ -184,6 +207,13 @@ export function updateObject(
 
 export function releaseObject(id: number): Promise<{ released: number }> {
   return cgiCall<{ released: number }>({ method: 'DELETE', url: `/objects/${id}`, headers: headers() })
+}
+
+/** 批量取消关注（仅 claim_type=normal；业主认领会被服务端跳过） */
+export function unwatchObjects(
+  ids: number[]
+): Promise<{ released: number[]; skipped: Array<{ id: number; reason: string }> }> {
+  return cgiCall({ method: 'POST', url: '/objects/batch-unwatch', data: { ids }, headers: headers() })
 }
 
 export function bindEphem(id: number, ephemId: string): Promise<{ bound: string; to: number }> {

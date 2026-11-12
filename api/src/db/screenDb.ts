@@ -375,21 +375,70 @@ export async function getScreenJobAny(id: number): Promise<ScreenJobRow | null> 
   return rows[0] ?? null
 }
 
-export async function listScreenJobs(orgId: number, limit = 50): Promise<ScreenJobRow[]> {
-  const [rows] = await pool.query<RawJob[]>(
-    `SELECT * FROM screening_jobs WHERE org_id = ? ORDER BY id DESC LIMIT ?`,
-    [orgId, Math.min(200, Math.max(1, limit))]
-  )
-  return rows
+export interface ScreenJobListResult {
+  items: ScreenJobRow[]
+  total: number
+  hasActive: number
 }
 
-/** 平台账号只读：跨组织任务列表 */
-export async function listAllScreenJobs(limit = 50): Promise<ScreenJobRow[]> {
-  const [rows] = await pool.query<RawJob[]>(
-    `SELECT * FROM screening_jobs ORDER BY id DESC LIMIT ?`,
-    [Math.min(200, Math.max(1, limit))]
+async function listScreenJobsFiltered(opts: {
+  orgId: number | null
+  limit?: number
+  offset?: number
+}): Promise<ScreenJobListResult> {
+  const where = opts.orgId != null ? 'WHERE org_id = ?' : ''
+  const baseParams: unknown[] = opts.orgId != null ? [opts.orgId] : []
+  const [cnt] = await pool.query<Array<RowDataPacket & { n: number; active: number | null }>>(
+    `SELECT COUNT(*) AS n, SUM(status IN ('queued', 'running')) AS active
+       FROM screening_jobs ${where}`,
+    baseParams
   )
-  return rows
+  const total = Number(cnt[0]?.n) || 0
+  const hasActive = Number(cnt[0]?.active) || 0
+  let sql = `SELECT * FROM screening_jobs ${where} ORDER BY id DESC`
+  const params = [...baseParams]
+  if (opts.limit != null) {
+    const limit = Math.min(100, Math.max(1, Math.trunc(opts.limit)))
+    const offset = Math.max(0, Math.trunc(opts.offset ?? 0))
+    sql += ' LIMIT ? OFFSET ?'
+    params.push(limit, offset)
+  }
+  const [rows] = await pool.query<RawJob[]>(sql, params)
+  return { items: rows, total, hasActive }
+}
+
+/** 本组织筛查任务列表（最新在前）。不传 limit 则返回全部，不再截断为 50。 */
+export async function listScreenJobs(
+  orgId: number,
+  opts?: { limit?: number; offset?: number }
+): Promise<ScreenJobListResult> {
+  return listScreenJobsFiltered({ orgId, ...opts })
+}
+
+/** 平台账号只读：跨组织任务列表。不传 limit 则返回全部，不再截断为 50。 */
+export async function listAllScreenJobs(
+  opts?: { limit?: number; offset?: number }
+): Promise<ScreenJobListResult> {
+  return listScreenJobsFiltered({ orgId: null, ...opts })
+}
+
+/** 按 id DESC 计算某任务所在页（用于深链 / 选中项翻到对应页） */
+export async function pageOfScreenJob(opts: {
+  jobId: number
+  pageSize: number
+  orgId?: number | null
+}): Promise<number | null> {
+  const pageSize = Math.max(1, Math.trunc(opts.pageSize) || 1)
+  const job =
+    opts.orgId != null ? await getScreenJob(opts.orgId, opts.jobId) : await getScreenJobAny(opts.jobId)
+  if (!job) return null
+  const [rows] = await pool.query<Array<RowDataPacket & { n: number }>>(
+    opts.orgId != null
+      ? 'SELECT COUNT(*) AS n FROM screening_jobs WHERE org_id = ? AND id > ?'
+      : 'SELECT COUNT(*) AS n FROM screening_jobs WHERE id > ?',
+    opts.orgId != null ? [opts.orgId, opts.jobId] : [opts.jobId]
+  )
+  return Math.floor((Number(rows[0]?.n) || 0) / pageSize) + 1
 }
 
 export async function listJobEvents(jobId: number, limit = 200): Promise<ScreenEventRow[]> {

@@ -99,6 +99,25 @@ export function listScreens(): Promise<ScreenJob[]> {
   return cgiCall<ScreenJob[]>({ method: 'GET', url: '/screens', headers: headers() })
 }
 
+export interface ScreenJobList {
+  items: ScreenJob[]
+  total: number
+  page: number
+  limit: number
+  hasActive: boolean
+}
+
+/** 筛查任务服务端分页（每页默认 10 条，total 为该可见范围内的全部任务数） */
+export function listScreensPage(
+  page: number,
+  limit = 10,
+  around?: number
+): Promise<ScreenJobList> {
+  const params: Record<string, number> = { page, limit }
+  if (around != null && around > 0) params.around = around
+  return cgiCall<ScreenJobList>({ method: 'GET', url: '/screens', params, headers: headers() })
+}
+
 export function getScreen(id: number): Promise<{ job: ScreenJob; events: ScreenEvent[] }> {
   return cgiCall<{ job: ScreenJob; events: ScreenEvent[] }>({
     method: 'GET',

@@ -502,3 +502,12 @@ export function exportBaseName(event: ConjunctionEvent): string {
   const tca = event.tca.slice(0, 16).replace(/[-:]/g, '') // 2026-11-04T12:30 → 20261104T1230
   return `OSP-Conjunction-${event.noradA}x${event.noradB}-${tca}`
 }
+
+/** 存到我的文档时的 titleBase；服务端再加上海时间戳。客户端不得自拟最终文件名。 */
+export function eventPackageTitleBase(nameA: string, nameB: string, noradA?: number, noradB?: number): string {
+  const compact = (s: string, norad?: number): string => {
+    const c = String(s || '').replace(/[^0-9A-Za-z\u4e00-\u9fff]+/g, '').slice(0, 24)
+    return c || (norad ? `NORAD${norad}` : 'OBJECT')
+  }
+  return `交会事件包_${compact(nameA, noradA)}-${compact(nameB, noradB)}`
+}

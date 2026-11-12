@@ -1,7 +1,7 @@
 /**
  * 筛查任务路由（Epic E1）：
  *  - POST /cgi/screens        发起筛查（queued → runner 异步执行），配额 screen_day；
- *  - GET  /cgi/screens        任务列表（本组织）；
+ *  - GET  /cgi/screens        任务列表（本组织；?page&limit 服务端分页，否则返回全部）；
  *  - GET  /cgi/screens/:id    任务详情 + 事件列表（conjunction_events）。
  */
 import { Router, type Request, type Response, type NextFunction } from 'express'
@@ -16,7 +16,8 @@ import {
   getScreenJob,
   getScreenJobAny,
   listJobEvents,
-  cancelScreenJob
+  cancelScreenJob,
+  pageOfScreenJob
 } from '../db/screenDb.js'
 import { pool } from '../db/pool.js'
 import { cdmIsolation } from '../services/systemPool.js'
@@ -28,6 +29,7 @@ import {
   type CaParams
 } from '../db/caDb.js'
 import type { RowDataPacket } from 'mysql2'
+import { writeUserAudit } from '../db/adminDb.js'
 
 const router = Router()
 
@@ -297,6 +299,24 @@ router.post('/screens', requireOrg, async (req: ScopedRequest, res) => {
   })
   kickScreeningRunner()
   const job = await getScreenJob(org.id, id)
+  const primaries = primaryNorads
+    ? { count: primaryNorads.length, norads: primaryNorads.slice(0, 30) }
+    : { count: 'all' }
+  await writeUserAudit(req.auth, 'screen.create', {
+    after: {
+      summary: `发起筛查 #${id}，窗口 ${windowH}h，门限 ${missMaxKm}km，HBR ${hbrM}m，主星 ${
+        primaryNorads ? `${primaryNorads.length} 颗` : '全部'
+      }，${primarySource}×${secondarySource}`,
+      jobId: id,
+      windowH,
+      missMaxKm,
+      hbrM,
+      primarySource,
+      secondarySource,
+      paramsSource,
+      primaries
+    }
+  })
   res.json(ok(job))
 })
 
@@ -315,21 +335,79 @@ router.post('/screens/:id/cancel', requireOrg, async (req: ScopedRequest, res) =
   }
   if (r === 'requested') abortActiveScreening(id)
   const job = await getScreenJob(org.id, id)
+  await writeUserAudit(req.auth, 'screen.cancel', {
+    after: {
+      summary: `取消筛查 #${id}（${r}）`,
+      jobId: id,
+      result: r,
+      windowH: job?.window_h,
+      status: job?.status
+    }
+  })
   res.json(ok({ cancel: r, job }))
 })
 
-/** 任务列表（本组织，最新在前）；平台账号返回全平台只读列表 */
+/** 任务列表（本组织，最新在前）；平台账号返回全平台只读列表。
+ *  传入 page / limit / around 时走服务端分页：{ items, total, page, limit, hasActive }；
+ *  不传则返回全部任务数组（供操作事件流等使用，不再截断为 50）。 */
 router.get('/screens', async (req: ScopedRequest, res) => {
+  const platform = isPlatformAccount(req)
   if (!req.auth?.org || !req.auth.user.orgId) {
-    if (!isPlatformAccount(req)) {
+    if (!platform) {
       res.status(403).json(fail(403, '需要组织账号'))
       return
     }
-    res.json(ok(await listAllScreenJobs()))
+  }
+  const orgId = req.auth?.org && req.auth.user.orgId ? req.auth.org.id : null
+  const hasPage = req.query.page !== undefined && String(req.query.page) !== ''
+  const hasLimit = req.query.limit !== undefined && String(req.query.limit) !== ''
+  const aroundRaw = Number(req.query.around)
+  const around = Number.isInteger(aroundRaw) && aroundRaw > 0 ? aroundRaw : null
+  const paginated = hasPage || hasLimit || around != null
+
+  if (!paginated) {
+    const listed = orgId != null ? await listScreenJobs(orgId) : await listAllScreenJobs()
+    res.json(ok(listed.items))
     return
   }
-  const jobs = await listScreenJobs(req.auth.org.id)
-  res.json(ok(jobs))
+
+  const limit = Math.min(100, Math.max(1, Number(req.query.limit) || 10))
+  let page = Math.max(1, Number(req.query.page) || 1)
+  if (around != null) {
+    const found = await pageOfScreenJob({ jobId: around, pageSize: limit, orgId })
+    if (found != null) page = found
+  }
+  const listed =
+    orgId != null
+      ? await listScreenJobs(orgId, { limit, offset: (page - 1) * limit })
+      : await listAllScreenJobs({ limit, offset: (page - 1) * limit })
+  const totalPages = Math.max(1, Math.ceil(listed.total / limit))
+  if (page > totalPages && listed.total >= 0) {
+    page = totalPages
+    const relisted =
+      orgId != null
+        ? await listScreenJobs(orgId, { limit, offset: (page - 1) * limit })
+        : await listAllScreenJobs({ limit, offset: (page - 1) * limit })
+    res.json(
+      ok({
+        items: relisted.items,
+        total: relisted.total,
+        page,
+        limit,
+        hasActive: relisted.hasActive > 0
+      })
+    )
+    return
+  }
+  res.json(
+    ok({
+      items: listed.items,
+      total: listed.total,
+      page,
+      limit,
+      hasActive: listed.hasActive > 0
+    })
+  )
 })
 
 /** 任务详情 + 事件列表（平台账号可查看任意组织任务） */

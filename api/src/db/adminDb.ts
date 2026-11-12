@@ -1,6 +1,7 @@
 /**
  * 超管与审计数据库层（Epic B1）。
- * - admin_audit_logs：平台写操作审计（actor / org / action / before / after）；
+ * - admin_audit_logs：各账号关键写操作审计（actor / org / action / before / after）；
+ *   含平台管理操作，以及关注/认领、筛查、文档、定制参数、星历、CDM 导入等；
  * - 平台超管账号 bootstrap 由 server.ts 调 ensurePlatformAdmin（凭据来自 .env）。
  */
 import { pool } from './pool.js'
@@ -31,7 +32,7 @@ CREATE TABLE IF NOT EXISTS \`admin_audit_logs\` (
   KEY \`idx_audit_org\` (\`org_id\`),
   KEY \`idx_audit_created\` (\`created_at\`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
-  COMMENT='平台管理操作审计（只读展示）'`
+  COMMENT='各账号关键写操作审计（只读展示）'`
 
 let schemaReady: Promise<boolean> | null = null
 
@@ -50,7 +51,27 @@ export function ensureAdminSchema(): Promise<boolean> {
   return schemaReady
 }
 
-/** 写审计（失败仅记服务端日志，不阻断业务操作） */
+export type AuditAuth = {
+  user?: { id: number; email: string; orgId?: number | null } | null
+  org?: { id: number } | null
+} | null | undefined
+
+/** 从登录上下文取操作人邮箱与所属组织（无组织则为 null，不写成 0） */
+export function auditActor(auth: AuditAuth): {
+  actorUserId: number | null
+  actorEmail: string
+  orgId: number | null
+} {
+  const orgIdRaw = auth?.user?.orgId ?? auth?.org?.id ?? null
+  const orgId = orgIdRaw == null ? null : Number(orgIdRaw)
+  return {
+    actorUserId: auth?.user?.id ?? null,
+    actorEmail: auth?.user?.email ?? '',
+    orgId: orgId != null && Number.isFinite(orgId) && orgId > 0 ? orgId : null
+  }
+}
+
+/** 写审计（失败仅记服务端日志，不阻断业务操作）。首次写入时确保表存在。 */
 export async function writeAudit(entry: {
   actorUserId: number | null
   actorEmail: string
@@ -60,6 +81,7 @@ export async function writeAudit(entry: {
   after?: unknown
 }): Promise<void> {
   try {
+    if (!(await ensureAdminSchema())) return
     await pool.query(
       'INSERT INTO admin_audit_logs (actor_user_id, actor_email, org_id, action, before_json, after_json) VALUES (?, ?, ?, ?, ?, ?)',
       [
@@ -74,6 +96,19 @@ export async function writeAudit(entry: {
   } catch (e) {
     console.error('[admin] audit write failed:', (e as Error).message)
   }
+}
+
+export async function writeUserAudit(
+  auth: AuditAuth,
+  action: string,
+  payload?: { before?: unknown; after?: unknown }
+): Promise<void> {
+  await writeAudit({
+    ...auditActor(auth),
+    action,
+    before: payload?.before,
+    after: payload?.after
+  })
 }
 
 export async function listAudit(limit: number, offset: number): Promise<{ items: AuditRow[]; total: number }> {

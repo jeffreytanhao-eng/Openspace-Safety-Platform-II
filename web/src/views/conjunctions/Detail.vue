@@ -604,17 +604,22 @@ function fmtWhen(iso: string): string {
 /* ------------------- 事件包导出（H1）：Markdown / HTML 打印 / CSV ------------------- */
 
 import { useAuthStore } from '@/stores/auth'
+import { saveEventPackageDocument } from '@/api/documents'
 import {
   buildMarkdown,
   buildPrintableHtml,
   buildTimelineCsv,
-  downloadText,
-  exportBaseName,
+  eventPackageTitleBase,
   type ExportEventCtx
 } from './exportEvent'
+import { useObjectAliases } from '@/composables/useObjectAliases'
 
 const auth = useAuthStore()
+const { label: objLabel, aliasOf } = useObjectAliases()
 const expOpen = ref(false)
+const expSaving = ref(false)
+const expMsg = ref('')
+const expSaved = ref(false)
 const expWrap = ref<HTMLElement | null>(null)
 
 /** 点外关闭（不拦截外部点击，语言切换等按钮首点即生效） */
@@ -643,18 +648,29 @@ function expCtx(): ExportEventCtx {
   }
 }
 
-function doExport(kind: 'md' | 'html' | 'csv'): void {
-  if (!event.value) return
+async function doExport(kind: 'md' | 'html' | 'csv'): Promise<void> {
+  if (!event.value || expSaving.value) return
   const ctx = expCtx()
-  const base = exportBaseName(event.value)
-  if (kind === 'md') {
-    downloadText(`${base}.md`, buildMarkdown(ctx), 'text/markdown;charset=utf-8')
-  } else if (kind === 'html') {
-    downloadText(`${base}.html`, buildPrintableHtml(ctx), 'text/html;charset=utf-8')
-  } else {
-    downloadText(`${base}.csv`, buildTimelineCsv(ctx), 'text/csv;charset=utf-8')
+  const content =
+    kind === 'md' ? buildMarkdown(ctx) : kind === 'html' ? buildPrintableHtml(ctx) : buildTimelineCsv(ctx)
+  const titleBase = eventPackageTitleBase(event.value.nameA, event.value.nameB, event.value.noradA, event.value.noradB)
+  expSaving.value = true
+  expMsg.value = ''
+  expSaved.value = false
+  try {
+    const saved = await saveEventPackageDocument({ format: kind, content, titleBase })
+    expMsg.value = `${t('docs.saved')} · ${saved.title}`
+    expSaved.value = true
+    expOpen.value = false
+  } catch (e) {
+    if (e instanceof AuthError && e.httpStatus === 401) {
+      expMsg.value = t('ov.needAuth')
+    } else {
+      expMsg.value = e instanceof Error ? e.message : String(e)
+    }
+  } finally {
+    expSaving.value = false
   }
-  expOpen.value = false
 }
 </script>
 
@@ -674,7 +690,7 @@ function doExport(kind: 'md' | 'html' | 'csv'): void {
             :class="event.level"
             :title="event.levelBasis === 'miss' ? t('conj.missBasis') : undefined"
           >{{ levelLabel(event.level) }}</span>
-          {{ event.nameA || `NORAD ${event.noradA}` }} × {{ event.nameB || `NORAD ${event.noradB}` }}
+          {{ objLabel(event.noradA, event.nameA) }} × {{ objLabel(event.noradB, event.nameB) }}
         </h1>
         <p>
           TCA {{ fmtTca(event.tca) }} UTC · {{ t('conj.col.cdm') }} {{ event.cdmCount }}
@@ -684,10 +700,10 @@ function doExport(kind: 'md' | 'html' | 'csv'): void {
       </div>
       <div class="actions">
         <div ref="expWrap" class="exp-wrap">
-          <button type="button" class="btn" @click="expOpen = !expOpen">
-            {{ t('exp.menu') }} <span class="caret">{{ expOpen ? '▴' : '▾' }}</span>
+          <button type="button" class="btn" :disabled="expSaving" @click="expOpen = !expOpen">
+            {{ expSaving ? t('exp.saving') : t('exp.menu') }} <span class="caret">{{ expOpen ? '▴' : '▾' }}</span>
           </button>
-          <div v-if="expOpen" class="exp-menu">
+          <div v-if="expOpen && !expSaving" class="exp-menu">
             <button type="button" @click="doExport('md')">{{ t('exp.md') }}</button>
             <button type="button" @click="doExport('html')">{{ t('exp.html') }}</button>
             <button type="button" @click="doExport('csv')">{{ t('exp.csv') }}</button>
@@ -697,6 +713,10 @@ function doExport(kind: 'md' | 'html' | 'csv'): void {
           {{ t('conj.openSituation') }}
         </a>
       </div>
+      <p v-if="expMsg" class="exp-status" :class="{ ok: expSaved }">
+        {{ expMsg }}
+        <button v-if="expSaved" type="button" class="link" @click="router.push('/docs')">{{ t('exp.savedOpen') }}</button>
+      </p>
     </header>
 
     <section class="kpi">
@@ -717,7 +737,8 @@ function doExport(kind: 'md' | 'html' | 'csv'): void {
     <section class="grid">
       <aside class="panel">
         <div class="ph">{{ t('conj.primaryObj') }}</div>
-        <div class="obj-name">{{ primary?.object_name || `NORAD ${event.noradA}` }}</div>
+        <div class="obj-name">{{ objLabel(event.noradA, primary?.object_name || event.nameA) }}</div>
+        <div v-if="aliasOf(event.noradA)" class="obj-official">{{ primary?.object_name || event.nameA }}</div>
         <dl v-if="primary" class="kv">
           <div><dt>NORAD</dt><dd class="mono">{{ primary.norad_id }}</dd></div>
           <div><dt>{{ t('obj.type') }}</dt><dd>{{ primary.object_type }}</dd></div>
@@ -734,7 +755,8 @@ function doExport(kind: 'md' | 'html' | 'csv'): void {
 
       <aside class="panel">
         <div class="ph">{{ t('conj.secondaryObj') }}</div>
-        <div class="obj-name">{{ secondary?.object_name || `NORAD ${event.noradB}` }}</div>
+        <div class="obj-name">{{ objLabel(event.noradB, secondary?.object_name || event.nameB) }}</div>
+        <div v-if="aliasOf(event.noradB)" class="obj-official">{{ secondary?.object_name || event.nameB }}</div>
         <dl v-if="secondary" class="kv">
           <div><dt>NORAD</dt><dd class="mono">{{ secondary.norad_id }}</dd></div>
           <div><dt>{{ t('obj.type') }}</dt><dd>{{ secondary.object_type }}</dd></div>
@@ -897,18 +919,18 @@ function doExport(kind: 'md' | 'html' | 'csv'): void {
         <!-- 参数编辑（仅本次） -->
         <div class="ca-form">
           <label class="cf field">
-            <span class="lbl">参数来源</span>
+            <span class="lbl">{{ t('cap.source') }}</span>
             <span class="row">
               <select v-model="rcParamsSource">
-                <option value="default">单位默认</option>
-                <option value="mine1" :disabled="!rcSlotReady[1]">我的参数组 1{{ rcSlotReady[1] ? '' : '（未配置）' }}</option>
-                <option value="mine2" :disabled="!rcSlotReady[2]">我的参数组 2{{ rcSlotReady[2] ? '' : '（未配置）' }}</option>
-                <option value="target">目标自定义参数（业主）</option>
+                <option value="default">{{ t('ca.f.orgDefaults') }}</option>
+                <option value="mine1" :disabled="!rcSlotReady[1]">{{ t('cap.mine1') }}{{ rcSlotReady[1] ? '' : t('cap.unset') }}</option>
+                <option value="mine2" :disabled="!rcSlotReady[2]">{{ t('cap.mine2') }}{{ rcSlotReady[2] ? '' : t('cap.unset') }}</option>
+                <option value="target">{{ t('cap.target') }}</option>
               </select>
             </span>
           </label>
           <div v-if="rcParamsSource !== 'default'" class="cf-hint">
-            使用所选参数档案重算，下方手动参数不再生效（结果摘要会回显实际生效值）。
+            {{ t('cap.recalcHint') }}
           </div>
           <label class="cf field">
             <span class="lbl">{{ t('ca.f.hbrMode') }}</span>
@@ -1113,7 +1135,7 @@ function doExport(kind: 'md' | 'html' | 'csv'): void {
   height: 100%; overflow: auto; padding: 12px 14px 40px;
   display: flex; flex-direction: column; gap: 12px;
 }
-.head { display: flex; justify-content: space-between; gap: 12px; align-items: flex-start; }
+.head { display: flex; justify-content: space-between; gap: 12px; align-items: flex-start; flex-wrap: wrap; }
 .link {
   appearance: none; border: none; background: transparent; color: var(--accent-strong);
   font-size: 12px; cursor: pointer; padding: 0; margin-bottom: 6px;
@@ -1139,6 +1161,13 @@ h1 {
 }
 .exp-menu button:hover { background: var(--bg-panel-2); color: var(--text); }
 .caret { font-size: 9px; color: var(--text-dim); }
+.exp-status {
+  flex: 1 0 100%; margin: 8px 0 0; font-size: 12px; color: var(--text-dim);
+}
+.exp-status.ok { color: var(--ok, #5a9a78); }
+.exp-status .link { margin-left: 8px; }
+.obj-official { margin-top: 2px; font-size: 11px; font-weight: 400; color: var(--text-dim); }
+.btn:disabled { opacity: 0.55; cursor: default; }
 .btn {
   appearance: none; border: 1px solid var(--border-strong); background: var(--bg-panel);
   color: var(--text-muted); border-radius: 4px; padding: 6px 12px; font-size: 12px; cursor: pointer;

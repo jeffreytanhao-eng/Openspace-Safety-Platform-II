@@ -23,6 +23,7 @@ import {
 } from '@/api/ephemerides'
 import { saveEphemerisDocument } from '@/api/documents'
 import AccuracyResidualCharts from '@/components/AccuracyResidualCharts.vue'
+import CompactPager from '@/components/CompactPager.vue'
 import { parseEphemeris } from '@/views/situation/ephem/parse'
 import {
   activateEphem,
@@ -96,11 +97,11 @@ const importedRows = computed<EphListItem[]>(() =>
       stopMs: m.stop,
       publishedMs: m.createdAt,
       status: 'local',
-      size: '本机',
+      size: t('eph.local'),
       covariance: m.hasCov,
       covFrame: m.hasCov ? m.frame : undefined,
       maneuvers: m.maneuvers?.length || 0,
-      maneuverSummary: m.maneuvers?.length ? `${m.maneuvers.length} 处机动` : '',
+      maneuverSummary: m.maneuvers?.length ? t('eph.maneuverCount', { n: m.maneuvers.length }) : '',
       maneuverEpochs: (m.maneuvers || []).map((s) => ({
         t: s.t0,
         dvMps: s.dvMps || 0,
@@ -108,7 +109,7 @@ const importedRows = computed<EphListItem[]>(() =>
         id: s.id
       })),
       updatedAt: new Date(m.createdAt).toLocaleString(),
-      originator: '本机导入',
+      originator: t('eph.localImport'),
       file: ''
     }))
     .sort((a, b) => (b.publishedMs ?? 0) - (a.publishedMs ?? 0))
@@ -120,7 +121,7 @@ function pubLabel(it: EphListItem): string {
 }
 
 function pubTitle(it: EphListItem): string {
-  return it.publishedMs ? `发布时间 ${fmtUtc(it.publishedMs, true)} UTC` : ''
+  return it.publishedMs ? t('eph.publishedAt', { t: fmtUtc(it.publishedMs, true) }) : ''
 }
 
 /** legacy 行池：服务器全量 + 本机导入去重合并（后端不可用回退时使用；同 NORAD+格式 服务器优先） */
@@ -203,31 +204,31 @@ async function setVisibility(v: 'public' | 'private') {
     it.visibility = v
     const row = serverRows.value.find((r) => r.id === it.id)
     if (row) row.visibility = v
-    visMsg.value = v === 'public' ? '已设为全平台可见（只读可用）' : '已设为仅自己可见'
+    visMsg.value = v === 'public' ? t('eph.visSetPublic') : t('eph.visSetPrivate')
   } catch (e) {
-    visMsg.value = (e as Error)?.message || '设置失败'
+    visMsg.value = (e as Error)?.message || t('eph.setFail')
   } finally {
     visBusy.value = false
   }
 }
 
 function visibilityText(v: EphListItem['visibility']): string {
-  return v === 'private' ? '仅自己可见' : v === 'vip' ? '仅 VIP 可见' : '全平台可见'
+  return v === 'private' ? t('eph.visPrivate') : v === 'vip' ? t('eph.visVip') : t('eph.visPublic')
 }
 
 async function removeSelected() {
   const it = selected.value
   if (!it || !canManage(it) || delBusy.value) return
-  if (!window.confirm(`确认删除星历「${it.name}」？\n将同时删除元数据与服务器上的星历文件，操作不可撤销。`)) return
+  if (!window.confirm(t('eph.deleteConfirm', { name: it.name }))) return
   delBusy.value = true
   visMsg.value = ''
   try {
     await deleteEphemeris(it.id)
     selectedId.value = ''
     await fetchServerPage()
-    importMsg.value = `已删除星历「${it.name}」`
+    importMsg.value = t('eph.deleted', { name: it.name })
   } catch (e) {
-    visMsg.value = (e as Error).message || '删除失败'
+    visMsg.value = (e as Error).message || t('eph.deleteFail')
   } finally {
     delBusy.value = false
   }
@@ -245,7 +246,10 @@ async function onFilesPicked(e: Event) {
   const skippedDup = usable.length - fresh.length
   const dropped = all.length - usable.length
   if (!fresh.length) {
-    importMsg.value = `没有需要导入的新文件（跳过已导入 ${skippedDup}${dropped ? ` · 格式/大小不符 ${dropped}` : ''}）`
+    importMsg.value = t('eph.noNewFiles', {
+      dup: skippedDup,
+      extra: dropped ? t('eph.noNewFilesExtra', { n: dropped }) : ''
+    })
     return
   }
   upBusy.value = true
@@ -256,14 +260,14 @@ async function onFilesPicked(e: Event) {
     for (let i = 0; i < fresh.length; i++) {
       const f = fresh[i]
       upName.value = f.name
-      importMsg.value = `正在导入 ${i + 1}/${fresh.length}：${f.name}`
+      importMsg.value = t('eph.importing', { i: i + 1, n: fresh.length, name: f.name })
       try {
         const r = await uploadEphemerisFile(f, f.name, auth.user ? upVisibility.value : undefined)
         stat[r.action]++
         importedNames.add(f.name)
       } catch (err) {
         stat.failed++
-        lastErr = (err as Error)?.message || '未知错误'
+        lastErr = (err as Error)?.message || t('eph.unknownError')
       }
       upProgress.value = Math.round(((i + 1) / fresh.length) * 100)
     }
@@ -272,10 +276,14 @@ async function onFilesPicked(e: Event) {
     } catch {
       /* 存储不可用时仅本次会话内去重 */
     }
-    const parts = [`新增 ${stat.added}`, `更新 ${stat.updated}`, `跳过 ${stat.skipped + skippedDup}`]
-    if (dropped) parts.push(`忽略 ${dropped}`)
-    if (stat.failed) parts.push(`失败 ${stat.failed}（${lastErr}）`)
-    importMsg.value = `导入完成：${parts.join(' · ')}`
+    const parts = [
+      t('eph.statAdded', { n: stat.added }),
+      t('eph.statUpdated', { n: stat.updated }),
+      t('eph.statSkipped', { n: stat.skipped + skippedDup })
+    ]
+    if (dropped) parts.push(t('eph.statIgnored', { n: dropped }))
+    if (stat.failed) parts.push(t('eph.statFailed', { n: stat.failed, err: lastErr }))
+    importMsg.value = t('eph.importDone', { parts: parts.join(' · ') })
     // 上传成功后刷新服务端列表并回到第一页
     page.value = 1
     await fetchServerPage()
@@ -302,17 +310,12 @@ const clientFiltered = computed(() => {
 
 /* ---------------- 列表分页（每页 20 条；服务端分页优先，后端不可用回退客户端分页） ---------------- */
 
-const jumpInput = ref('')
 /** 服务端模式下当前页的行 */
 const serverRows = ref<EphListItem[]>([])
 
 /** 实际展示行：服务端模式=当前页行；否则=客户端过滤池 */
 const displayItems = computed<EphListItem[]>(() =>
   serverActive.value ? serverRows.value : clientFiltered.value
-)
-
-const totalCountView = computed(() =>
-  serverActive.value ? serverTotal.value : clientFiltered.value.length
 )
 
 const totalPagesView = computed(() => {
@@ -377,36 +380,6 @@ watch(page, () => {
   if (serverActive.value) void fetchServerPage()
 })
 
-function goPage(p: number) {
-  page.value = Math.min(Math.max(1, p), totalPagesView.value)
-}
-
-/** 页码序列（总数 ≤ 7 页全展示，否则当前页两侧展开、其余以 … 折叠） */
-const pageItems = computed<(number | '…')[]>(() => {
-  const total = totalPagesView.value
-  const cur = Math.min(page.value, total)
-  if (total <= 7) return Array.from({ length: total }, (_, i) => i + 1)
-  const set = new Set<number>([1, total, cur - 1, cur, cur + 1])
-  if (cur <= 3) [2, 3, 4].forEach((n) => set.add(n))
-  if (cur >= total - 2) [total - 1, total - 2, total - 3].forEach((n) => set.add(n))
-  const nums = [...set].filter((n) => n >= 1 && n <= total).sort((a, b) => a - b)
-  const out: (number | '…')[] = []
-  let prev = 0
-  for (const n of nums) {
-    if (n - prev > 1) out.push('…')
-    out.push(n)
-    prev = n
-  }
-  return out
-})
-
-/** 跳转到指定页码（非法输入忽略，自动收敛到有效范围） */
-function jumpPage() {
-  const n = parseInt(jumpInput.value, 10)
-  if (Number.isFinite(n)) goPage(n)
-  jumpInput.value = ''
-}
-
 /**
  * 选中行：当前页内精确匹配 → 跨页保留的缓存行（翻页不丢预览）→ 当页首行
  */
@@ -459,7 +432,7 @@ async function refreshServer() {
   loading.value = true
   try {
     const r = await rebuildEphemerides()
-    importMsg.value = `已检查目录：新增 ${r.added} · 更新 ${r.updated} · 跳过 ${r.skipped}`
+    importMsg.value = t('eph.dirChecked', { a: r.added, u: r.updated, s: r.skipped })
   } catch {
     /* 后端不可用时仅刷新现有列表 */
   } finally {
@@ -480,7 +453,7 @@ async function reloadList() {
       selectedRow.value = first
     }
   } catch (e) {
-    loadError.value = (e as Error)?.message || '载入星历列表失败'
+    loadError.value = (e as Error)?.message || t('eph.loadListFail')
     legacyItems.value = []
   } finally {
     loading.value = false
@@ -532,15 +505,15 @@ function attachMansFromIndex(set: EphemSet, epochs: { t: number; dvMps?: number;
 function previewAuthError(e: unknown, action: string): string {
   const raw = e instanceof Error ? e.message : String(e)
   if (/\b401\b/.test(raw) || /未登录/.test(raw)) {
-    return `${action}失败：未登录或登录已过期，请重新登录后再试`
+    return t('eph.err401', { action })
   }
   if (/\b403\b/.test(raw) || /无权|没有权限|权限不足/.test(raw)) {
-    return `${action}失败：没有访问权限`
+    return t('eph.err403', { action })
   }
   if (/\b404\b/.test(raw)) {
-    return `${action}失败：文件不存在`
+    return t('eph.err404', { action })
   }
-  return `${action}失败：${raw}`
+  return t('eph.errOther', { action, err: raw })
 }
 
 function fileNameFromPath(path: string): string {
@@ -588,11 +561,11 @@ function viewRawFile() {
       const name = fileNameFromPath(f)
       const how = openPreviewText(body, name, tab)
       if (how === 'download') {
-        saveDocsMsg.value = `浏览器拦截了新标签，已改为下载「${name}」`
+        saveDocsMsg.value = t('eph.downloadInstead', { name })
       }
     } catch (e) {
       if (tab && !tab.closed) tab.close()
-      saveDocsMsg.value = previewAuthError(e, '查看原文件')
+      saveDocsMsg.value = previewAuthError(e, t('eph.actionViewRaw'))
     }
   })()
 }
@@ -624,29 +597,29 @@ async function openInSituation() {
   // 本机导入行：无服务器文件，直接从 IndexedDB 激活
   if (!row.file) {
     jumping.value = true
-    msg.value = `正在载入 ${row.name}（${row.format}）…`
+    msg.value = t('eph.loadingJump', { name: row.name, fmt: row.format })
     try {
       await activateEphem(row.id)
       if (!activeEphem.value || activeEphem.value.id !== row.id) {
-        throw new Error('星历激活失败（本机缓存读取异常，请重新导入）')
+        throw new Error(t('eph.activateFailCache'))
       }
       clearManeuver()
       ephOpen.value = true
       await router.push({ path: '/situation' })
-      msg.value = `已跳转态势 · ${row.name}`
+      msg.value = t('eph.jumped', { name: row.name })
     } catch (e) {
-      msg.value = (e as Error)?.message || '跳转态势失败'
+      msg.value = (e as Error)?.message || t('eph.jumpFail')
     } finally {
       jumping.value = false
     }
     return
   }
   jumping.value = true
-  msg.value = `正在载入 ${row.name}（${row.format}）…`
+  msg.value = t('eph.loadingJump', { name: row.name, fmt: row.format })
   try {
     const body = await fetchEphemerisText(row.file)
     const parsed = parseEphemeris(body, { fileName: row.file, name: row.name, norad: Number(row.norad) || undefined })
-    if (!parsed.ok || !parsed.set) throw new Error(parsed.error || '星历解析失败')
+    if (!parsed.ok || !parsed.set) throw new Error(parsed.error || t('eph.parseFail'))
     let set = parsed.set
     // 与态势「星历分析」面板内置样本同 ID（builtin[-ocm]-<norad>）→ 跳转后面板卡片可正确高亮
     set.id = row.format === 'OCM' ? `builtin-ocm-${row.norad}` : `builtin-${row.norad}`
@@ -661,7 +634,7 @@ async function openInSituation() {
     await putSet(set)
     await activateEphem(set.id)
     if (!activeEphem.value || activeEphem.value.id !== set.id) {
-      throw new Error('星历激活失败（本机缓存写入/读回异常，请重试）')
+      throw new Error(t('eph.activateFailWrite'))
     }
     clearManeuver()
 
@@ -670,9 +643,9 @@ async function openInSituation() {
       path: '/situation/eph',
       query: { ephId: row.id, norad: row.norad, format: row.format }
     })
-    msg.value = `已跳转态势 · ${row.name}`
+    msg.value = t('eph.jumped', { name: row.name })
   } catch (e) {
-    msg.value = (e as Error)?.message || '跳转态势失败'
+    msg.value = (e as Error)?.message || t('eph.jumpFail')
   } finally {
     jumping.value = false
   }
@@ -692,12 +665,12 @@ const manCache = new Map<string, ManRow[]>()
 
 /** 纬度 → 「北纬 x.x° / 南纬 x.x°」 */
 function fmtLat(lat: number): string {
-  return `${lat >= 0 ? '北纬' : '南纬'} ${Math.abs(lat).toFixed(2)}°`
+  return `${lat >= 0 ? t('geo.n') : t('geo.s')} ${Math.abs(lat).toFixed(2)}°`
 }
 
 /** 经度 → 「东经 x.x° / 西经 x.x°」 */
 function fmtLon(lon: number): string {
-  return `${lon >= 0 ? '东经' : '西经'} ${Math.abs(lon).toFixed(2)}°`
+  return `${lon >= 0 ? t('geo.e') : t('geo.w')} ${Math.abs(lon).toFixed(2)}°`
 }
 
 /** ECI 位置 → 大地经纬度（GMST 旋转、球形近似；与态势机动面板同口径） */
@@ -822,7 +795,7 @@ async function fetchVersions() {
     verPage.value = data.page
   } catch (e) {
     if (seq !== verSeq) return
-    verErr.value = (e as Error)?.message || '载入版本历史失败'
+    verErr.value = (e as Error)?.message || t('eph.verLoadFail')
     verItems.value = []
   } finally {
     if (seq === verSeq) verLoading.value = false
@@ -851,11 +824,11 @@ function viewVer(v: EphVersion) {
       const name = `ephemeris-version-${v.id}.txt`
       const how = openPreviewText(body, name, tab)
       if (how === 'download') {
-        verMsg.value = `浏览器拦截了新标签，已改为下载「${name}」`
+        verMsg.value = t('eph.downloadInstead', { name })
       }
     } catch (e) {
       if (tab && !tab.closed) tab.close()
-      verMsg.value = previewAuthError(e, '查看版本')
+      verMsg.value = previewAuthError(e, t('eph.actionViewVer'))
     }
   })()
 }
@@ -863,15 +836,15 @@ function viewVer(v: EphVersion) {
 /** 软删版本（行与文件均保留；需登录，未登录时报 401 提示） */
 async function delVer(v: EphVersion) {
   if (verBusyId.value) return
-  if (!window.confirm(`确认删除版本 #${v.id}（${fmtVerTime(v.createdAt)} UTC）？\n删除仅隐藏记录，文件与审计均保留（软删）。`)) return
+  if (!window.confirm(t('eph.verDeleteConfirm', { id: v.id, t: fmtVerTime(v.createdAt) }))) return
   verBusyId.value = v.id
   verMsg.value = ''
   try {
     await softDeleteEphemerisVersion(v.id)
-    verMsg.value = `版本 #${v.id} 已删除（软删，文件保留）`
+    verMsg.value = t('eph.verDeleted', { id: v.id })
     await fetchVersions()
   } catch (e) {
-    verMsg.value = (e as Error)?.message || '删除失败'
+    verMsg.value = (e as Error)?.message || t('eph.deleteFail')
   } finally {
     verBusyId.value = 0
   }
@@ -933,7 +906,7 @@ async function fetchAccSources() {
     if (seq !== accSeq) return
     accSources.value = []
     accBSel.value = ''
-    accErr.value = (e as Error)?.message || '载入对比源失败'
+    accErr.value = (e as Error)?.message || t('eph.accLoadFail')
   } finally {
     if (seq === accSeq) accLoading.value = false
   }
@@ -952,7 +925,7 @@ async function runCompare() {
   try {
     accResult.value = await postAccuracyCompare({ norad: row.norad, a: { kind: 'ocm', id: row.id }, b })
   } catch (e) {
-    accErr.value = (e as Error)?.message || '对比计算失败'
+    accErr.value = (e as Error)?.message || t('eph.accCalcFail')
     accResult.value = null
   } finally {
     accBusy.value = false
@@ -1047,21 +1020,21 @@ onMounted(() => {
     <section class="upload-zone" :class="{ disabled: !canUpload }">
       <div class="uz-row">
         <div class="uz-text">
-          <div class="uz-title">导入星历文件 / 目录</div>
-          <div class="uz-sub">支持 ITC（Starlink MEME）/ CCSDS OEM / OCM · 单文件 ≤ 12 MB · 目录导入自动跳过已导入文件（按文件名）</div>
+          <div class="uz-title">{{ t('eph.importTitle') }}</div>
+          <div class="uz-sub">{{ t('eph.importSub') }}</div>
           <div v-if="!canUpload" class="uz-perm warn">{{ t('eph.uploadDenied') }}</div>
-          <div v-else class="uz-perm">权限：VIP 组织仅可上传本组织已认领目标的星历；超管可上传任意目标星历。上传后可在右侧切换「全平台可见 / 仅自己可见」。</div>
+          <div v-else class="uz-perm">{{ t('eph.importPerm') }}</div>
         </div>
         <div class="uz-actions">
           <label v-if="auth.user" class="uz-vis">
-            <span>可见性</span>
+            <span>{{ t('eph.visibility') }}</span>
             <select v-model="upVisibility" :disabled="!canUpload">
-              <option value="private">仅自己可见</option>
-              <option value="public">全平台可见</option>
+              <option value="private">{{ t('eph.visPrivate') }}</option>
+              <option value="public">{{ t('eph.visPublic') }}</option>
             </select>
           </label>
-          <button type="button" class="btn" :disabled="upBusy || !canUpload" @click="pickFiles">选择文件</button>
-          <button type="button" class="btn" :disabled="upBusy || !canUpload" @click="pickDir">选择目录</button>
+          <button type="button" class="btn" :disabled="upBusy || !canUpload" @click="pickFiles">{{ t('eph.pickFiles') }}</button>
+          <button type="button" class="btn" :disabled="upBusy || !canUpload" @click="pickDir">{{ t('eph.pickDir') }}</button>
         </div>
       </div>
       <div v-if="upBusy" class="uz-progress">
@@ -1083,9 +1056,9 @@ onMounted(() => {
             <button type="button" :class="{ on: statusFilter === 'OCM' }" @click="statusFilter = 'OCM'">OCM</button>
           </div>
         </div>
-        <div v-if="loading" class="list-empty">载入中…</div>
+        <div v-if="loading" class="list-empty">{{ t('eph.loadingList') }}</div>
         <div v-else-if="loadError" class="list-empty err">{{ loadError }}</div>
-        <div v-else-if="!paged.length" class="list-empty">无匹配星历</div>
+        <div v-else-if="!paged.length" class="list-empty">{{ t('eph.noMatch') }}</div>
         <div v-else class="list">
           <button
             v-for="it in paged"
@@ -1104,29 +1077,15 @@ onMounted(() => {
             <div class="row-tags">
               <span class="tg" :class="{ ocm: it.format === 'OCM' }">{{ it.format }}</span>
               <span v-if="it.ownerUserId" class="tg up" :title="it.uploadedBy || ''">{{ t('eph.userUploaded') }}</span>
-              <span v-if="it.maneuvers > 0" class="tg man">{{ it.maneuvers }} 处机动</span>
-              <span class="tg" :class="{ cov: it.covariance }">{{ it.covariance ? '含协方差' : '无协方差' }}</span>
-              <span v-if="it.visibility === 'private'" class="tg priv">仅自己可见</span>
-              <span v-if="it.visibility === 'vip'" class="tg vip">仅 VIP 可见</span>
+              <span v-if="it.maneuvers > 0" class="tg man">{{ t('eph.maneuverCount', { n: it.maneuvers }) }}</span>
+              <span class="tg" :class="{ cov: it.covariance }">{{ it.covariance ? t('eph.hasCov') : t('eph.noCov') }}</span>
+              <span v-if="it.visibility === 'private'" class="tg priv">{{ t('eph.visPrivate') }}</span>
+              <span v-if="it.visibility === 'vip'" class="tg vip">{{ t('eph.visVip') }}</span>
             </div>
           </button>
         </div>
         <div v-if="!loading && !loadError && paged.length" class="pager">
-          <div class="pager-nav">
-            <button type="button" :disabled="page <= 1" @click="goPage(page - 1)">‹</button>
-            <template v-for="(p, i) in pageItems" :key="`${p}-${i}`">
-              <span v-if="p === '…'" class="pager-ell">…</span>
-              <button v-else type="button" :class="{ on: p === page }" @click="goPage(p)">{{ p }}</button>
-            </template>
-            <button type="button" :disabled="page >= totalPagesView" @click="goPage(page + 1)">›</button>
-          </div>
-          <span class="pager-info">共 {{ totalCountView }} 条 · 第 {{ page }}/{{ totalPagesView }} 页</span>
-          <div class="pager-jump">
-            <span>跳至</span>
-            <OspNumberInput v-model="jumpInput" min="1" :max="totalPagesView" placeholder="页码" @keyup.enter="jumpPage" />
-            <span>/ {{ totalPagesView }} 页</span>
-            <button type="button" @click="jumpPage">跳转</button>
-          </div>
+          <CompactPager v-model:page="page" :total-pages="totalPagesView" :disabled="loading" />
         </div>
       </aside>
 
@@ -1137,19 +1096,19 @@ onMounted(() => {
         </header>
         <div v-if="selected" class="prev-body">
           <div class="vis-bar">
-            <span class="vis-label">可见性</span>
+            <span class="vis-label">{{ t('eph.visibility') }}</span>
             <span class="vis-badge" :class="(selected.visibility ?? 'public')">
               {{ visibilityText(selected.visibility) }}
             </span>
             <template v-if="canManage(selected)">
-              <button type="button" :disabled="visBusy || (selected.visibility ?? 'public') === 'public'" @click="setVisibility('public')">全平台可见</button>
-              <button type="button" :disabled="visBusy || (selected.visibility ?? 'public') === 'private'" @click="setVisibility('private')">仅自己可见</button>
-              <button type="button" class="danger" :disabled="delBusy" @click="removeSelected">{{ delBusy ? '删除中…' : '删除星历' }}</button>
+              <button type="button" :disabled="visBusy || (selected.visibility ?? 'public') === 'public'" @click="setVisibility('public')">{{ t('eph.visPublic') }}</button>
+              <button type="button" :disabled="visBusy || (selected.visibility ?? 'public') === 'private'" @click="setVisibility('private')">{{ t('eph.visPrivate') }}</button>
+              <button type="button" class="danger" :disabled="delBusy" @click="removeSelected">{{ delBusy ? t('eph.deleting') : t('eph.deleteEph') }}</button>
             </template>
             <span v-if="visMsg" class="vis-msg">{{ visMsg }}</span>
           </div>
           <dl class="kv">
-            <div class="span2"><dt>名称</dt><dd>{{ selected.name }}</dd></div>
+            <div class="span2"><dt>{{ t('eph.name') }}</dt><dd>{{ selected.name }}</dd></div>
             <div class="span2"><dt>NORAD ID</dt><dd class="mono">{{ selected.norad }}</dd></div>
             <div><dt>{{ t('eph.format') }}</dt><dd>{{ selected.format }}</dd></div>
             <div><dt>{{ t('eph.points') }}</dt><dd>{{ selected.points.toLocaleString() }}</dd></div>
@@ -1161,18 +1120,18 @@ onMounted(() => {
               <dd :class="{ ok: selected.covariance }">{{ selected.covariance ? `${t('eph.yes')}${selected.covFrame ? ' · ' + selected.covFrame : ''}` : t('eph.none') }}</dd>
             </div>
             <div><dt>{{ t('eph.updated') }}</dt><dd>{{ selected.updatedAt }}</dd></div>
-            <div class="span-all"><dt>来源</dt><dd>{{ selected.originator || '—' }}<span v-if="selected.ownerUserId" class="tg up" :title="selected.uploadedBy || ''">{{ t('eph.userUploaded') }}<template v-if="selected.uploadedBy"> · {{ selected.uploadedBy }}</template></span></dd></div>
-            <div class="span-all"><dt>{{ t('eph.file') }}</dt><dd class="mono file-row"><span>{{ selected.file || '本机导入（IndexedDB）' }}</span><span class="file-actions"><button v-if="selected.file" type="button" class="view-raw" :disabled="saveDocsBusy" @click="saveToMyDocs">{{ saveDocsBusy ? t('eph.saveDocsBusy') : t('eph.saveToDocs') }}</button><button v-if="selected.file" type="button" class="view-raw" :title="t('eph.viewRawTip')" @click="viewRawFile">{{ t('eph.viewRaw') }}</button></span></dd><p v-if="saveDocsMsg" class="save-docs-msg">{{ saveDocsMsg }}</p></div>
+            <div class="span-all"><dt>{{ t('eph.origin') }}</dt><dd>{{ selected.originator || '—' }}<span v-if="selected.ownerUserId" class="tg up" :title="selected.uploadedBy || ''">{{ t('eph.userUploaded') }}<template v-if="selected.uploadedBy"> · {{ selected.uploadedBy }}</template></span></dd></div>
+            <div class="span-all"><dt>{{ t('eph.file') }}</dt><dd class="mono file-row"><span>{{ selected.file || t('eph.localImport') }}</span><span class="file-actions"><button v-if="selected.file" type="button" class="view-raw" :disabled="saveDocsBusy" @click="saveToMyDocs">{{ saveDocsBusy ? t('eph.saveDocsBusy') : t('eph.saveToDocs') }}</button><button v-if="selected.file" type="button" class="view-raw" :title="t('eph.viewRawTip')" @click="viewRawFile">{{ t('eph.viewRaw') }}</button></span></dd><p v-if="saveDocsMsg" class="save-docs-msg">{{ saveDocsMsg }}</p></div>
           </dl>
 
           <div class="man-block">
             <div class="man-head">
-              <span class="man-title">机动信息</span>
-              <span class="man-count">{{ manRows.length ? `${manRows.length} 处机动` : (manLoading ? '计算中…' : '无') }}</span>
+              <span class="man-title">{{ t('eph.manTitle') }}</span>
+              <span class="man-count">{{ manRows.length ? t('eph.maneuverCount', { n: manRows.length }) : (manLoading ? t('eph.calculating') : t('eph.none')) }}</span>
             </div>
             <table v-if="manRows.length" class="man-table">
               <thead>
-                <tr><th>#</th><th>时间 (UTC)</th><th>Duration</th><th>纬度</th><th>经度</th></tr>
+                <tr><th>#</th><th>{{ t('eph.timeUtc') }}</th><th>Duration</th><th>{{ t('eph.lat') }}</th><th>{{ t('eph.lon') }}</th></tr>
               </thead>
               <tbody>
                 <tr v-for="(m, i) in manRows" :key="i">
@@ -1184,19 +1143,19 @@ onMounted(() => {
                 </tr>
               </tbody>
             </table>
-            <p v-else class="man-none">{{ manLoading ? '计算中…' : '无' }}</p>
+            <p v-else class="man-none">{{ manLoading ? t('eph.calculating') : t('eph.none') }}</p>
           </div>
 
           <div class="ver-block">
             <div class="ver-head">
-              <span class="ver-title">版本历史</span>
-              <span class="ver-count">{{ verLoading && !verItems.length ? '载入中…' : `${verTotal} 个版本` }}</span>
+              <span class="ver-title">{{ t('eph.verTitle') }}</span>
+              <span class="ver-count">{{ verLoading && !verItems.length ? t('eph.loadingList') : t('eph.verCount', { n: verTotal }) }}</span>
             </div>
             <template v-if="verAvailable">
               <p v-if="verErr" class="ver-err">{{ verErr }}</p>
               <table v-else-if="verItems.length" class="ver-table">
                 <thead>
-                  <tr><th>#</th><th>归档时间 (UTC)</th><th>发布</th><th>来源</th><th>SHA-256</th><th>大小</th><th>操作</th></tr>
+                  <tr><th>#</th><th>{{ t('eph.verArchived') }}</th><th>{{ t('eph.verPublish') }}</th><th>{{ t('eph.verSource') }}</th><th>SHA-256</th><th>{{ t('eph.verSize') }}</th><th>{{ t('eph.verOps') }}</th></tr>
                 </thead>
                 <tbody>
                   <tr v-for="v in verItems" :key="v.id">
@@ -1204,26 +1163,26 @@ onMounted(() => {
                     <td class="mono">{{ fmtVerTime(v.createdAt) }}</td>
                     <td class="mono">{{ v.publishedMs ? fmtUtc(v.publishedMs) : '—' }}</td>
                     <td>
-                      <span class="ver-src" :class="v.source">{{ v.source === 'upload' ? '上传' : '扫描' }}</span>
+                      <span class="ver-src" :class="v.source">{{ v.source === 'upload' ? t('eph.verUpload') : t('eph.verScan') }}</span>
                       <span v-if="v.uploadedBy && v.uploadedBy !== 'system' && v.uploadedBy !== 'anonymous'" class="ver-by" :title="v.uploadedBy">{{ v.uploadedBy }}</span>
                     </td>
                     <td class="mono" :title="v.sha256">{{ v.sha256.slice(0, 10) }}…</td>
                     <td>{{ fmtBytes(v.rawBytes) }}</td>
                     <td class="ver-ops">
-                      <button type="button" class="ver-btn" @click="viewVer(v)">查看</button>
-                      <button type="button" class="ver-btn del" :disabled="verBusyId === v.id" @click="delVer(v)">删除</button>
+                      <button type="button" class="ver-btn" @click="viewVer(v)">{{ t('eph.view') }}</button>
+                      <button type="button" class="ver-btn del" :disabled="verBusyId === v.id" @click="delVer(v)">{{ t('eph.deleteOne') }}</button>
                     </td>
                   </tr>
                 </tbody>
               </table>
-              <p v-else class="ver-none">{{ verLoading ? '载入中…' : '暂无版本记录（上传或扫描入库时自动归档）' }}</p>
+              <p v-else class="ver-none">{{ verLoading ? t('eph.loadingList') : t('eph.verEmpty') }}</p>
               <div v-if="verTotalPages > 1" class="ver-pager">
                 <button type="button" :disabled="verPage <= 1" @click="verPage--">‹</button>
-                <span>第 {{ verPage }}/{{ verTotalPages }} 页</span>
+                <span>{{ verPage }}/{{ verTotalPages }}</span>
                 <button type="button" :disabled="verPage >= verTotalPages" @click="verPage++">›</button>
               </div>
             </template>
-            <p v-else class="ver-none">本机导入星历无服务端版本归档</p>
+            <p v-else class="ver-none">{{ t('eph.verLocalNone') }}</p>
             <p v-if="verMsg" class="ver-msg">{{ verMsg }}</p>
           </div>
 
@@ -1269,7 +1228,7 @@ onMounted(() => {
           <p v-if="msg" class="msg">{{ msg }}</p>
         </div>
         <div v-else class="prev-body">
-          <p class="note">{{ loadError || '请选择左侧星历' }}</p>
+          <p class="note">{{ loadError || t('eph.selectLeft') }}</p>
         </div>
       </section>
     </section>
@@ -1339,29 +1298,11 @@ h1 { margin: 0; font-size: 16px; font-weight: 650; }
 .list { flex: 1; overflow: auto; padding: 6px; display: flex; flex-direction: column; gap: 4px; }
 .list-empty { padding: 20px 12px; font-size: 12px; color: var(--text-dim); text-align: center; }
 .list-empty.err { color: var(--danger); }
-/* 分页条（每页 20 条 + 跳转页码） */
+/* 分页条：一行压缩（页码链接 + 当前页/总页数 + 跳转，不显示总条数） */
 .pager {
-  border-top: 1px solid var(--border); padding: 8px 10px;
-  display: flex; align-items: center; flex-wrap: wrap; gap: 6px 8px;
-  font-size: 10px; color: var(--text-dim); flex: none;
+  border-top: 1px solid var(--border); padding: 6px 10px;
+  flex: none; min-width: 0;
 }
-.pager-nav { display: flex; align-items: center; gap: 3px; }
-.pager button {
-  appearance: none; border: 1px solid var(--border); background: var(--bg-deep);
-  color: var(--text-muted); font-size: 10px; line-height: 1; padding: 4px 7px; border-radius: 3px; cursor: pointer;
-}
-.pager button:hover:not(:disabled) { border-color: rgba(74, 125, 154, 0.5); color: var(--text); }
-.pager button.on { border-color: rgba(74, 125, 154, 0.5); background: var(--accent-soft); color: var(--text); }
-.pager button:disabled { opacity: 0.4; cursor: default; }
-.pager-ell { color: var(--text-dim); padding: 0 1px; }
-.pager-info { white-space: nowrap; }
-.pager-jump { display: flex; align-items: center; gap: 4px; white-space: nowrap; }
-.pager-jump .osp-num {
-  width: 64px;
-  font-size: 10px;
-  background: var(--bg-deep);
-}
-.pager-jump .osp-num:focus-within { border-color: rgba(74, 125, 154, 0.5); }
 .row {
   appearance: none; text-align: left; border: 1px solid transparent; background: transparent;
   color: var(--text); border-radius: 6px; padding: 8px 10px; cursor: pointer;

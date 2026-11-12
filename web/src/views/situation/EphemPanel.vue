@@ -17,6 +17,7 @@ import {
 } from './ephem/useUserEphemeris'
 import type { ThreatEvent, Vec3 } from './ephem/types'
 import { useI18n } from '@/composables/useI18n'
+import CompactPager from '@/components/CompactPager.vue'
 import type { EphemMeta } from './ephem/store'
 import { interpolateAt } from './ephem/interp'
 import { gmstRad } from './ephem/time'
@@ -187,10 +188,6 @@ const pagedEphs = computed(() =>
   filteredMerged.value.slice((epPage.value - 1) * EP_PAGE_SIZE, epPage.value * EP_PAGE_SIZE)
 )
 
-function epGoPage(p: number) {
-  epPage.value = Math.min(Math.max(1, p), epTotalPages.value)
-}
-
 /** 头部计数：合并去重后的总份数（与星历管理页口径一致） */
 const totalEphCount = computed(() => mergedEphs.value.length)
 
@@ -204,12 +201,12 @@ function eciToLatLon(r: Vec3, tMs: number): { lat: number; lon: number } {
 
 /** 纬度 → 「北纬 x.x° / 南纬 x.x°」 */
 function fmtLat(lat: number): string {
-  return `${lat >= 0 ? '北纬' : '南纬'} ${Math.abs(lat).toFixed(2)}°`
+  return `${lat >= 0 ? t('geo.n') : t('geo.s')} ${Math.abs(lat).toFixed(2)}°`
 }
 
 /** 经度 → 「东经 x.x° / 西经 x.x°」 */
 function fmtLon(lon: number): string {
-  return `${lon >= 0 ? '东经' : '西经'} ${Math.abs(lon).toFixed(2)}°`
+  return `${lon >= 0 ? t('geo.e') : t('geo.w')} ${Math.abs(lon).toFixed(2)}°`
 }
 
 /** 机动明细列表：每段 MAN 的起始时刻 / 时长 / 位置经纬度（OCM 专有） */
@@ -350,12 +347,12 @@ function isCardActive(c: EphCard): boolean {
         @touchend="onDragEnd"
         @touchcancel="onDragEnd">
         <div class="sp-head-main">
-          <b class="sp-title">星历文件解析</b>
-          <span class="sp-count">{{ totalEphCount }} 份星历</span>
-          <span class="sp-meta">{{ activeName || '上传高精度星历，生成交会威胁分析' }}</span>
+          <b class="sp-title">{{ t('ephp.title') }}</b>
+          <span class="sp-count">{{ t('ephp.count', { n: totalEphCount }) }}</span>
+          <span class="sp-meta">{{ activeName || t('ephp.metaEmpty') }}</span>
         </div>
         <!-- 收起按钮：向右三角（与左侧「太空安全目标列表」收起键配套，方向相反） -->
-        <button class="sp-close sp-close-tri" title="收起（点底部菜单可再次展开）" aria-label="收起星历分析" @click="emit('close')">
+        <button class="sp-close sp-close-tri" :title="t('ephp.collapse')" :aria-label="t('ephp.collapseAria')" @click="emit('close')">
           <svg viewBox="0 0 10 10" aria-hidden="true"><path d="M3 1.5 L7 5 L3 8.5 Z" /></svg>
         </button>
       </div>
@@ -365,16 +362,16 @@ function isCardActive(c: EphCard): boolean {
         <input
           v-model="epInput"
           type="search"
-          placeholder="搜索星历（名称 / NORAD ID）"
+          :placeholder="t('ephp.searchPh')"
           @keyup.enter="applySearch"
         />
-        <button class="ep-search-btn" type="button" title="应用搜索" @click="applySearch">搜索</button>
+        <button class="ep-search-btn" type="button" :title="t('ephp.applySearch')" @click="applySearch">{{ t('ephp.search') }}</button>
       </div>
 
       <div class="ep-scroll">
         <!-- 星历列表（服务端样本 + 本机记录合并、去重后统一分页，每页 6 张） -->
         <div class="ep-sec">
-          <div class="ep-sec-title">我的星历<span class="ep-sec-sub">含服务端样本 · {{ filteredMerged.length }} 份</span></div>
+          <div class="ep-sec-title">{{ t('ephp.mine') }}<span class="ep-sec-sub">{{ t('ephp.mineSub', { n: filteredMerged.length }) }}</span></div>
           <div class="ep-drop" :class="{ on: dragOver, busy: ephemBusy }"
             @click="pickFiles"
             @dragover.prevent="dragOver = true"
@@ -382,8 +379,8 @@ function isCardActive(c: EphCard): boolean {
             @drop.prevent="onDrop">
             <input ref="fileInput" class="ep-file" type="file" multiple
               accept=".itc,.txt,.oem,.ocm,.e,.json" @change="onFileChange" />
-            <b>点击或拖拽星历文件到此处</b>
-            <span>支持 ITC（Starlink MEME）/ CCSDS OEM / OCM，单文件 ≤ {{ MAX_FILE_MB }} MB</span>
+            <b>{{ t('ephp.dropTitle') }}</b>
+            <span>{{ t('ephp.dropSub', { n: MAX_FILE_MB }) }}</span>
           </div>
           <div v-if="ephemBusy && uploadName" class="ep-progress">
             <div class="ep-bar"><i :style="{ width: uploadProgress + '%' }"></i></div>
@@ -399,49 +396,49 @@ function isCardActive(c: EphCard): boolean {
                 <b class="ep-name" :title="c.name">{{ c.name }}</b>
                 <div class="ep-tags">
                   <span class="ep-tag" :class="{ ocm: c.format === 'OCM' }">{{ c.format }}</span>
-                  <span v-if="c.maneuvers > 0" class="ep-tag man" :title="c.maneuverSummary">{{ c.maneuvers }} 处机动</span>
-                  <span class="ep-tag" :class="{ cov: c.hasCov }">{{ c.hasCov ? '含协方差' : '无协方差' }}</span>
+                  <span v-if="c.maneuvers > 0" class="ep-tag man" :title="c.maneuverSummary">{{ t('eph.maneuverCount', { n: c.maneuvers }) }}</span>
+                  <span class="ep-tag" :class="{ cov: c.hasCov }">{{ c.hasCov ? t('eph.hasCov') : t('eph.noCov') }}</span>
                 </div>
                 <div class="ep-meta">
                   <span>NORAD {{ c.norad || '—' }}</span>
                   <span>{{ fmtUtc(c.startMs) }} ~ {{ fmtUtc(c.stopMs) }} UTC</span>
                 </div>
                 <div class="ep-meta">
-                  <span>{{ c.points.toLocaleString() }} 点</span>
+                  <span>{{ c.points.toLocaleString() }}</span>
                   <span v-if="c.sizeText">{{ c.sizeText }}</span>
                 </div>
                 <button v-if="c.kind === 'builtin'" class="ep-load" type="button"
-                  :title="c.loaded ? '已载入过，点击重新解析载入' : '解析并载入这份样本'"
-                  @click.stop="chooseCard(c)">{{ c.loaded ? '重新载入' : '载入' }}</button>
-                <button v-else class="ep-del" title="删除这份星历" @click.stop="dropSet(c.id)">×</button>
+                  :title="c.loaded ? t('ephp.loadedTip') : t('ephp.loadTip')"
+                  @click.stop="chooseCard(c)">{{ c.loaded ? t('ephp.reload') : t('ephp.load') }}</button>
+                <button v-else class="ep-del" :title="t('ephp.deleteOne')" @click.stop="dropSet(c.id)">×</button>
               </div>
             </div>
-            <div v-else class="ep-empty">无匹配星历</div>
-            <div v-if="epTotalPages > 1" class="ep-pager">
-              <button type="button" :disabled="epPage <= 1" title="上一页" @click="epGoPage(epPage - 1)">‹</button>
-              <button v-for="p in epTotalPages" :key="p" type="button"
-                :class="{ on: p === epPage }" @click="epGoPage(p)">{{ p }}</button>
-              <button type="button" :disabled="epPage >= epTotalPages" title="下一页" @click="epGoPage(epPage + 1)">›</button>
-            </div>
+            <div v-else class="ep-empty">{{ t('eph.noMatch') }}</div>
+            <CompactPager
+              v-if="filteredMerged.length"
+              class="ep-pager"
+              v-model:page="epPage"
+              :total-pages="epTotalPages"
+            />
           </template>
-          <div v-else-if="!ephemBusy" class="ep-empty">还没有星历文件，可上传文件，或在星历管理页点「刷新」同步服务端样本</div>
+          <div v-else-if="!ephemBusy" class="ep-empty">{{ t('ephp.empty') }}</div>
         </div>
 
         <!-- 当前星历信息 + 质量 -->
         <div v-if="activeEphem" class="ep-sec">
-          <div class="ep-sec-title">星历信息</div>
+          <div class="ep-sec-title">{{ t('ephp.info') }}</div>
           <div class="ep-kv">
-            <div class="ep-kv-row"><span>名称</span><b>{{ activeEphem.name }}</b></div>
+            <div class="ep-kv-row"><span>{{ t('eph.name') }}</span><b>{{ activeEphem.name }}</b></div>
             <div class="ep-kv-row"><span>NORAD</span><b>{{ activeEphem.norad || '—' }}</b></div>
-            <div class="ep-kv-row"><span>格式 / 坐标系</span><b>{{ activeEphem.format.toUpperCase() }} · {{ activeEphem.frame }}</b></div>
-            <div class="ep-kv-row"><span>有效期(UTC)</span><b>{{ fmtUtc(activeEphem.states[0]?.t ?? activeEphem.start, true) }} ~ {{ fmtUtc(activeEphem.states[activeEphem.states.length - 1]?.t ?? activeEphem.stop, true) }}</b></div>
-            <div class="ep-kv-row"><span>步长 / 点数</span><b>{{ activeEphem.stepSec }} s · {{ activeEphem.states.length.toLocaleString() }}</b></div>
-            <div class="ep-kv-row"><span>协方差</span><b>{{ activeMeta?.hasCov ? '有' : '无' }}</b></div>
+            <div class="ep-kv-row"><span>{{ t('ephp.fFormatFrame') }}</span><b>{{ activeEphem.format.toUpperCase() }} · {{ activeEphem.frame }}</b></div>
+            <div class="ep-kv-row"><span>{{ t('ephp.fValidity') }}</span><b>{{ fmtUtc(activeEphem.states[0]?.t ?? activeEphem.start, true) }} ~ {{ fmtUtc(activeEphem.states[activeEphem.states.length - 1]?.t ?? activeEphem.stop, true) }}</b></div>
+            <div class="ep-kv-row"><span>{{ t('ephp.fStepPoints') }}</span><b>{{ activeEphem.stepSec }} s · {{ activeEphem.states.length.toLocaleString() }}</b></div>
+            <div class="ep-kv-row"><span>{{ t('ephp.fCov') }}</span><b>{{ activeMeta?.hasCov ? t('eph.yes') : t('eph.none') }}</b></div>
             <div class="ep-kv-row ep-kv-man">
-              <span>机动</span>
+              <span>{{ t('ephp.fManeuvers') }}</span>
               <b>
                 <template v-if="activeManList.length">
-                  <span class="ep-man-line">{{ activeManList.length }} 处机动段</span>
+                  <span class="ep-man-line">{{ t('ephp.manSegs', { n: activeManList.length }) }}</span>
                   <button
                     v-for="(m, i) in activeManList"
                     :key="i"
@@ -453,12 +450,12 @@ function isCardActive(c: EphCard): boolean {
                   >
                     <span class="ep-man-line is-head">
                       <span>{{ i + 1 }}. {{ fmtUtc(m.t0, true) }} UTC · {{ m.duraSec }} s</span>
-                      <em v-if="m.done" class="ep-man-done">已完成</em>
+                      <em v-if="m.done" class="ep-man-done">{{ t('ephp.manDone') }}</em>
                     </span>
                     <span class="ep-man-line is-item">{{ m.lat }} / {{ m.lon }}</span>
                   </button>
                 </template>
-                <template v-else>无</template>
+                <template v-else>{{ t('eph.none') }}</template>
               </b>
             </div>
           </div>
@@ -577,14 +574,8 @@ function isCardActive(c: EphCard): boolean {
   transition: background 0.15s, color 0.15s;
   &:hover { background: rgba(80,140,230,0.3); color: #9fc6ff; } }
 
-/* 分页导航（每页 6 张卡片） */
-.ep-pager { display: flex; align-items: center; justify-content: center; flex-wrap: wrap; gap: 4px; margin-top: 8px;
-  button { min-width: 22px; height: 22px; padding: 0 5px; font-size: 10.5px; line-height: 1; color: #9dbbdd;
-    background: rgba(30,60,100,0.35); border: 1px solid rgba(110,150,210,0.28); border-radius: 4px; cursor: pointer;
-    transition: background 0.15s, border-color 0.15s;
-    &:hover:not(:disabled):not(.on) { color: #dbe9fb; border-color: rgba(120,175,255,0.5); }
-    &.on { color: #eaf2fc; font-weight: 700; border-color: #4f8de0; background: rgba(50,100,180,0.45); }
-    &:disabled { opacity: 0.4; cursor: default; } } }
+/* 分页导航：一行压缩（每页 6 张卡片） */
+.ep-pager { margin-top: 8px; min-width: 0; }
 
 /* 键值表 */
 .ep-kv { display: flex; flex-direction: column; gap: 4px; }

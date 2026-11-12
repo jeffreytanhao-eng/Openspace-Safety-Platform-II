@@ -135,6 +135,8 @@ Nginx ── 静态资源 ──▶ /opt/openspace/web/dist（Vue 打包产物�
 - 两类记录均写入 `objects` 表并以 `org_id` 隔离；同一目标可在同一组织内同时存在「业主认领 + 关注」，但第二个组织的业主认领会返回 409。
 - 业主认领后可维护碰撞规避参数（CA 参数），用于筛查与风险评估；关注仅做跟踪与展示。
 - 星历绑定：业主认领的目标可绑定 OCM / ITC 星历，供筛查（主星源 ephem）与精度比对使用。
+- 批量取消关注：`POST /cgi/objects/batch-unwatch`，仅释放本组织 `normal` 关注目标（单次上限 500，解绑星历与 CA 参数）；业主认领目标跳过，须在详情页单独释放。
+- 组织内别名：`PATCH /cgi/objects/:id/alias` 设置/清除，仅本组织可见（跨组织查询不返回该列值）；别名组织内唯一（冲突 409），为空时展示回退官方名称，`GET /cgi/objects/aliases` 返回本组织别名表。`003_object_aliases.sql` 供对照，启动时惰性补列。
 
 ### 4.2 交会事件
 
@@ -198,6 +200,7 @@ Nginx ── 静态资源 ──▶ /opt/openspace/web/dist（Vue 打包产物�
 
 - 每个组织的文档库：`/cgi/documents` 列表 / 上传 / 正文 / 删除，按 `org_id` 隔离。
 - 正文按 UUID 落盘 `data/user-documents/`（运行期存储，不入 Git，仓库仅保留目录）；元数据在 `user_documents` 表（`002_user_documents.sql` 惰性建表）。
+- 事件包入库：交会事件详情一键保存（Markdown / HTML / CSV，`POST /cgi/documents/from-event-package`，`source_type='event-package'`，仅组织账号）。
 
 ### 4.9 安全加固基线
 
@@ -205,6 +208,12 @@ Nginx ── 静态资源 ──▶ /opt/openspace/web/dist（Vue 打包产物�
 - `/cgi/sat_tle/constellation/cache-clear` 仅平台超管。
 - API 默认监听 `127.0.0.1`（可用 `API_LISTEN` 覆盖，生产禁止 `0.0.0.0`）。
 - 主机侧：systemd 以 `openspace` 用户运行（drop-in `deploy/openspace-api.service.d/hardening.conf`），`/opt/openspace` 权限收紧由加固脚本统一设置；nginx 可选片段 `deploy/nginx/hardening-snippets.conf` 拒绝 `.bak` / `.sql` / `.env` 下载。
+- 审计范围：`admin_audit_logs` 除平台管理操作外，覆盖各账号的关键写操作——目标认领/关注（含批量）/别名/释放/星历绑定、筛查创建与取消、文档上传/删除/钉选/下载、星历上传/删除/可见性/重建/版本删除、CDM 导入与事件重算、CA 参数维护；写审计失败仅记服务端日志不阻断业务，表启动惰性建。超管在「审计日志」页只读查看（摘要优先展示）。
+
+### 4.10 界面语言
+
+- 中英文双语界面：登录页右上角未登录即可切换 CN/EN，登录后由顶栏切换；偏好存 `localStorage['osp-locale']`，并同步 `<html lang>`。
+- 文案集中在 `web/src/i18n/messages.ts`（zh / en 键严格 1:1，缺键会被 `vue-tsc` 报错）；超管后台与平台内部调试文案固定中文。
 
 ---
 
@@ -303,11 +312,11 @@ systemctl status openspace-api --no-pager
 | GET | `/cgi/auth/me` | 当前用户与组织、档位、配额用量 |
 | POST | `/cgi/auth/upgrade-request` | 提交 VIP 升级申请 |
 | GET | `/cgi/events` | 交会事件（`window`、`scope`、`eventSource`） |
-| GET/POST | `/cgi/objects` | 编目检索、认领 / 关注 |
+| GET/POST | `/cgi/objects` | 编目检索、认领 / 关注、批量取消关注、组织内别名 |
 | GET/POST | `/cgi/screens` | 筛查任务列表 / 创建 |
 | GET | `/cgi/ephemerides` | 星历分页、文件与版本（需登录） |
 | POST | `/cgi/ephemerides/accuracy/compare` | 精度比对 |
-| GET/POST | `/cgi/documents` | 我的文档：列表 / 上传 / 正文 / 删除 |
+| GET/POST | `/cgi/documents` | 我的文档：列表 / 上传 / 正文 / 删除 / 事件包保存 |
 | GET | `/cgi/overview/summary` | 总览统计 |
 | GET/POST | `/cgi/admin/*` | 超管组织、配额、审批、审计、数据运维 |
 

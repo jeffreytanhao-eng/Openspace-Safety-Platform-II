@@ -273,7 +273,7 @@ async function saveSlot(): Promise<void> {
       pc_methods: slotMethodsStr()
     })
     await loadProfiles()
-    slotMsg.value = `参数组 ${slot} 已保存`
+    slotMsg.value = t('set.slotSaved', { n: slot })
     editingSlot.value = 0
   } catch (e) {
     slotError.value = e instanceof Error ? e.message : String(e)
@@ -288,7 +288,7 @@ async function resetSlot(slot: number): Promise<void> {
   try {
     await deleteCaProfile(slot)
     await loadProfiles()
-    slotMsg.value = `参数组 ${slot} 已恢复为默认参数`
+    slotMsg.value = t('set.slotReset', { n: slot })
   } catch (e) {
     slotError.value = e instanceof Error ? e.message : String(e)
   }
@@ -297,7 +297,7 @@ async function resetSlot(slot: number): Promise<void> {
 function slotSummary(p: CaParams | null): string {
   if (!p) return '—'
   const hbr = p.hbr_mode === 'both' ? `${p.hbr_a_m ?? '—'} + ${p.hbr_b_m ?? '—'} m (A/B)` : `${p.hbr_m} m`
-  return `HBR ${hbr} · 筛查 ${p.screen_distance_km} km · 接受 Pc ${p.accepted_pc} · ${p.propagator.toUpperCase()} · ${p.window_h} h / ${p.step_s} s · ${p.pc_methods}`
+  return `HBR ${hbr} · ${t('set.sumScreen')} ${p.screen_distance_km} km · ${t('set.sumAccept')} ${p.accepted_pc} · ${p.propagator.toUpperCase()} · ${p.window_h} h / ${p.step_s} s · ${p.pc_methods}`
 }
 
 /* ------------------------- 建议值映射 ------------------------- */
@@ -800,7 +800,7 @@ function srcName(s: string): string {
                 <td class="mono">{{ saved ? `${saved.window_h} h / ${saved.step_s} s` : t('ca.notSet') }}</td>
                 <td>
                   <div class="sug">{{ sugValue('window_h') }} h / {{ sugValue('step_s') }} s</div>
-                  <div class="why">{{ sugReason('window_h') }}；{{ sugReason('step_s') }}</div>
+                  <div class="why">{{ sugReason('window_h') }}{{ t('ca.sugSep') }}{{ sugReason('step_s') }}</div>
                 </td>
                 <td class="edit-col">
                   <OspNumberInput v-model="form.window_h" min="1" max="168" step="1" :disabled="!canEdit" @input="onEdit" /> h /

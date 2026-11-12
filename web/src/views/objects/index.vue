@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { computed, nextTick, onMounted, ref, watch } from 'vue'
 import { useI18n } from '@/composables/useI18n'
 import { useAuthStore } from '@/stores/auth'
 import {
@@ -10,7 +10,9 @@ import {
   getOrgQuota,
   getObject,
   updateObject,
+  updateObjectAlias,
   releaseObject,
+  unwatchObjects,
   bindEphem,
   unbindEphem,
   type ManagedObject,
@@ -38,8 +40,10 @@ import {
   type RescreenResult
 } from '@/api/maneuvers'
 import { AuthError } from '@/api/auth'
+import { ALIAS_MAX_LEN, displayName } from '@/composables/useObjectAliases'
 import { getCaProfiles, type CaParams } from '@/api/ca'
 import PcTcaChart from '@/components/PcTcaChart.vue'
+import CompactPager from '@/components/CompactPager.vue'
 
 const { t } = useI18n()
 
@@ -52,9 +56,19 @@ const objects = ref<ManagedObject[]>([])
 const filtered = computed(() => {
   const s = q.value.trim().toLowerCase()
   if (!s) return objects.value
-  return objects.value.filter(
-    (o) => o.name.toLowerCase().includes(s) || String(o.norad_id).includes(s)
-  )
+  return objects.value.filter((o) => {
+    const alias = (o.alias || '').toLowerCase()
+    return o.name.toLowerCase().includes(s) || alias.includes(s) || String(o.norad_id).includes(s)
+  })
+})
+
+const LIST_PAGE_SIZE = 20
+const page = ref(1)
+const totalPages = computed(() => Math.max(1, Math.ceil(filtered.value.length / LIST_PAGE_SIZE)))
+const paged = computed(() => {
+  const p = Math.min(Math.max(1, page.value), totalPages.value)
+  const start = (p - 1) * LIST_PAGE_SIZE
+  return filtered.value.slice(start, start + LIST_PAGE_SIZE)
 })
 
 function fmtPc(v: number | null): string {
@@ -68,12 +82,64 @@ function fmtTime(s: string): string {
   return s ? s.slice(0, 16).replace('T', ' ') : '—'
 }
 
+function objectLabel(o: { name: string; alias?: string | null; norad_id: number }): string {
+  return displayName(o.alias, o.name, o.norad_id)
+}
+
+function nameOf(norad: number, fallback?: string | null): string {
+  const o = objects.value.find((x) => x.norad_id === norad)
+  return displayName(o?.alias, fallback || o?.name, norad)
+}
+
+const editingAliasId = ref<number | null>(null)
+const aliasDraft = ref('')
+const aliasSaving = ref(false)
+const aliasError = ref('')
+const aliasInput = ref<HTMLInputElement | null>(null)
+
+function startEditAlias(o: ManagedObject, ev?: Event): void {
+  ev?.stopPropagation()
+  if (isPlatform.value) return
+  editingAliasId.value = o.id
+  aliasDraft.value = o.alias || ''
+  aliasError.value = ''
+  void nextTick(() => aliasInput.value?.focus())
+}
+
+function cancelAlias(ev?: Event): void {
+  ev?.stopPropagation()
+  editingAliasId.value = null
+  aliasDraft.value = ''
+  aliasError.value = ''
+}
+
+async function saveAlias(o: ManagedObject, clear = false, ev?: Event): Promise<void> {
+  ev?.stopPropagation()
+  if (aliasSaving.value || isPlatform.value) return
+  aliasSaving.value = true
+  aliasError.value = ''
+  try {
+    const updated = await updateObjectAlias(o.id, clear ? '' : aliasDraft.value)
+    const next = { ...o, alias: updated.alias ?? null }
+    objects.value = objects.value.map((x) => (x.id === o.id ? { ...x, alias: next.alias } : x))
+    if (selected.value?.id === o.id) selected.value = { ...selected.value, alias: next.alias }
+    editingAliasId.value = null
+    aliasDraft.value = ''
+  } catch (e) {
+    aliasError.value = e instanceof Error ? e.message : String(e)
+  } finally {
+    aliasSaving.value = false
+  }
+}
+
 async function load() {
   loading.value = true
   loadError.value = ''
   platformBlocked.value = false
   try {
     objects.value = await listObjects()
+    const alive = new Set(objects.value.filter((o) => o.claim_type === 'normal').map((o) => o.id))
+    pickedWatchIds.value = pickedWatchIds.value.filter((id) => alive.has(id))
   } catch (e) {
     if (e instanceof AuthError && e.httpStatus === 403) platformBlocked.value = true
     else loadError.value = e instanceof Error ? e.message : String(e)
@@ -295,9 +361,9 @@ async function doClaim() {
     claimOpen.value = false
     // 第 5 项：业主认领需超管审核，提交后进入 pending 态；关注立即生效
     claimNotice.value = r.pending_review
-      ? `业主认领申请已提交（NORAD ${preview.value.sat.norad_id}），等待超管审核通过后方可维护参数与上传星历。`
+      ? t('obj.claimSubmitted', { norad: preview.value.sat.norad_id })
       : claimType.value === 'normal'
-        ? `已关注 NORAD ${preview.value.sat.norad_id}`
+        ? t('obj.followed', { norad: preview.value.sat.norad_id })
         : ''
     await load()
   } catch (e) {
@@ -493,7 +559,7 @@ async function saveCaParams(): Promise<void> {
 }
 
 async function release() {
-  if (!selected.value) return
+  if (!selected.value || selected.value.claim_type !== 'owner') return
   if (!window.confirm(t('obj.releaseConfirm'))) return
   releasing.value = true
   detailError.value = ''
@@ -501,10 +567,97 @@ async function release() {
     await releaseObject(selected.value.id)
     selected.value = null
     await load()
+    await loadQuota()
   } catch (e) {
     detailError.value = e instanceof Error ? e.message : String(e)
   } finally {
     releasing.value = false
+  }
+}
+
+function isWatch(o: { claim_type?: string }): boolean {
+  return o.claim_type === 'normal'
+}
+
+const pickedWatchIds = ref<number[]>([])
+const unwatching = ref(false)
+const unwatchError = ref('')
+const watchedInView = computed(() => filtered.value.filter((o) => isWatch(o)))
+const watchedOnPage = computed(() => paged.value.filter((o) => isWatch(o)))
+const watchedPickedCount = computed(
+  () => watchedInView.value.filter((o) => pickedWatchIds.value.includes(o.id)).length
+)
+const allWatchedPicked = computed(
+  () => watchedOnPage.value.length > 0 && watchedOnPage.value.every((o) => pickedWatchIds.value.includes(o.id))
+)
+const someWatchedPicked = computed(() => {
+  const n = watchedOnPage.value.filter((o) => pickedWatchIds.value.includes(o.id)).length
+  return n > 0 && n < watchedOnPage.value.length
+})
+
+function toggleWatchPick(id: number) {
+  const i = pickedWatchIds.value.indexOf(id)
+  pickedWatchIds.value = i >= 0
+    ? pickedWatchIds.value.filter((x) => x !== id)
+    : [...pickedWatchIds.value, id]
+}
+
+function toggleAllWatches() {
+  const visible = watchedOnPage.value.map((o) => o.id)
+  if (allWatchedPicked.value) {
+    const drop = new Set(visible)
+    pickedWatchIds.value = pickedWatchIds.value.filter((id) => !drop.has(id))
+  } else {
+    const have = new Set(pickedWatchIds.value)
+    pickedWatchIds.value = [...pickedWatchIds.value, ...visible.filter((id) => !have.has(id))]
+  }
+}
+
+watch(q, () => {
+  page.value = 1
+  const alive = new Set(filtered.value.filter((o) => isWatch(o)).map((o) => o.id))
+  pickedWatchIds.value = pickedWatchIds.value.filter((id) => alive.has(id))
+})
+watch(totalPages, (n) => {
+  if (page.value > n) page.value = n
+  if (page.value < 1) page.value = 1
+})
+
+async function batchUnwatch() {
+  const ids = pickedWatchIds.value.filter((id) => objects.value.some((o) => o.id === id && isWatch(o)))
+  if (!ids.length) return
+  if (!window.confirm(t('obj.unwatchConfirm', { n: ids.length }))) return
+  unwatching.value = true
+  unwatchError.value = ''
+  try {
+    const r = await unwatchObjects(ids)
+    if (selected.value && r.released.includes(selected.value.id)) selected.value = null
+    pickedWatchIds.value = pickedWatchIds.value.filter((id) => !r.released.includes(id))
+    await load()
+    await loadQuota()
+    const skippedOwner = r.skipped.filter((s) => s.reason === 'owner').length
+    if (skippedOwner) unwatchError.value = t('obj.unwatchSkipOwner', { n: skippedOwner })
+  } catch (e) {
+    unwatchError.value = e instanceof Error ? e.message : String(e)
+  } finally {
+    unwatching.value = false
+  }
+}
+
+async function unwatchOne() {
+  if (!selected.value || !isWatch(selected.value)) return
+  if (!window.confirm(t('obj.unwatchOneConfirm'))) return
+  unwatching.value = true
+  detailError.value = ''
+  try {
+    await unwatchObjects([selected.value.id])
+    selected.value = null
+    await load()
+    await loadQuota()
+  } catch (e) {
+    detailError.value = e instanceof Error ? e.message : String(e)
+  } finally {
+    unwatching.value = false
   }
 }
 
@@ -841,13 +994,35 @@ function lvLabel(v?: string | null): string {
     <section v-else class="filters">
       <input v-model="q" type="search" :placeholder="t('obj.search')" />
       <button type="button" class="btn" @click="load">{{ t('obj.refresh') }}</button>
+      <button
+        v-if="!isPlatform && watchedInView.length"
+        type="button"
+        class="btn danger"
+        :disabled="unwatching || !watchedPickedCount"
+        @click="batchUnwatch"
+      >
+        {{ t('obj.unwatch') }}<template v-if="watchedPickedCount"> ({{ watchedPickedCount }})</template>
+      </button>
+      <span v-if="unwatchError" class="hint err">{{ unwatchError }}</span>
     </section>
 
     <section v-if="!platformBlocked && !loadError" class="table-wrap">
       <div v-if="loading" class="empty-pad">{{ t('obj.loading') }}</div>
-      <table v-else-if="filtered.length">
+      <template v-else-if="filtered.length">
+        <div class="table-scroll">
+      <table>
         <thead>
           <tr>
+            <th v-if="!isPlatform" class="chk-col">
+              <input
+                type="checkbox"
+                :checked="allWatchedPicked"
+                :indeterminate="someWatchedPicked"
+                :disabled="!watchedOnPage.length || unwatching"
+                :title="t('obj.unwatchSelectAll')"
+                @click.stop="toggleAllWatches"
+              />
+            </th>
             <th v-if="isPlatform">{{ t('obj.col.org') }}</th>
             <th>{{ t('obj.col.name') }}</th>
             <th>{{ t('obj.col.norad') }}</th>
@@ -862,9 +1037,56 @@ function lvLabel(v?: string | null): string {
           </tr>
         </thead>
         <tbody>
-          <tr v-for="o in filtered" :key="o.id" @click="openDetail(o)">
+          <tr
+            v-for="o in paged"
+            :key="o.id"
+            :class="{ picked: pickedWatchIds.includes(o.id) }"
+            @click="openDetail(o)"
+          >
+            <td v-if="!isPlatform" class="chk-col" @click.stop>
+              <input
+                v-if="isWatch(o)"
+                type="checkbox"
+                :checked="pickedWatchIds.includes(o.id)"
+                :disabled="unwatching"
+                :title="t('obj.unwatch')"
+                @click.stop="toggleWatchPick(o.id)"
+              />
+            </td>
             <td v-if="isPlatform" class="dim">{{ o.org_name || '—' }}</td>
-            <td class="name">{{ o.name }}</td>
+            <td class="name" @click="!isPlatform && startEditAlias(o, $event)">
+              <div v-if="editingAliasId !== o.id || selected?.id === o.id" class="name-cell">
+                <div class="name-text">
+                  <div class="name-primary">{{ objectLabel(o) }}</div>
+                  <div v-if="o.alias" class="name-official">{{ o.name }}</div>
+                </div>
+                <button
+                  v-if="!isPlatform"
+                  type="button"
+                  class="name-edit-btn"
+                  :title="t('obj.alias.edit')"
+                  @click="startEditAlias(o, $event)"
+                >✎</button>
+              </div>
+              <div v-else class="name-editor" @click.stop>
+                <input
+                  ref="aliasInput"
+                  v-model="aliasDraft"
+                  type="text"
+                  :maxlength="ALIAS_MAX_LEN"
+                  :placeholder="t('obj.alias.placeholder')"
+                  :disabled="aliasSaving"
+                  @keydown.enter.prevent="saveAlias(o, false, $event)"
+                  @keydown.esc.prevent="cancelAlias($event)"
+                />
+                <div class="name-editor-actions">
+                  <button type="button" class="btn tight" :disabled="aliasSaving" @click="saveAlias(o, false, $event)">{{ t('obj.alias.save') }}</button>
+                  <button v-if="o.alias" type="button" class="btn tight" :disabled="aliasSaving" @click="saveAlias(o, true, $event)">{{ t('obj.alias.clear') }}</button>
+                  <button type="button" class="btn tight" :disabled="aliasSaving" @click="cancelAlias($event)">{{ t('obj.alias.cancel') }}</button>
+                </div>
+                <div v-if="aliasError" class="alias-err">{{ aliasError }}</div>
+              </div>
+            </td>
             <td class="mono">{{ o.norad_id }}</td>
             <td>
               <span v-if="o.claim_status === 'pending'" class="pill missing">{{ t('obj.claimPending') }}</span>
@@ -882,6 +1104,11 @@ function lvLabel(v?: string | null): string {
           </tr>
         </tbody>
       </table>
+        </div>
+        <div class="list-pager">
+          <CompactPager v-model:page="page" :total-pages="totalPages" :disabled="loading || unwatching" />
+        </div>
+      </template>
       <div v-else class="empty-pad">{{ t('obj.empty') }}</div>
     </section>
 
@@ -1029,12 +1256,15 @@ function lvLabel(v?: string | null): string {
         <header class="dh">
           <div>
             <div class="d-title">
-              {{ selected.name }}
+              {{ objectLabel(selected) }}
               <span class="pill" :class="isOwnerClaim ? 'fresh' : 'missing'">
                 {{ isOwnerClaim ? t('obj.claimTypeOwner') : t('obj.claimTypeNormal') }}
               </span>
             </div>
-            <div class="d-sub">NORAD {{ selected.norad_id }}<span v-if="selected.sat"> · {{ selected.sat.regime }}</span></div>
+            <div class="d-sub">
+              <template v-if="selected.alias">{{ t('obj.alias.official') }} {{ selected.name }} · </template>
+              NORAD {{ selected.norad_id }}<span v-if="selected.sat"> · {{ selected.sat.regime }}</span>
+            </div>
           </div>
           <button type="button" class="x" @click="closeDetail">×</button>
         </header>
@@ -1044,7 +1274,43 @@ function lvLabel(v?: string | null): string {
           <section class="block sec">
             <div class="sec-h"><span class="bt">{{ t('obj.sec.identity') }}</span></div>
             <div class="pv-grid">
-              <div><dt>{{ t('obj.col.name') }}</dt><dd>{{ selected.name }}</dd></div>
+              <div class="alias-field">
+                <dt>{{ t('obj.alias.label') }}</dt>
+                <dd>
+                  <template v-if="editingAliasId === selected.id">
+                    <div class="name-editor" @click.stop>
+                      <input
+                        ref="aliasInput"
+                        v-model="aliasDraft"
+                        type="text"
+                        :maxlength="ALIAS_MAX_LEN"
+                        :placeholder="t('obj.alias.placeholder')"
+                        :disabled="aliasSaving"
+                        @keydown.enter.prevent="saveAlias(selected, false, $event)"
+                        @keydown.esc.prevent="cancelAlias($event)"
+                      />
+                      <div class="name-editor-actions">
+                        <button type="button" class="btn tight" :disabled="aliasSaving" @click="saveAlias(selected, false, $event)">{{ t('obj.alias.save') }}</button>
+                        <button v-if="selected.alias" type="button" class="btn tight" :disabled="aliasSaving" @click="saveAlias(selected, true, $event)">{{ t('obj.alias.clear') }}</button>
+                        <button type="button" class="btn tight" :disabled="aliasSaving" @click="cancelAlias($event)">{{ t('obj.alias.cancel') }}</button>
+                      </div>
+                      <div v-if="aliasError" class="alias-err">{{ aliasError }}</div>
+                    </div>
+                  </template>
+                  <template v-else>
+                    <span v-if="selected.alias">{{ selected.alias }}</span>
+                    <span v-else class="dim">{{ t('obj.alias.empty') }}</span>
+                    <button
+                      v-if="!isPlatform"
+                      type="button"
+                      class="link-btn"
+                      @click="startEditAlias(selected, $event)"
+                    >{{ t('obj.alias.edit') }}</button>
+                  </template>
+                  <p class="alias-hint">{{ t('obj.alias.hint') }}</p>
+                </dd>
+              </div>
+              <div><dt>{{ t('obj.alias.official') }}</dt><dd>{{ selected.name }}</dd></div>
               <div><dt>{{ t('obj.col.norad') }}</dt><dd class="mono">{{ selected.norad_id }}</dd></div>
               <div><dt>{{ t('obj.type') }}</dt><dd>{{ typeLabel(selected.sat?.object_type) }}</dd></div>
               <div><dt>{{ t('obj.intlDesig') }}</dt><dd class="mono">{{ selected.sat?.intl_desig || t('obj.noData') }}</dd></div>
@@ -1169,7 +1435,7 @@ function lvLabel(v?: string | null): string {
               <li v-for="e in relEvents" :key="e.key">
                 <RouterLink class="rel-row" :to="`/conjunctions/${encodeURIComponent(e.key)}`">
                   <span class="lv" :class="`lv-${e.level}`">{{ lvLabel(e.level) }}</span>
-                  <span class="rel-name">{{ e.noradA === selected.norad_id ? e.nameB : e.nameA }}</span>
+                  <span class="rel-name">{{ e.noradA === selected.norad_id ? nameOf(e.noradB, e.nameB) : nameOf(e.noradA, e.nameA) }}</span>
                   <span class="mono dim">{{ fmtTime(e.tca) }}</span>
                   <span class="mono">{{ e.missKm != null ? `${e.missKm.toFixed(2)} km` : '—' }}</span>
                   <span class="mono">{{ e.pc != null ? e.pc.toExponential(2) : '—' }}</span>
@@ -1335,7 +1601,7 @@ function lvLabel(v?: string | null): string {
                       <tbody>
                         <tr v-for="ev in mvResults[m.id]!.events" :key="ev.id">
                           <td class="mono">{{ fmtTime(ev.tca) }}</td>
-                          <td>{{ ev.secondary_name }} <span class="mono dim-text">{{ ev.secondary_norad }}</span></td>
+                          <td>{{ nameOf(ev.secondary_norad, ev.secondary_name) }} <span class="mono dim-text">{{ ev.secondary_norad }}</span></td>
                           <td class="mono">{{ ev.miss_km.toFixed(2) }}</td>
                           <td class="mono">{{ fmtPcExp(ev.pc) }}</td>
                           <td><span class="lv" :class="`lv-${ev.level}`">{{ t(`scr.level.${ev.level}`) }}</span></td>
@@ -1353,7 +1619,20 @@ function lvLabel(v?: string | null): string {
           <div class="block actions">
             <RouterLink class="btn" :to="`/ephemerides?q=${selected.norad_id}`">{{ t('obj.openEphem') }}</RouterLink>
             <RouterLink class="btn" to="/conjunctions">{{ t('obj.relatedConj') }}</RouterLink>
-            <button v-if="!isPlatform" type="button" class="btn danger" :disabled="releasing" @click="release">{{ t('obj.release') }}</button>
+            <button
+              v-if="!isPlatform && isOwnerClaim"
+              type="button"
+              class="btn danger"
+              :disabled="releasing"
+              @click="release"
+            >{{ t('obj.release') }}</button>
+            <button
+              v-if="!isPlatform && selected && isWatch(selected)"
+              type="button"
+              class="btn danger"
+              :disabled="unwatching"
+              @click="unwatchOne"
+            >{{ t('obj.unwatch') }}</button>
           </div>
         </template>
       </div>
@@ -1400,8 +1679,15 @@ h1 { margin: 0; font-size: 16px; font-weight: 650; }
   outline: none;
 }
 .table-wrap {
-  flex: 1; min-height: 0; overflow: auto;
+  flex: 1; min-height: 0; overflow: hidden;
+  display: flex; flex-direction: column;
   background: var(--bg-panel); border: 1px solid var(--border); border-radius: 8px;
+}
+.table-scroll { flex: 1; min-height: 0; overflow: auto; }
+.list-pager {
+  flex: none; min-width: 0;
+  border-top: 1px solid var(--border);
+  padding: 6px 10px;
 }
 table { width: 100%; border-collapse: collapse; font-size: 12px; }
 th {
@@ -1412,7 +1698,39 @@ th {
 td { padding: 9px 12px; border-bottom: 1px solid var(--border); color: var(--text); }
 tbody tr { cursor: pointer; }
 tbody tr:hover { background: var(--bg-hover); }
-.name { font-weight: 600; }
+tbody tr.picked { background: rgba(90, 154, 120, 0.08); }
+th.chk-col, td.chk-col {
+  width: 36px; padding-left: 12px; padding-right: 0;
+  vertical-align: middle;
+}
+th.chk-col input, td.chk-col input { cursor: pointer; }
+.name { font-weight: 600; vertical-align: top; }
+.name-cell { display: flex; align-items: flex-start; gap: 8px; min-width: 0; }
+.name-text { min-width: 0; flex: 1; }
+.name-primary { font-weight: 600; line-height: 1.25; }
+.name-official { margin-top: 2px; font-size: 10px; font-weight: 400; color: var(--text-dim); line-height: 1.2; }
+.name-edit-btn {
+  appearance: none; border: none; background: transparent;
+  color: var(--text-dim); cursor: pointer; padding: 0 2px;
+  opacity: 0; font-size: 12px; line-height: 1; flex: 0 0 auto;
+}
+tbody tr:hover .name-edit-btn, .name-cell:focus-within .name-edit-btn, .name-edit-btn:focus { opacity: 1; }
+.name-edit-btn:hover { color: var(--accent-strong, var(--text)); }
+.name-editor { display: flex; flex-direction: column; gap: 4px; min-width: 180px; }
+.name-editor input {
+  appearance: none; border: 1px solid var(--border-strong, var(--border));
+  background: var(--bg-deep); color: var(--text); border-radius: 4px;
+  padding: 5px 8px; font-size: 12px; outline: none; width: 100%;
+}
+.name-editor-actions { display: flex; gap: 4px; flex-wrap: wrap; }
+.btn.tight { padding: 3px 8px; font-size: 11px; }
+.alias-err { font-size: 10px; color: var(--danger, #c45c5c); }
+.link-btn {
+  appearance: none; border: none; background: transparent; color: var(--accent-strong);
+  font-size: 11px; cursor: pointer; padding: 0; margin-left: 8px;
+}
+.alias-hint { margin: 4px 0 0; font-size: 10px; color: var(--text-dim); font-weight: 400; }
+.alias-field dd { display: block; }
 .mono { font-family: var(--mono); }
 .dim { color: var(--text-dim); }
 .pill {

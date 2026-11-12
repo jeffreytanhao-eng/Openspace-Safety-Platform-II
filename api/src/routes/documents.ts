@@ -4,6 +4,7 @@
  *   GET    /documents/:id          元数据 + 预览（无权/不存在统一 404）
  *   GET    /documents/:id/file     下载原文件
  *   POST   /documents/from-report  保存总览报告（客户端按现有下载逻辑生成正文）
+ *   POST   /documents/from-event-package 保存交会事件包（Markdown / HTML / CSV）
  *   POST   /documents/from-ephemeris 拷贝当前用户已有权查看的星历源文件
  *   POST   /documents/pin          超管推送置顶（原始字节，文件名走请求头）
  *   POST   /documents/:id/unpin    超管取消置顶
@@ -35,6 +36,7 @@ import {
   DocsQuotaError
 } from '../db/userDocsDb.js'
 import { mimeFromName, splitFilename } from '../utils/userDocsNames.js'
+import { writeUserAudit } from '../db/adminDb.js'
 
 const router = Router()
 
@@ -200,6 +202,16 @@ router.get('/documents/:id/file', requireAuth, async (req, res) => {
       res.setHeader('Referrer-Policy', 'no-referrer')
       res.setHeader('X-Frame-Options', 'SAMEORIGIN')
     }
+    if (!inline) {
+      await writeUserAudit(req.auth, 'document.download', {
+        after: {
+          summary: `下载文档「${row.title}」`,
+          id: row.id,
+          title: row.title,
+          sourceType: row.source_type ?? null
+        }
+      })
+    }
     res.send(buf)
   } catch {
     res.status(500).json(fail(500, '读取文档失败'))
@@ -242,6 +254,15 @@ router.post('/documents/from-report', requireAuth, async (req, res) => {
       originalName: `${titleBase}.csv`,
       sourceType: 'report'
     })
+    await writeUserAudit(req.auth, 'document.create', {
+      after: {
+        summary: `生成文档「${saved.title}」（报告）`,
+        id: saved.id,
+        title: saved.title,
+        sourceType: 'report',
+        kind
+      }
+    })
     res.json(ok(toPublicDoc(saved, viewer)))
   } catch (e) {
     if (e instanceof DocsQuotaError) {
@@ -249,6 +270,67 @@ router.post('/documents/from-report', requireAuth, async (req, res) => {
       return
     }
     res.status(500).json(fail(500, (e as Error).message || '保存报告失败'))
+  }
+})
+
+router.post('/documents/from-event-package', requireAuth, async (req, res) => {
+  if (!(await ready(res))) return
+  const user = req.auth!.user
+  const org = req.auth!.org
+  if (!org && user.role !== 'platform_super_admin') {
+    res.status(403).json(fail(403, '平台账号无组织，事件包保存仅限组织账号'))
+    return
+  }
+  const body = req.body || {}
+  const format = String(body.format || '').toLowerCase()
+  const meta: Record<string, { ext: string; mime: string }> = {
+    md: { ext: '.md', mime: 'text/markdown' },
+    html: { ext: '.html', mime: 'text/html' },
+    csv: { ext: '.csv', mime: 'text/csv' }
+  }
+  const kind = meta[format]
+  if (!kind) {
+    res.status(400).json(fail(400, '不支持的事件包格式'))
+    return
+  }
+  const content = typeof body.content === 'string' ? body.content : ''
+  if (!content.trim()) {
+    res.status(400).json(fail(400, '事件包内容为空'))
+    return
+  }
+  const buf = Buffer.from(content, 'utf8')
+  if (buf.length > REPORT_MAX) {
+    res.status(400).json(fail(400, '事件包文件过大'))
+    return
+  }
+  const titleBase = String(body.titleBase || '').trim() || '交会事件包'
+  try {
+    const viewer = viewerFromReq(req)
+    const saved = await saveUserDocument({
+      viewer,
+      buffer: buf,
+      titleBase,
+      ext: kind.ext,
+      mime: kind.mime,
+      originalName: `${titleBase}${kind.ext}`,
+      sourceType: 'event-package'
+    })
+    await writeUserAudit(req.auth, 'document.create', {
+      after: {
+        summary: `存储至文档「${saved.title}」（事件包）`,
+        id: saved.id,
+        title: saved.title,
+        sourceType: 'event-package',
+        format
+      }
+    })
+    res.json(ok(toPublicDoc(saved, viewer)))
+  } catch (e) {
+    if (e instanceof DocsQuotaError) {
+      res.status(409).json(fail(409, e.message))
+      return
+    }
+    res.status(500).json(fail(500, (e as Error).message || '保存事件包失败'))
   }
 })
 
@@ -297,6 +379,14 @@ router.post('/documents/from-ephemeris', requireAuth, async (req, res) => {
       mime: mimeFromName(path.basename(full), 'application/gzip'),
       originalName: path.basename(full),
       sourceType: 'ephemeris'
+    })
+    await writeUserAudit(req.auth, 'document.create', {
+      after: {
+        summary: `生成文档「${saved.title}」（星历）`,
+        id: saved.id,
+        title: saved.title,
+        sourceType: 'ephemeris'
+      }
     })
     res.json(ok(toPublicDoc(saved, viewer)))
   } catch (e) {
@@ -358,6 +448,14 @@ router.post(
         sourceType: 'pinned',
         exactTitle: displayTitle || undefined
       })
+      await writeUserAudit(req.auth, 'document.pin', {
+        after: {
+          summary: `推送置顶文档「${saved.title}」`,
+          id: saved.id,
+          title: saved.title,
+          sourceType: 'pinned'
+        }
+      })
       res.json(ok(toPublicDoc(saved, viewer)))
     } catch (e) {
       if (e instanceof DocsQuotaError) {
@@ -382,6 +480,10 @@ router.post('/documents/:id/unpin', requireAuth, requireSuperAdmin, async (req, 
     return
   }
   const updated = await unpinUserDocument(row)
+  await writeUserAudit(req.auth, 'document.unpin', {
+    before: { id: row.id, title: row.title, pinned: true },
+    after: { summary: `取消置顶文档「${row.title}」`, id: row.id, title: row.title }
+  })
   res.json(ok(updated ? toPublicDoc(updated, viewer) : { id: row.id, pinned: false }))
 })
 
@@ -399,6 +501,10 @@ router.delete('/documents/:id', requireAuth, async (req, res) => {
   }
   try {
     await deleteUserDocument(row)
+    await writeUserAudit(req.auth, 'document.delete', {
+      before: { id: row.id, title: row.title, sourceType: row.source_type ?? null },
+      after: { summary: `删除文档「${row.title}」`, id: row.id, title: row.title }
+    })
     res.json(ok({ id: row.id }))
   } catch (e) {
     res.status(500).json(fail(500, (e as Error).message || '删除失败'))

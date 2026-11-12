@@ -7,15 +7,17 @@ import {
   cancelScreen,
   createScreen,
   getScreen,
-  listScreens,
+  listScreensPage,
   type ScreenEvent,
   type ScreenJob,
   type ScreenJobStatus
 } from '@/api/screens'
 import { listObjects, syncTle, type ManagedObject, type SyncTleResult } from '@/api/objects'
+import { displayName } from '@/composables/useObjectAliases'
 import { getCaDefaults, getCaProfiles } from '@/api/ca'
 import { AuthError } from '@/api/auth'
 import { useAuthStore } from '@/stores/auth'
+import CompactPager from '@/components/CompactPager.vue'
 
 const { t } = useI18n()
 const auth = useAuthStore()
@@ -33,6 +35,15 @@ const loading = ref(true)
 const needOrg = ref(false)
 const loadError = ref('')
 const jobs = ref<ScreenJob[]>([])
+const JOB_PAGE_SIZE = 10
+const jobPage = ref(1)
+const jobTotal = ref(0)
+const jobHasActive = ref(false)
+const jobPages = computed(() => Math.max(1, Math.ceil(jobTotal.value / JOB_PAGE_SIZE)))
+watch(jobPages, (n) => {
+  if (jobPage.value > n) jobPage.value = n
+  if (jobPage.value < 1) jobPage.value = 1
+})
 const selectedId = ref<number | null>(null)
 const detail = ref<{ job: ScreenJob; events: ScreenEvent[] } | null>(null)
 const detailLoading = ref(false)
@@ -58,7 +69,10 @@ const managedFiltered = computed(() => {
   const q = pickQuery.value.trim().toLowerCase()
   if (!q) return managed.value
   return managed.value.filter(
-    (o) => String(o.norad_id).includes(q) || o.name.toLowerCase().includes(q)
+    (o) =>
+      String(o.norad_id).includes(q) ||
+      o.name.toLowerCase().includes(q) ||
+      (o.alias || '').toLowerCase().includes(q)
   )
 })
 
@@ -175,6 +189,7 @@ async function submit() {
       secondarySource: secondarySource.value
     }
     const job = await createScreen(payloadBase)
+    jobPage.value = 1
     await loadJobs()
     selectJob(job.id)
   } catch (e) {
@@ -211,9 +226,15 @@ async function askCancel(j: ScreenJob) {
 
 /* -------------------------------- 数据加载 -------------------------------- */
 
-async function loadJobs() {
+async function loadJobs(opts?: { around?: number }) {
   try {
-    jobs.value = await listScreens()
+    const d = await listScreensPage(jobPage.value, JOB_PAGE_SIZE, opts?.around)
+    jobs.value = d.items
+    jobTotal.value = d.total
+    jobHasActive.value = !!d.hasActive
+    if (d.page !== jobPage.value) jobPage.value = d.page
+    const pages = Math.max(1, Math.ceil(d.total / JOB_PAGE_SIZE))
+    if (jobPage.value > pages) jobPage.value = pages
     needOrg.value = false
     loadError.value = ''
   } catch (e) {
@@ -222,6 +243,10 @@ async function loadJobs() {
   }
 }
 
+watch(jobPage, (p, prev) => {
+  if (p !== prev) void loadJobs()
+})
+
 function routeJobId(): number | null {
   const raw = route.params.id
   const s = Array.isArray(raw) ? raw[0] : raw
@@ -229,8 +254,14 @@ function routeJobId(): number | null {
   return Number.isInteger(n) && n > 0 ? n : null
 }
 
-async function selectJob(id: number) {
+async function revealJob(id: number) {
+  if (jobs.value.some((j) => j.id === id)) return
+  await loadJobs({ around: id })
+}
+
+async function selectJob(id: number, opts?: { reveal?: boolean }) {
   selectedId.value = id
+  if (opts?.reveal !== false) await revealJob(id)
   if (routeJobId() !== id) {
     await router.replace({ name: 'screens', params: { id: String(id) } })
   }
@@ -247,6 +278,7 @@ async function selectJob(id: number) {
 async function loadAll() {
   loading.value = true
   try {
+    jobPage.value = 1
     await Promise.all([loadJobs(), loadManaged()])
     void prefillFromOrgDefaults()
     const fromRoute = routeJobId()
@@ -289,13 +321,15 @@ async function loadProfiles() {
 }
 
 /** 有排队/计算中任务时每 3s 轮询，全部落定后停止 */
-const hasActive = computed(() => jobs.value.some((j) => j.status === 'queued' || j.status === 'running'))
+const hasActive = computed(
+  () => jobHasActive.value || jobs.value.some((j) => j.status === 'queued' || j.status === 'running')
+)
 let pollTimer: number | undefined
 
 function tickPoll() {
   if (!hasActive.value) return
   void loadJobs()
-  if (selectedId.value) void selectJob(selectedId.value)
+  if (selectedId.value) void selectJob(selectedId.value, { reveal: false })
 }
 
 watch(
@@ -352,9 +386,18 @@ const fmtPc = (p: number | null) =>
 const fmtMiss = (m: number | null) =>
   m === null || !Number.isFinite(m) ? '—' : m.toFixed(2)
 
+function objectLabel(o: ManagedObject): string {
+  return displayName(o.alias, o.name, o.norad_id)
+}
+
+function screenName(norad: number | null | undefined, fallback?: string | null): string {
+  const o = managed.value.find((x) => x.norad_id === Number(norad))
+  return displayName(o?.alias, fallback || o?.name, norad)
+}
+
 function pairOf(e: ScreenEvent): string {
-  const a = e.primary_name?.trim() || `NORAD ${e.primary_norad}`
-  const b = e.secondary_name?.trim() || `NORAD ${e.secondary_norad}`
+  const a = screenName(e.primary_norad, e.primary_name)
+  const b = screenName(e.secondary_norad, e.secondary_name)
   return `${a} × ${b}`
 }
 function pcSourceLabel(e: ScreenEvent): string {
@@ -389,19 +432,19 @@ function pcSourceLabel(e: ScreenEvent): string {
             </header>
             <div class="form">
               <label class="field">
-                <span class="lbl">参数来源</span>
+                <span class="lbl">{{ t('cap.source') }}</span>
                 <select v-model="paramsSource">
-                  <option value="default">单位默认</option>
-                  <option value="mine1" :disabled="!slotReady[1]">我的参数组 1{{ slotReady[1] ? '' : '（未配置）' }}</option>
-                  <option value="mine2" :disabled="!slotReady[2]">我的参数组 2{{ slotReady[2] ? '' : '（未配置）' }}</option>
-                  <option value="target">目标自定义参数（业主）</option>
+                  <option value="default">{{ t('ca.f.orgDefaults') }}</option>
+                  <option value="mine1" :disabled="!slotReady[1]">{{ t('cap.mine1') }}{{ slotReady[1] ? '' : t('cap.unset') }}</option>
+                  <option value="mine2" :disabled="!slotReady[2]">{{ t('cap.mine2') }}{{ slotReady[2] ? '' : t('cap.unset') }}</option>
+                  <option value="target">{{ t('cap.target') }}</option>
                 </select>
               </label>
               <div v-if="paramsSource !== 'default'" class="pick-hint">
                 {{
                   paramsSource === 'target'
-                    ? '使用业主为该目标保存的自定义参数；仅支持单一主星任务。'
-                    : '使用你在设置页保存的自定义参数组，本页窗长/筛查距离/HBR 输入将不再生效。'
+                    ? t('cap.hintTarget')
+                    : t('cap.hintMine')
                 }}
               </div>
               <div class="form-row form-row-3">
@@ -481,7 +524,7 @@ function pcSourceLabel(e: ScreenEvent): string {
                           :checked="isPicked(o.norad_id)"
                           @change="togglePick(o.norad_id)"
                         />
-                        <span class="pick-name">{{ o.name }}</span>
+                        <span class="pick-name">{{ objectLabel(o) }}</span>
                         <span class="pick-norad">{{ o.norad_id }}</span>
                       </label>
                       <div v-if="!managedFiltered.length" class="empty">{{ t('scr.pickNoMatch') }}</div>
@@ -585,6 +628,9 @@ function pcSourceLabel(e: ScreenEvent): string {
                 </div>
                 <div v-if="j.error_message" class="job-err">{{ j.error_message }}</div>
               </div>
+            </div>
+            <div v-if="jobTotal > 0" class="job-pager">
+              <CompactPager v-model:page="jobPage" :total-pages="jobPages" :disabled="loading" />
             </div>
           </div>
         </aside>
@@ -835,6 +881,12 @@ function pcSourceLabel(e: ScreenEvent): string {
   display: flex;
   flex-direction: column;
   gap: 6px;
+}
+.job-pager {
+  flex: none;
+  padding: 6px 10px 8px;
+  border-top: 1px solid var(--border);
+  min-width: 0;
 }
 .job {
   appearance: none;

@@ -6,6 +6,7 @@ import { useI18n } from '@/composables/useI18n'
 const { t } = useI18n()
 import DataSourceBar from '@/components/DataSourceBar.vue'
 import PcTcaChart from '@/components/PcTcaChart.vue'
+import CompactPager from '@/components/CompactPager.vue'
 import { EVENT_SOURCE_BY_DS, useDataSource, type DataSourceId } from '@/composables/useDataSource'
 import { useAuthStore } from '@/stores/auth'
 import {
@@ -17,10 +18,12 @@ import {
   type EventLevel
 } from '@/api/events'
 import type { MessageKey } from '@/i18n/messages'
+import { useObjectAliases } from '@/composables/useObjectAliases'
 
 const { selected } = useDataSource()
 const auth = useAuthStore()
 const router = useRouter()
+const { label: objLabel } = useObjectAliases()
 
 const windowTab = ref<'24h' | '3d' | '7d' | 'all'>('3d')
 const scope = ref<'all' | 'mine'>('all')
@@ -128,8 +131,10 @@ const rows = computed(() => {
     const s = q.value.trim().toLowerCase()
     if (!s) return true
     return (
-      e.nameA.toLowerCase().includes(s) ||
-      e.nameB.toLowerCase().includes(s) ||
+      objLabel(e.noradA, e.nameA).toLowerCase().includes(s) ||
+      objLabel(e.noradB, e.nameB).toLowerCase().includes(s) ||
+      (e.nameA || '').toLowerCase().includes(s) ||
+      (e.nameB || '').toLowerCase().includes(s) ||
       String(e.noradA).includes(s) ||
       String(e.noradB).includes(s)
     )
@@ -148,6 +153,22 @@ const rows = computed(() => {
     })
   }
   return list
+})
+
+const LIST_PAGE_SIZE = 20
+const page = ref(1)
+const totalPages = computed(() => Math.max(1, Math.ceil(rows.value.length / LIST_PAGE_SIZE)))
+const pagedRows = computed(() => {
+  const p = Math.min(Math.max(1, page.value), totalPages.value)
+  const start = (p - 1) * LIST_PAGE_SIZE
+  return rows.value.slice(start, start + LIST_PAGE_SIZE)
+})
+watch([q, levelFilter, windowTab, scope], () => {
+  page.value = 1
+})
+watch(totalPages, (n) => {
+  if (page.value > n) page.value = n
+  if (page.value < 1) page.value = 1
 })
 
 const emptyHint = computed(() => {
@@ -257,6 +278,7 @@ function fmtTca(iso: string): string {
     <section v-if="!rows.length" class="state">{{ emptyHint }}</section>
 
     <section v-else class="table-wrap">
+      <div class="table-scroll">
       <table>
         <thead>
           <tr>
@@ -276,7 +298,7 @@ function fmtTca(iso: string): string {
         </thead>
         <tbody>
           <tr
-            v-for="e in rows"
+            v-for="e in pagedRows"
             :key="e.key"
             :class="e.level"
             @click="openEvent(e)"
@@ -290,8 +312,8 @@ function fmtTca(iso: string): string {
                 {{ levelLabel(e.level) }}<span v-if="e.levelBasis === 'miss'" class="dim">·{{ t('conj.missBasisTag') }}</span>
               </span>
             </td>
-            <td>{{ e.nameA || `NORAD ${e.noradA}` }}</td>
-            <td>{{ e.nameB || `NORAD ${e.noradB}` }}</td>
+            <td>{{ objLabel(e.noradA, e.nameA) }}</td>
+            <td>{{ objLabel(e.noradB, e.nameB) }}</td>
             <td class="mono">{{ fmtTca(e.tca) }}</td>
             <td class="mono">{{ e.missKm === null ? '—' : e.missKm.toFixed(2) }}</td>
             <td class="mono">{{ fmtPc(e.pc) }}</td>
@@ -300,6 +322,10 @@ function fmtTca(iso: string): string {
           </tr>
         </tbody>
       </table>
+      </div>
+      <div class="list-pager">
+        <CompactPager v-model:page="page" :total-pages="totalPages" :disabled="loading" />
+      </div>
     </section>
     </template>
 
@@ -373,8 +399,16 @@ th.sortable:hover { color: var(--text); }
 }
 .state.error { color: var(--danger); }
 .table-wrap {
-  flex: 1; min-height: 0; overflow: auto; background: var(--bg-panel);
+  flex: 1; min-height: 0; overflow: hidden;
+  display: flex; flex-direction: column;
+  background: var(--bg-panel);
   border: 1px solid var(--border); border-radius: 8px;
+}
+.table-scroll { flex: 1; min-height: 0; overflow: auto; }
+.list-pager {
+  flex: none; min-width: 0;
+  border-top: 1px solid var(--border);
+  padding: 6px 10px;
 }
 table { width: 100%; border-collapse: collapse; font-size: 12px; }
 th {

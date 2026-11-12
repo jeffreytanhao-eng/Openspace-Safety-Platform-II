@@ -14,6 +14,7 @@ import {
   type UserDocument
 } from '@/api/documents'
 import { AuthError } from '@/api/auth'
+import CompactPager from '@/components/CompactPager.vue'
 
 const { t, isZh } = useI18n()
 const auth = useAuthStore()
@@ -131,6 +132,22 @@ function fmtSize(n: number): string {
 const usageText = computed(() => {
   if (quotaMax.value == null) return ''
   return t('docs.usage', { used: quotaUsed.value, max: quotaMax.value })
+})
+
+const DOC_PAGE_SIZE = 20
+const page = ref(1)
+/** Pinned manuals stay visible on every page; the rest are paginated 20 per page. */
+const pinnedItems = computed(() => items.value.filter((it) => it.pinned))
+const unpinnedItems = computed(() => items.value.filter((it) => !it.pinned))
+const totalPages = computed(() => Math.max(1, Math.ceil(unpinnedItems.value.length / DOC_PAGE_SIZE)))
+const pagedItems = computed(() => {
+  const p = Math.min(Math.max(1, page.value), totalPages.value)
+  const start = (p - 1) * DOC_PAGE_SIZE
+  return [...pinnedItems.value, ...unpinnedItems.value.slice(start, start + DOC_PAGE_SIZE)]
+})
+watch(totalPages, (n) => {
+  if (page.value > n) page.value = n
+  if (page.value < 1) page.value = 1
 })
 
 async function loadList(keepId?: string) {
@@ -286,24 +303,31 @@ onMounted(() => {
           <button type="button" class="btn" @click="loadList()">{{ t('docs.retry') }}</button>
         </div>
         <div v-else-if="!items.length" class="empty">{{ t('docs.empty') }}</div>
-        <button
-          v-for="item in items"
-          :key="item.id"
-          type="button"
-          class="doc-item"
-          :class="{ on: selectedId === item.id }"
-          @click="select(item)"
-        >
-          <div class="doc-top">
-            <span v-if="item.pinned" class="badge">{{ t('docs.pinned') }}</span>
-            <span class="name">{{ item.title }}</span>
+        <template v-else>
+          <div class="list-scroll">
+            <button
+              v-for="item in pagedItems"
+              :key="item.id"
+              type="button"
+              class="doc-item"
+              :class="{ on: selectedId === item.id }"
+              @click="select(item)"
+            >
+              <div class="doc-top">
+                <span v-if="item.pinned" class="badge">{{ t('docs.pinned') }}</span>
+                <span class="name">{{ item.title }}</span>
+              </div>
+              <div class="meta">
+                <span>{{ fmtSize(item.size) }}</span>
+                <span>{{ item.createdAt }}</span>
+                <span v-if="item.createdByName">{{ t('docs.createdBy', { name: item.createdByName }) }}</span>
+              </div>
+            </button>
           </div>
-          <div class="meta">
-            <span>{{ fmtSize(item.size) }}</span>
-            <span>{{ item.createdAt }}</span>
-            <span v-if="item.createdByName">{{ t('docs.createdBy', { name: item.createdByName }) }}</span>
+          <div class="list-pager">
+            <CompactPager v-model:page="page" :total-pages="totalPages" :disabled="loading" />
           </div>
-        </button>
+        </template>
       </aside>
 
       <section class="reader">
@@ -418,6 +442,14 @@ h1 {
   display: flex;
   flex-direction: column;
   overflow: auto;
+}
+.list-pane { overflow: hidden; }
+.list-scroll { flex: 1; min-height: 0; overflow: auto; }
+.list-pager {
+  flex: none;
+  min-width: 0;
+  border-top: 1px solid var(--border);
+  padding: 6px 10px;
 }
 .doc-item {
   appearance: none;

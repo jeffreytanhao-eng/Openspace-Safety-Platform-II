@@ -7,8 +7,10 @@ import { listObjects, type ManagedObject } from '@/api/objects'
 import { listEvents } from '@/api/events'
 import { AuthError } from '@/api/auth'
 import { saveReportDocument } from '@/api/documents'
+import { useObjectAliases } from '@/composables/useObjectAliases'
 
 const router = useRouter()
+const { label: objLabel } = useObjectAliases()
 const { t } = useI18n()
 
 const loading = ref(true)
@@ -95,7 +97,7 @@ const events = computed<OwnedCdmItem[]>(() => {
 })
 
 const pairOf = (e: OwnedCdmItem) =>
-  `${e.name_a || e.norad_a} × ${e.name_b || e.norad_b}`
+  `${objLabel(e.norad_a, e.name_a) || e.norad_a} × ${objLabel(e.norad_b, e.name_b) || e.norad_b}`
 
 function fmtTca(v: string): string {
   const d = new Date(v)
@@ -185,9 +187,9 @@ async function buildReportText(): Promise<{ text: string; mime: string } | null>
       e.level,
       e.tca,
       String(e.noradA),
-      e.nameA,
+      objLabel(e.noradA, e.nameA),
       String(e.noradB),
-      e.nameB,
+      objLabel(e.noradB, e.nameB),
       e.pc == null ? '' : String(e.pc),
       e.missKm == null ? '' : String(e.missKm),
       e.relSpeedKmS == null ? '' : String(e.relSpeedKmS),

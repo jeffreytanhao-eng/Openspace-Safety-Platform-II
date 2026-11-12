@@ -13,8 +13,10 @@ import {
 } from './scene'
 import { useCatalog, type CatalogTle } from '@/composables/useCatalog'
 import { useI18n } from '@/composables/useI18n'
+import { useObjectAliases } from '@/composables/useObjectAliases'
 
 const { t, locale } = useI18n()
+const { label: objLabel, aliasOf } = useObjectAliases()
 
 const TYPE_LABEL_EN: Record<string, string> = {
   PAYLOAD: 'Satellite',
@@ -96,24 +98,61 @@ const filtered = computed(() => {
   }
   if (q) {
     list = list.filter((x) =>
-      (x.object_name || '').toUpperCase().includes(q) || String(x.norad_id).includes(q)
+      (x.object_name || '').toUpperCase().includes(q) ||
+      objLabel(x.norad_id, x.object_name).toUpperCase().includes(q) ||
+      String(x.norad_id).includes(q)
     )
   }
   return list.slice(0, LIST_PAGE)
 })
 
-const stationCards = [
-  { key: 'css', name: '天宫空间站', operator: '中国载人航天工程', country: '中国', iso: 'cn', norad: 48274 },
-  { key: 'iss', name: '国际空间站', operator: '多国合作', country: '国际', iso: '', norad: 25544 }
-]
+const stationCards = computed(() => [
+  {
+    key: 'css',
+    name: t('sitp.stCssName'),
+    operator: t('sitp.stCssOp'),
+    country: t('sitp.stCssCountry'),
+    iso: 'cn',
+    norad: 48274
+  },
+  {
+    key: 'iss',
+    name: t('sitp.stIssName'),
+    operator: t('sitp.stIssOp'),
+    country: t('sitp.stIssCountry'),
+    iso: '',
+    norad: 25544
+  }
+])
 /** Lit when parent/scene stationFocus matches (updated via local toggle echo). */
 const stationOn = ref('')
 
-const featuredCons = [
-  { name: 'Starlink', op: 'SpaceX', country: '美国', iso: 'us', tag: '通信', q: 'STARLINK' },
-  { name: 'OneWeb', op: 'OneWeb', country: '英国', iso: 'gb', tag: '通信', q: 'ONEWEB' },
-  { name: '北斗', op: '中国卫星导航', country: '中国', iso: 'cn', tag: '导航', q: 'BEIDOU' }
-]
+const featuredCons = computed(() => [
+  {
+    name: 'Starlink',
+    op: 'SpaceX',
+    country: t('sitp.consStarlinkCountry'),
+    iso: 'us',
+    tag: t('sitp.tagComm'),
+    q: 'STARLINK'
+  },
+  {
+    name: 'OneWeb',
+    op: 'OneWeb',
+    country: t('sitp.consOneWebCountry'),
+    iso: 'gb',
+    tag: t('sitp.tagComm'),
+    q: 'ONEWEB'
+  },
+  {
+    name: t('sitp.consBeidouName'),
+    op: t('sitp.consBeidouOp'),
+    country: t('sitp.consBeidouCountry'),
+    iso: 'cn',
+    tag: t('sitp.tagNav'),
+    q: 'BEIDOU'
+  }
+])
 /** Local mirror of consShow — true = card lit (scene owns authoritative map). */
 const consOnMap = ref<Record<string, boolean>>({})
 const consOrbitOnMap = ref<Record<string, boolean>>({})
@@ -187,7 +226,7 @@ function pick(item: CatalogTle) {
 }
 
 /** 位置展示：独立通道。不关类型芯片、不关星座展示、不写 keyword。 */
-function pickStation(s: (typeof stationCards)[0]) {
+function pickStation(s: (typeof stationCards.value)[0]) {
   if (stationOn.value === s.key) {
     stationOn.value = ''
   } else {
@@ -286,7 +325,7 @@ onMounted(() => {
           type="button"
           class="sp-type"
           :class="{ on: activeTypes.includes(tk) }"
-          :title="(activeTypes.includes(tk) ? '关闭' : '打开') + '「' + typeLabel(tk) + '」'"
+          :title="t('sat.toggleTitle', { state: activeTypes.includes(tk) ? t('sat.toggleOff') : t('sat.toggleOn'), name: typeLabel(tk) })"
           @click="toggleType(tk)"
         >
           <span class="sp-type-dot" :style="{ background: colorCss(tk) }"></span>
@@ -304,7 +343,7 @@ onMounted(() => {
           <div class="sp-cons-head">
             <span class="sp-cons-name" :title="s.name">{{ s.name }}</span>
             <span class="sp-cons-op">{{ t('sat.operator') }}{{ s.operator }}</span>
-            <span class="sp-cons-tag">空间站</span>
+            <span class="sp-cons-tag">{{ t('sat.stationTag') }}</span>
           </div>
           <div class="sp-cons-meta">
             <span>{{ s.country }}</span>
@@ -316,9 +355,9 @@ onMounted(() => {
               type="button"
               class="sp-cons-btn"
               :class="{ on: stationOn === s.key }"
-              :title="stationOn === s.key ? '点暗：取消该站的单独展示（之后跟随「卫星」开关）' : '点亮：单独展示该空间站并拉近镜头（不影响其它目标）'"
+              :title="stationOn === s.key ? t('sat.stationTipOn') : t('sat.stationTipOff')"
               @click="pickStation(s)"
-            >位置展示</button>
+            >{{ t('sat.posShow') }}</button>
           </div>
         </div>
 
@@ -343,7 +382,7 @@ onMounted(() => {
               type="button"
               class="sp-cons-btn"
               :class="{ on: consShowLit(c.name) }"
-              :title="consShowLit(c.name) ? '点暗：不再展示该星座卫星（不影响其它星座与类型开关）' : '点亮：展示该星座全部卫星（不影响类型开关）'"
+              :title="consShowLit(c.name) ? t('sat.consTipHide') : t('sat.consTipShow')"
               @click="pickCons(c.name)"
             >{{ t('sat.consShow') }}</button>
             <button
@@ -351,7 +390,7 @@ onMounted(() => {
               class="sp-cons-btn"
               :class="{ on: orbitLit(c.name) }"
               :disabled="!consShowLit(c.name)"
-              :title="!consShowLit(c.name) ? '先点亮「星座展示」' : (orbitLit(c.name) ? '点暗：隐藏该星座轨道' : '点亮：显示该星座展示中卫星的轨道（蓝色细线）')"
+              :title="!consShowLit(c.name) ? t('sat.consNeedFirst') : (orbitLit(c.name) ? t('sat.orbitTipHide') : t('sat.orbitTipShow'))"
               @click="toggleOrbit(c.name)"
             >{{ t('sat.orbitShow') }}</button>
           </div>
@@ -377,8 +416,9 @@ onMounted(() => {
         >
           <span class="sp-item-dot" :style="{ background: colorCss(item.object_type) }" />
           <span class="sp-item-main">
-            <b class="sp-item-name">{{ item.object_name || '—' }}</b>
+            <b class="sp-item-name">{{ objLabel(item.norad_id, item.object_name) || '—' }}</b>
             <span class="sp-item-nor">
+              <template v-if="aliasOf(item.norad_id)">{{ item.object_name }} · </template>
               NORAD {{ item.norad_id }}
               <template v-if="item.regime"> · {{ item.regime }}</template>
               <template v-if="item.object_type"> · {{ item.object_type }}</template>
@@ -390,7 +430,7 @@ onMounted(() => {
             :src="'https://flagcdn.com/w20/' + flagIso(item.owner_code) + '.png'"
             alt=""
           />
-          <span class="sp-item-type">{{ TYPE_LABEL[typeKey(item)] }}</span>
+          <span class="sp-item-type">{{ typeLabel(typeKey(item)) }}</span>
         </button>
       </div>
     </aside>

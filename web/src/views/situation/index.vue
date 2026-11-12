@@ -29,6 +29,7 @@ import { putSet } from './ephem/store'
 import type { EphemSet } from './ephem/types'
 import type { CatalogTle } from '@/composables/useCatalog'
 import { useCatalog } from '@/composables/useCatalog'
+import { useObjectAliases } from '@/composables/useObjectAliases'
 import { buildEventCloudItems, type EventCloudItem } from './eventCloudThree'
 
 type I18nKey = Parameters<ReturnType<typeof useI18n>['t']>[0]
@@ -38,6 +39,7 @@ type PanelKind = 'sat' | 'site' | 'cons'
 const sceneRef = ref<InstanceType<typeof SceneCore>>()
 const { isMobile } = useDevice()
 const route = useRoute()
+const { label: objLabel, load: loadAliases } = useObjectAliases({ autoLoad: true })
 const { t } = useI18n()
 
 /* ---------------- 左侧列表面板 ---------------- */
@@ -273,8 +275,8 @@ function toCloudItem(e: ConjunctionEvent): EventCloudItem {
     key: e.key,
     noradA: e.noradA,
     noradB: e.noradB,
-    nameA: e.nameA,
-    nameB: e.nameB,
+    nameA: objLabel(e.noradA, e.nameA),
+    nameB: objLabel(e.noradB, e.nameB),
     tca: e.tca,
     tcaMs: new Date(e.tca).getTime(),
     level: e.level as EventCloudItem['level'],
@@ -314,6 +316,7 @@ async function toggleEventCloud(): Promise<boolean> {
     // 锚点依赖编目快照状态向量，未就绪先拉一次
     const { cloudList, loadConstellation } = useCatalog()
     if (!cloudList.value.length) await loadConstellation()
+    await loadAliases()
     const raw = capEvents(await ensureEventRaw())
     const built = await buildEventCloudItems(raw.map(toCloudItem))
     eventItems.value = built.items
@@ -633,7 +636,7 @@ watch(
       <div class="ev-head">
         <span class="ev-badge">{{ t(`sit.eventLv.${selEvent.level}` as I18nKey) }}</span>
         <b class="ev-name mono">
-          {{ selEvent.nameA || selEvent.noradA }} × {{ selEvent.nameB || selEvent.noradB }}
+          {{ objLabel(selEvent.noradA, selEvent.nameA) || selEvent.noradA }} × {{ objLabel(selEvent.noradB, selEvent.nameB) || selEvent.noradB }}
         </b>
         <button class="ev-close" :title="t('sit.eventClose')" @click="closeEventCard">×</button>
       </div>

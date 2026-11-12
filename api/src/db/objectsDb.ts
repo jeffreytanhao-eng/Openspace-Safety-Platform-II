@@ -20,6 +20,8 @@ export interface ObjectRow {
   org_id: number
   norad_id: number
   name: string
+  /** 本组织别名，仅本组织可见；未设置为 null */
+  alias: string | null
   mass_kg: number | null
   cross_section_m2: number | null
   propulsion: string
@@ -42,6 +44,7 @@ CREATE TABLE IF NOT EXISTS \`objects\` (
   \`org_id\`          bigint unsigned NOT NULL,
   \`norad_id\`        int NOT NULL,
   \`name\`            varchar(100) NOT NULL DEFAULT '',
+  \`alias\`           varchar(64) NULL COMMENT '组织内别名，仅本组织可见；空则回退官方名称',
   \`mass_kg\`         double NULL,
   \`cross_section_m2\` double NULL,
   \`propulsion\`      varchar(60) NOT NULL DEFAULT '',
@@ -59,7 +62,8 @@ CREATE TABLE IF NOT EXISTS \`objects\` (
   PRIMARY KEY (\`id\`),
   UNIQUE KEY \`uk_org_norad\` (\`org_id\`, \`norad_id\`),
   UNIQUE KEY \`uk_owner_norad\` (\`owner_norad\`),
-  KEY \`idx_norad\` (\`norad_id\`)
+  KEY \`idx_norad\` (\`norad_id\`),
+  KEY \`idx_org_alias\` (\`org_id\`, \`alias\`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
   COMMENT='目标（组织认领的 NORAD 档案）'`
 
@@ -177,11 +181,21 @@ async function migrateObjectsSchema(): Promise<void> {
       await pool.query('ALTER TABLE objects ADD UNIQUE KEY uk_owner_norad (owner_norad)')
     }
   }
+  if (!colNames.has('alias')) {
+    await pool.query(
+      `ALTER TABLE objects ADD COLUMN alias varchar(64) NULL
+        COMMENT '组织内别名，仅本组织可见；空则回退官方名称' AFTER name`
+    )
+    colNames.add('alias')
+  }
+  if (!idxNames.has('idx_org_alias')) {
+    await pool.query('ALTER TABLE objects ADD KEY idx_org_alias (org_id, alias)')
+  }
 }
 
 interface RawObject extends RowDataPacket, ObjectRow {}
 
-const COLS = 'id, org_id, norad_id, name, mass_kg, cross_section_m2, propulsion, accepted_pc, accepted_miss_km, claim_status, claim_type, requested_by_user_id, reviewed_by, reviewed_at, review_note, created_at, updated_at'
+const COLS = 'id, org_id, norad_id, name, alias, mass_kg, cross_section_m2, propulsion, accepted_pc, accepted_miss_km, claim_status, claim_type, requested_by_user_id, reviewed_by, reviewed_at, review_note, created_at, updated_at'
 
 export async function listObjectsByOrg(orgId: number, opts?: { includePending?: boolean }): Promise<ObjectRow[]> {
   const statusFilter = opts?.includePending ? "claim_status IN ('claimed','pending')" : "claim_status = 'claimed'"
@@ -203,7 +217,7 @@ export async function listAllObjects(): Promise<Array<ObjectRow & { org_name: st
       WHERE o.claim_status = 'claimed'
       ORDER BY o.id DESC`
   )
-  return rows.map((r) => ({ ...(r as ObjectRow), org_name: String(r.org_name ?? '') }))
+  return rows.map((r) => ({ ...(r as ObjectRow), org_name: String(r.org_name ?? ''), alias: null }))
 }
 
 /** 平台账号只读：目标所属组织名 */
@@ -494,6 +508,49 @@ export async function updateObject(id: number, patch: UpdateObjectInput): Promis
 /** 释放认领（删除行；历史操作可在后续审计/版本化中留痕） */
 export async function deleteObject(id: number): Promise<void> {
   await pool.query('DELETE FROM objects WHERE id = ?', [id])
+}
+
+export const ALIAS_MAX_LEN = 64
+const ALIAS_ILLEGAL = /[\\/:*?"<>|\u0000-\u001f]/
+
+export function normalizeAlias(raw: unknown): { ok: true; value: string | null } | { ok: false; error: string } {
+  if (raw == null) return { ok: true, value: null }
+  if (typeof raw !== 'string') return { ok: false, error: '别名格式无效' }
+  const s = raw.trim()
+  if (!s) return { ok: true, value: null }
+  if (s.length > ALIAS_MAX_LEN) return { ok: false, error: `别名最多 ${ALIAS_MAX_LEN} 个字符` }
+  if (ALIAS_ILLEGAL.test(s) || /[\r\n]/.test(s)) return { ok: false, error: '别名不能包含路径或控制字符' }
+  return { ok: true, value: s }
+}
+
+/** 同组织内别名大小写不敏感查重（仅认领/关注中的目标） */
+export async function findAliasConflict(orgId: number, alias: string, excludeId?: number): Promise<ObjectRow | null> {
+  const params: unknown[] = [orgId, alias]
+  let sql = `SELECT ${COLS} FROM objects
+      WHERE org_id = ? AND alias IS NOT NULL AND LOWER(alias) = LOWER(?)
+        AND claim_status IN ('claimed', 'pending')`
+  if (excludeId != null) {
+    sql += ' AND id <> ?'
+    params.push(excludeId)
+  }
+  sql += ' LIMIT 1'
+  const [rows] = await pool.query<RawObject[]>(sql, params)
+  return (rows[0] as ObjectRow) ?? null
+}
+
+export async function updateObjectAlias(id: number, alias: string | null): Promise<ObjectRow | null> {
+  await pool.query('UPDATE objects SET alias = ? WHERE id = ?', [alias, id])
+  return getObjectById(id)
+}
+
+export async function listOrgAliases(orgId: number): Promise<Array<{ id: number; noradId: number; name: string; alias: string | null }>> {
+  const rows = await listObjectsByOrg(orgId, { includePending: true })
+  return rows.map((r) => ({
+    id: r.id,
+    noradId: r.norad_id,
+    name: r.name,
+    alias: r.alias ? String(r.alias) : null
+  }))
 }
 
 /** 目标的绑定星历数（列表展示） */
