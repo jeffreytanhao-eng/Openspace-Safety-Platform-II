@@ -1054,7 +1054,7 @@ function lvLabel(v?: string | null): string {
               />
             </td>
             <td v-if="isPlatform" class="dim">{{ o.org_name || '—' }}</td>
-            <td class="name" @click="!isPlatform && startEditAlias(o, $event)">
+            <td class="name">
               <div v-if="editingAliasId !== o.id || selected?.id === o.id" class="name-cell">
                 <div class="name-text">
                   <div class="name-primary">{{ objectLabel(o) }}</div>
@@ -1065,7 +1065,8 @@ function lvLabel(v?: string | null): string {
                   type="button"
                   class="name-edit-btn"
                   :title="t('obj.alias.edit')"
-                  @click="startEditAlias(o, $event)"
+                  :aria-label="t('obj.alias.edit')"
+                  @click.stop="startEditAlias(o, $event)"
                 >✎</button>
               </div>
               <div v-else class="name-editor" @click.stop>
@@ -1710,12 +1711,31 @@ th.chk-col input, td.chk-col input { cursor: pointer; }
 .name-primary { font-weight: 600; line-height: 1.25; }
 .name-official { margin-top: 2px; font-size: 10px; font-weight: 400; color: var(--text-dim); line-height: 1.2; }
 .name-edit-btn {
-  appearance: none; border: none; background: transparent;
-  color: var(--text-dim); cursor: pointer; padding: 0 2px;
-  opacity: 0; font-size: 12px; line-height: 1; flex: 0 0 auto;
+  appearance: none;
+  box-sizing: border-box;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  margin-top: 1px;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  background: var(--bg-panel, transparent);
+  color: var(--text-dim);
+  cursor: pointer;
+  font-size: 11px;
+  line-height: 1;
+  flex: 0 0 auto;
 }
-tbody tr:hover .name-edit-btn, .name-cell:focus-within .name-edit-btn, .name-edit-btn:focus { opacity: 1; }
-.name-edit-btn:hover { color: var(--accent-strong, var(--text)); }
+.name-edit-btn:hover,
+.name-edit-btn:focus {
+  color: var(--accent-strong, var(--text));
+  border-color: var(--accent-strong, var(--border-strong, var(--border)));
+  background: var(--bg-hover);
+  outline: none;
+}
 .name-editor { display: flex; flex-direction: column; gap: 4px; min-width: 180px; }
 .name-editor input {
   appearance: none; border: 1px solid var(--border-strong, var(--border));
