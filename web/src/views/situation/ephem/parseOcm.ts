@@ -1,6 +1,6 @@
 import type { EphemFrame, EphemManSegment, EphemSet, EphemState, ParseResult, Vec3 } from './types'
 import { parseIso } from './time'
-import { frameToEci, uvwCovToEci } from './frames'
+import { frameToEci, itrfCovToEci, uvwCovToEci } from './frames'
 
 const NUM_RE = /^[+-]?(?:\d+\.?\d*|\.\d+)(?:[eE][+-]?\d+)?$/
 const FRAME_SET: EphemFrame[] = ['UVW', 'EME2000', 'ICRF', 'ITRF', 'TEME']
@@ -17,6 +17,31 @@ function lowerTriangleToCov(nums: number[]): Float64Array {
     }
   }
   return cov
+}
+
+/** Row-major 6×6 (36 terms); symmetrized. */
+function fullMatrixToCov(nums: number[]): Float64Array {
+  const cov = new Float64Array(36)
+  for (let i = 0; i < 36; i++) cov[i] = nums[i]
+  for (let i = 0; i < 6; i++) {
+    for (let j = 0; j < i; j++) {
+      const a = cov[i * 6 + j]
+      const b = cov[j * 6 + i]
+      const v = Number.isFinite(a) && Number.isFinite(b) ? 0.5 * (a + b) : Number.isFinite(a) ? a : b
+      cov[i * 6 + j] = v
+      cov[j * 6 + i] = v
+    }
+  }
+  return cov
+}
+
+function numsToCov(nums: number[], ordering: 'LTM' | 'FULL' | ''): Float64Array | null {
+  if (ordering === 'FULL' || (ordering !== 'LTM' && nums.length >= 36)) {
+    if (nums.length < 36) return null
+    return fullMatrixToCov(nums.slice(0, 36))
+  }
+  if (nums.length < 21) return null
+  return lowerTriangleToCov(nums.slice(0, 21))
 }
 
 function medianStep(states: EphemState[]): number {
@@ -47,8 +72,9 @@ function nearestIndex(states: EphemState[], t: number): number {
  * (a) 每行 7 列数字：`ISO时间 x y z vx vy vz`；
  * (b) 键值组：`EPOCH = <iso>` 后跟 `X/Y/Z/X_DOT/Y_DOT/Z_DOT = ...`。
  *
- * 协方差段 `COVARIANCE_START ... COVARIANCE_STOP` 内 `EPOCH =` 起 21 个下三角值，
- * 默认按 RTN(=UVW) 处理并旋转到 ECI（若 COV_REF_FRAME 明确为惯性系则不旋转）。
+ * 协方差段 `COV_START` / `COVARIANCE_START`：支持 LTM（21 项下三角）与 FULL（6×6 共 36 项），
+ * 以及 `EPOCH =` 键值写法。先按文件参考系入库，状态转到 ECI 后再旋转协方差
+ * （RTN/UVW/RSW → uvwCovToEci；ITRF CARTPV → itrfCovToEci；惯性系不转）。
  */
 export function parseOcm(text: string): ParseResult {
   const warnings: string[] = []
@@ -79,6 +105,7 @@ export function parseOcm(text: string): ParseResult {
   let objectName = ''
   let objectId = ''
   let covFrame: string = 'RTN'
+  let covOrdering: 'LTM' | 'FULL' | '' = ''
 
   let covEpoch: number | null = null
   let covNums: number[] = []
@@ -120,8 +147,9 @@ export function parseOcm(text: string): ParseResult {
       covNums = []
       return
     }
-    if (covNums.length < 21) {
-      warnings.push(`协方差历元 ${new Date(covEpoch).toISOString()} 只有 ${covNums.length} 个值（应为 21 个），已忽略`)
+    const cov = numsToCov(covNums, covOrdering)
+    if (!cov) {
+      warnings.push(`协方差历元 ${new Date(covEpoch).toISOString()} 只有 ${covNums.length} 个值（LTM 需 21 项，FULL 需 36 项），已忽略`)
       covEpoch = null
       covNums = []
       return
@@ -130,10 +158,8 @@ export function parseOcm(text: string): ParseResult {
     if (idx < 0 || Math.abs(states[idx].t - covEpoch) > 60000) {
       warnings.push(`协方差历元 ${new Date(covEpoch).toISOString()} 附近 60s 内无状态点，已忽略`)
     } else {
-      const st = states[idx]
-      const cov = lowerTriangleToCov(covNums.slice(0, 21))
-      const isRtn = /RTN|UVW|RSW/i.test(covFrame)
-      st.cov = isRtn ? uvwCovToEci(cov, st.r, st.v) : cov
+      // Raw file-frame matrix; rotated to ECI after states themselves are in ECI.
+      states[idx].cov = cov
     }
     covEpoch = null
     covNums = []
@@ -219,6 +245,11 @@ export function parseOcm(text: string): ParseResult {
           if (covEpoch === null) warnings.push(`第 ${ln} 行协方差 EPOCH 无法解析：${value}`)
         } else if (key === 'COV_REF_FRAME') {
           covFrame = value
+        } else if (key === 'COV_ORDERING') {
+          const o = value.toUpperCase()
+          covOrdering = o.includes('FULL') ? 'FULL' : o.includes('LTM') ? 'LTM' : covOrdering
+        } else if (key === 'COV_TYPE') {
+          /* CARTPV / other; CARTPV is the 6×6 position-velocity block we already parse */
         } else if (NUM_RE.test(value)) {
           covNums.push(Number(value))
         }
@@ -254,6 +285,9 @@ export function parseOcm(text: string): ParseResult {
         if ((FRAME_SET as string[]).indexOf(frameCand) >= 0) refFrame = frameCand as EphemFrame
       } else if (key === 'COV_REF_FRAME') {
         covFrame = value
+      } else if (key === 'COV_ORDERING') {
+        const o = value.toUpperCase()
+        covOrdering = o.includes('FULL') ? 'FULL' : o.includes('LTM') ? 'LTM' : covOrdering
       } else if (section === 'man' && manAcc) {
         if (key === 'MAN_ID') manAcc.id = value
         else if (key === 'MAN_BASIS') manAcc.basis = value
@@ -285,10 +319,14 @@ export function parseOcm(text: string): ParseResult {
       const tokens = line.split(/\s+/)
       // Starlink public OCM: "<ISO> c11..c66" (21 LTM values after time)
       const maybeT = parseIso(tokens[0])
-      if (maybeT !== null && tokens.length >= 22 && tokens.slice(1, 22).every((c) => NUM_RE.test(c))) {
+      const rest = tokens.slice(1)
+      const nums = rest.filter((c) => NUM_RE.test(c)).map(Number)
+      const wantFull = covOrdering === 'FULL' || (covOrdering !== 'LTM' && nums.length >= 36)
+      const need = wantFull ? 36 : 21
+      if (maybeT !== null && nums.length >= need) {
         attachCov()
         covEpoch = maybeT
-        covNums = tokens.slice(1, 22).map(Number)
+        covNums = nums.slice(0, need)
         attachCov()
         continue
       }
@@ -351,11 +389,23 @@ export function parseOcm(text: string): ParseResult {
       st.r = conv.r
       st.v = conv.v
     }
-    warnings.push('状态已从 ITRF 旋转到 ECI（仅 GMST 绕 Z 轴），协方差未旋转')
+    warnings.push('状态已从 ITRF 旋转到 ECI（仅 GMST 绕 Z 轴）')
     usedFrame = 'EME2000'
   }
-  if (/RTN|UVW|RSW/i.test(covFrame)) {
-    warnings.push('协方差按 RTN(UVW) 处理，已旋转到 ECI')
+  const covIsRtn = /RTN|UVW|RSW/i.test(covFrame)
+  const covIsItrf = /ITRF/i.test(covFrame)
+  let covCount = 0
+  for (const st of states) {
+    if (!st.cov) continue
+    covCount++
+    if (covIsRtn) st.cov = uvwCovToEci(st.cov, st.r, st.v)
+    else if (covIsItrf) st.cov = itrfCovToEci(st.cov, st.t)
+    // inertial / unspecified non-RTN: already treated as ECI/ITRF-like inertial components
+  }
+  if (covCount) {
+    if (covIsRtn) warnings.push('协方差按 RTN(UVW) 处理，已旋转到 ECI')
+    else if (covIsItrf) warnings.push('协方差按 ITRF CARTPV 处理，已随状态旋转到 ECI（位置块精确）')
+    else warnings.push(`协方差参考系 ${covFrame || '未标注'}，按惯性系分量使用`)
   }
 
   const first = states[0]
@@ -380,6 +430,7 @@ export function parseOcm(text: string): ParseResult {
     states,
     objectId: objectId || undefined,
     maneuvers: maneuvers.length ? maneuvers : undefined,
+    hasCov: states.some((s) => !!s.cov),
     warnings
   }
 

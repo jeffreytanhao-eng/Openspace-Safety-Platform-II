@@ -8,7 +8,8 @@
  *
  * IndexedDB 不可用时（隐私模式 / 受限 WebView）降级为内存 Map，功能仍可用，只是刷新后丢失。
  */
-import type { EphemFormat, EphemFrame, EphemManSegment, EphemSet, EphemState, ThreatEvent } from './types'
+import type { EphemFormat, EphemFrame, EphemManSegment, EphemSet, EphemState, ThreatEvent, UncertaintyCatalog } from './types'
+import { enrichSetWithUncertainty } from './uncertainty'
 
 const DB_NAME = 'openspace-ephem'
 const DB_VERSION = 2
@@ -39,6 +40,8 @@ export interface EphemMeta {
 interface StatesRow {
   id: string
   states: EphemState[]
+  /** Sparse ellipsoid catalog; persisted so getSet survives COV stripping. */
+  uncertainty?: UncertaintyCatalog
 }
 
 /** 一次筛选结果（按 setId 一行覆盖写；selfName 供热力面板「我的星历」页签展示） */
@@ -54,6 +57,7 @@ let dbPromise: Promise<IDBDatabase | null> | null = null
 /** IndexedDB 不可用时的内存兜底 */
 const memMeta = new Map<string, EphemMeta>()
 const memStates = new Map<string, EphemState[]>()
+const memUncertainty = new Map<string, UncertaintyCatalog>()
 const memEvents = new Map<string, ThreatEventRow>()
 
 function openDb(): Promise<IDBDatabase | null> {
@@ -123,11 +127,15 @@ export async function putSet(set: EphemSet): Promise<void> {
   if (!db) {
     memMeta.set(meta.id, meta)
     memStates.set(meta.id, set.states)
+    if (set.uncertainty) memUncertainty.set(meta.id, set.uncertainty)
+    else memUncertainty.delete(meta.id)
     return
   }
   await Promise.all([
     tx(META, 'readwrite', (s) => s.put(meta)),
-    tx(STATES, 'readwrite', (s) => s.put({ id: set.id, states: set.states } as StatesRow))
+    tx(STATES, 'readwrite', (s) =>
+      s.put({ id: set.id, states: set.states, uncertainty: set.uncertainty } as StatesRow)
+    )
   ])
 }
 
@@ -145,13 +153,15 @@ export async function getSet(id: string): Promise<EphemSet | null> {
   if (!meta) return null
   const db = await openDb()
   let states: EphemState[] | undefined
+  let row: StatesRow | undefined
   if (!db) states = memStates.get(id)
   else {
-    const row = await tx<StatesRow>(STATES, 'readonly', (s) => s.get(id))
+    row = (await tx<StatesRow>(STATES, 'readonly', (s) => s.get(id))) || undefined
     states = row?.states
   }
   if (!states?.length) return null
-  return {
+  const uncertainty = db ? row?.uncertainty : memUncertainty.get(id)
+  const set: EphemSet = {
     id: meta.id,
     norad: meta.norad,
     name: meta.name,
@@ -164,8 +174,12 @@ export async function getSet(id: string): Promise<EphemSet | null> {
     stepSec: meta.stepSec,
     states,
     warnings: meta.warnings,
+    hasCov: meta.hasCov,
+    ...(uncertainty?.samples?.length ? { uncertainty } : {}),
     ...(meta.maneuvers?.length ? { maneuvers: meta.maneuvers } : {})
   }
+  if (!set.uncertainty?.samples?.length) enrichSetWithUncertainty(set)
+  return set
 }
 
 async function getMeta(id: string): Promise<EphemMeta | null> {
@@ -180,6 +194,7 @@ export async function deleteSet(id: string): Promise<void> {
   if (!db) {
     memMeta.delete(id)
     memStates.delete(id)
+    memUncertainty.delete(id)
     return
   }
   await Promise.all([

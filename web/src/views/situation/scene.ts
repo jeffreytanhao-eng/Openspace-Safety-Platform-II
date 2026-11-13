@@ -146,6 +146,20 @@ export const skyLayers = reactive<Record<SkyLayerKey, boolean>>({
 
 /** 仿真时刻（毫秒时间戳），默认等于真实 UTC 当前时间 */
 export const simTimeMs = ref(Date.now())
+
+/** 态势：在选中星历轨道上显示位置不确定性椭球（默认关，面板勾选后开启） */
+export const uncVisible = ref(false)
+/** 椭球半轴倍率：1σ 或 3σ */
+export const uncSigmaN = ref<1 | 3>(1)
+/** 横向截面放大倍率（仅作用于 1σ 截面；3σ 为其 3 倍），可选 1× / 5× / 20× */
+export const uncScale = ref<1 | 5 | 20>(5)
+/** 当前椭球提示（文件协方差 / 龄期模型、是否放大），供侧栏图例使用 */
+export const uncLegend = ref<{ source: 'file' | 'age' | null; exaggerated: boolean; scale: number; maxSigmaKm: number }>({
+  source: null,
+  exaggerated: false,
+  scale: 1,
+  maxSigmaKm: 0
+})
 /** 仿真倍率 */
 export const simSpeed = ref(1)
 /** 是否播放 */

@@ -7,7 +7,8 @@
  * - 激活后三维绘出该星历的完整轨道与当前位置。
  */
 import { computed, onMounted, ref, watch } from 'vue'
-import { ephOpen, drawerHeightVh, isDrawerDragging, useDrawerDrag } from './scene'
+import { ephOpen, drawerHeightVh, isDrawerDragging, useDrawerDrag, uncVisible, uncSigmaN, uncScale } from './scene'
+import { applyUncertaintyDisplay, applyUncertaintyScale } from './ephemOrbitThree'
 import {
   MAX_FILE_MB,
   activeEphem, ephemBusy, ephemError, ephemMetas,
@@ -16,7 +17,7 @@ import {
   type BuiltinSample
 } from './ephem/useUserEphemeris'
 import type { ThreatEvent, Vec3 } from './ephem/types'
-import { manSpeedLine, manSpeedSense } from './ephem/maneuverDisplay'
+import { fmtDvWithSense, manDvVectorPhrase, manGlobeDvLines, manSpeedSense } from './ephem/maneuverDisplay'
 import { useI18n } from '@/composables/useI18n'
 import CompactPager from '@/components/CompactPager.vue'
 import type { EphemMeta } from './ephem/store'
@@ -27,6 +28,39 @@ import { twoBodyPropagate } from './ephem/screening'
 const { t } = useI18n()
 const tMan = (key: string, params?: Record<string, string | number>) => t(key as never, params)
 
+/**
+ * Local refs + v-model (not imported/computed bindings, not click.prevent on the box).
+ * A native checkbox can look checked while Vue state stays off; :disabled then keeps
+ * both chips grey and the tube never builds. v-model writes uncOn, applyUncertaintyDisplay
+ * writes the same scene refs the 3D layer reads and immediately refreshes the 20x tube.
+ * Chips are never the disabled attribute (that sets pointer-events:none); they no-op when off.
+ */
+const uncOn = ref(false)
+const uncN = ref<1 | 3>(1)
+/** 1σ 截面放大倍率（1× / 5× / 20×），与场景共享 uncScale */
+const uncScaleOn = ref<1 | 5 | 20>(uncScale.value)
+function applyUncFromUi() {
+  applyUncertaintyDisplay(uncOn.value, uncN.value)
+}
+watch(uncOn, (v) => {
+  if (uncVisible.value !== v) applyUncFromUi()
+  else applyUncertaintyDisplay(v, uncN.value)
+})
+watch(uncVisible, (v) => { if (uncOn.value !== v) uncOn.value = v })
+watch(uncSigmaN, (v) => { if (uncN.value !== v) uncN.value = v })
+watch(uncScale, (v) => { if (uncScaleOn.value !== v) uncScaleOn.value = v })
+function onUncSigmaChip(n: 1 | 3) {
+  if (!uncOn.value) return
+  uncN.value = n
+  applyUncertaintyDisplay(true, n)
+}
+function onUncScaleChange(e: Event) {
+  const v = Number((e.target as HTMLSelectElement).value)
+  const s: 1 | 5 | 20 = v === 20 ? 20 : v === 5 ? 5 : 1
+  uncScaleOn.value = s
+  applyUncertaintyScale(s)
+}
+
 /** 机动明细行：每段 MAN 的起始时刻 / 时长 / Δv / 方向 / 目的 / 位置经纬度（OCM 专有） */
 interface ManRow {
   t0: number
@@ -36,7 +70,9 @@ interface ManRow {
   done: boolean
   dvMps?: number
   purpose?: string
-  dirText: string
+  dvText: string
+  vecText: string
+  globeText: string
 }
 /** 机动卡片定位事件负载（发给三维做标签文本与高亮定位） */
 interface ManLocateInfo {
@@ -48,6 +84,7 @@ interface ManLocateInfo {
   dvMps?: number
   purpose?: string
   dirText: string
+  globeText: string
 }
 
 const emit = defineEmits<{
@@ -262,7 +299,9 @@ const activeManList = computed<ManRow[]>(() => {
       done: m.t1 < Date.now(),
       dvMps: m.dvMps,
       purpose: m.purpose,
-      dirText: manSpeedLine(m, tMan, sense)
+      dvText: fmtDvWithSense(m.dvMps, sense, tMan),
+      vecText: manDvVectorPhrase(m, r, v),
+      globeText: manGlobeDvLines(m, tMan, sense, r, v)
     }
   })
 })
@@ -285,7 +324,7 @@ function toggleMan(i: number, m: ManRow) {
     return
   }
   selectedMan.value = i
-  emit('locate-man', i, { idx: i, t0: m.t0, duraSec: m.duraSec, lat: m.lat, lon: m.lon, dvMps: m.dvMps, purpose: m.purpose, dirText: m.dirText })
+  emit('locate-man', i, { idx: i, t0: m.t0, duraSec: m.duraSec, lat: m.lat, lon: m.lon, dvMps: m.dvMps, purpose: m.purpose, dirText: m.globeText, globeText: m.globeText })
 }
 
 function fmtUtc(ms?: number, withSec = false) {
@@ -484,14 +523,42 @@ function isCardActive(c: EphCard): boolean {
                     </span>
                     <span
                       class="ep-man-line is-item is-dv"
-                      :title="m.purpose ? (m.dirText + ' · ' + m.purpose) : m.dirText"
-                    >{{ m.dirText }}<template v-if="m.purpose"> · {{ m.purpose }}</template></span>
+                      :title="[m.dvText, m.vecText, m.purpose].filter((s) => s && s !== '—').join(' · ')"
+                    >{{ m.dvText }}</span>
+                    <template v-if="m.vecText && m.vecText !== '—'">
+                      <span class="ep-man-line is-item is-dirlab">{{ t('eph.direction') }} <span class="uvw-hint">{{ t('eph.uvwHint') }}</span></span>
+                      <span class="ep-man-line is-item is-vec">{{ m.vecText }}</span>
+                    </template>
+                    <span v-if="m.purpose" class="ep-man-line is-item">{{ m.purpose }}</span>
                     <span class="ep-man-line is-item">{{ m.lat }} / {{ m.lon }}</span>
                   </button>
                 </template>
                 <template v-else>{{ t('eph.none') }}</template>
               </b>
             </div>
+          </div>
+          <div class="ep-unc">
+            <div class="ep-unc-title">{{ t('ephp.uncTitle') }}</div>
+            <div class="ep-unc-row">
+              <label class="ep-unc-toggle">
+                <input type="checkbox" v-model="uncOn">
+                <span>{{ t('ephp.uncShow') }}</span>
+              </label>
+              <div class="ep-unc-sig" role="group">
+                <button type="button" class="ep-unc-chip" :class="{ on: uncOn && uncN === 1, off: !uncOn }" :aria-pressed="uncOn && uncN === 1" :aria-disabled="!uncOn" @click="onUncSigmaChip(1)">1σ</button>
+                <button type="button" class="ep-unc-chip" :class="{ on: uncOn && uncN === 3, off: !uncOn }" :aria-pressed="uncOn && uncN === 3" :aria-disabled="!uncOn" @click="onUncSigmaChip(3)">3σ</button>
+              </div>
+              <label class="ep-unc-scale" :class="{ off: !uncOn }">
+                <span>{{ t('ephp.uncScaleLabel') }}</span>
+                <select :value="uncScaleOn" :disabled="!uncOn" @change="onUncScaleChange">
+                  <option :value="1">1×</option>
+                  <option :value="5">5×</option>
+                  <option :value="20">20×</option>
+                </select>
+                <span class="ep-unc-scale-unit">{{ t('ephp.uncScaleUnit') }}</span>
+              </label>
+            </div>
+            <p class="ep-unc-legend">{{ t('ephp.uncLegend') }}</p>
           </div>
         </div>
 
@@ -619,7 +686,7 @@ function isCardActive(c: EphCard): boolean {
   &.is-sub span { width: auto; } &.is-sub b { flex: none; } }
 .ep-kv-man b { word-break: normal; overflow-wrap: normal; }
 
-/* 机动明细：首行总数；每段 MAN 为一张琥珀边框卡片（时刻/时长 + 速度一行不换行 + 经纬度） */
+/* 机动明细：首行总数；每段 MAN 为一张琥珀边框卡片（时刻/时长 + |Δv|（加速/减速）+ 三分量矢量 + 经纬度） */
 .ep-man-line { display: block; font-size: 10px; line-height: 1.55; font-weight: 400; color: #cfe0f5;
   word-break: normal; overflow-wrap: normal;
   &.is-item { color: #9dbbdd; }
@@ -628,6 +695,14 @@ function isCardActive(c: EphCard): boolean {
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
+  }
+  &.is-dirlab { font-size: 9.5px; }
+  &.is-vec {
+    font-size: 9.5px;
+    white-space: normal;
+    overflow-wrap: anywhere;
+    word-break: break-word;
+    line-height: 1.45;
   }
   &.is-head { display: flex; align-items: baseline; gap: 6px; white-space: nowrap;
     > span { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; } } }
@@ -692,6 +767,31 @@ function isCardActive(c: EphCard): boolean {
 .ep-tle-axis { display: flex; justify-content: space-between; gap: 6px; margin-top: 3px;
   span { font-size: 9px; color: #7d92b0; } }
 .ep-tle-note { margin-top: 3px; font-size: 9px; line-height: 1.45; color: #7d92b0; }
+
+/* 不确定度管道 */
+.ep-unc { margin-top: 8px; padding: 8px 9px 7px; border-radius: 7px;
+  background: rgba(26,52,96,0.28); border: 1px solid rgba(110,150,210,0.18);
+  pointer-events: auto; }
+.ep-unc-title { font-size: 11px; font-weight: 700; color: #c5d6ee; margin-bottom: 6px; }
+.ep-unc-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; flex-wrap: wrap; }
+.ep-unc-toggle { display: flex; align-items: center; gap: 6px; font-size: 11px; color: #dbe9fb; cursor: pointer;
+  input { accent-color: #5b21d8; } }
+.ep-unc-toggle, .ep-unc-sig, .ep-unc-chip, .ep-unc-scale { pointer-events: auto; }
+.ep-unc-sig { display: flex; gap: 6px;
+  .ep-unc-chip { flex: 0 0 auto; min-width: 40px; height: 22px; padding: 0 8px; font-size: 11px;
+    background: rgba(20,44,82,0.95); border: 1px solid rgba(150,180,230,0.55); border-radius: 4px; cursor: pointer;
+    color: #e8f0ff; pointer-events: auto;
+    &.on { color: #fff; background: #5b21d8; border-color: #8b5cf6; font-weight: 700; box-shadow: 0 0 0 1px rgba(139,92,246,0.55); }
+    &.off { opacity: 0.4; color: #9fb4ce; cursor: not-allowed; box-shadow: none; } } }
+.ep-unc-scale { display: flex; align-items: center; gap: 5px; font-size: 11px; color: #dbe9fb;
+  .ep-unc-scale-unit { font-size: 10px; color: #8ea4c4; }
+  select { height: 22px; padding: 0 4px; font-size: 11px; color: #e8f0ff; cursor: pointer;
+    background: rgba(20,44,82,0.95); border: 1px solid rgba(150,180,230,0.55); border-radius: 4px; }
+  &.off { opacity: 0.4; }
+  select:disabled { cursor: not-allowed; } }
+.uvw-hint { font-size: 9px; font-weight: 400; color: #8a93a6; margin-left: 4px; }
+.ep-unc-legend { margin: 6px 0 0; font-size: 10px; line-height: 1.45; color: #8ea4c4; }
+.ep-unc-note { margin: 3px 0 0; font-size: 9.5px; line-height: 1.45; color: #ffb454; }
 
 /* 小屏：面板为底部抽屉 */
 @media (max-width: 720px) {

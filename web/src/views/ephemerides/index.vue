@@ -43,7 +43,7 @@ import {
   fmtDvWithSense,
   manBasisLabel,
   manDcTypeLabel,
-  manDirectionAxisPhrase,
+  manDvVectorPhrase,
   manSpeedSense,
   segmentToEpoch
 } from '@/views/situation/ephem/maneuverDisplay'
@@ -731,7 +731,7 @@ function manRowOf(set: EphemSet, seg: Pick<EphemManSegment, 't0' | 't1' | 'dvMps
     dcType: seg.dcType,
     purpose: seg.purpose,
     id: seg.id,
-    dirText: manDirectionAxisPhrase(seg, tMan),
+    dirText: manDvVectorPhrase(seg, r, v),
     dvText: fmtDvWithSense(seg.dvMps, sense, tMan)
   }
 }
@@ -1176,7 +1176,7 @@ onMounted(() => {
                   <th>{{ t('eph.timeUtc') }}</th>
                   <th>{{ t('eph.duration') }}</th>
                   <th>{{ t('eph.dv') }}</th>
-                  <th>{{ t('eph.direction') }}</th>
+                  <th class="dir-head">{{ t('eph.direction') }} <span class="uvw-hint">{{ t('eph.uvwHint') }}</span></th>
                   <th>{{ t('eph.purpose') }}</th>
                   <th :title="t('eph.latLonDerived')">{{ t('eph.lat') }}</th>
                   <th :title="t('eph.latLonDerived')">{{ t('eph.lon') }}</th>
@@ -1194,7 +1194,7 @@ onMounted(() => {
                     <td class="mono">{{ fmtUtc(m.t0, true) }}</td>
                     <td>{{ m.duraSec }} s</td>
                     <td class="mono">{{ m.dvText }}</td>
-                    <td>{{ m.dirText }}</td>
+                    <td class="mono dir-cell">{{ m.dirText }}</td>
                     <td>{{ m.purpose || '—' }}</td>
                     <td :title="t('eph.latLonDerived')">{{ m.lat }}</td>
                     <td :title="t('eph.latLonDerived')">{{ m.lon }}</td>
@@ -1465,9 +1465,13 @@ h1 { margin: 0; font-size: 16px; font-weight: 650; }
   text-align: left; font-weight: 500; color: var(--text-dim);
   border-bottom: 1px solid var(--border); padding: 4px 10px 4px 0; white-space: nowrap;
 }
+.man-table th.dir-head { white-space: normal; line-height: 1.35; }
+.man-table th .uvw-hint,
+.uvw-hint { font-size: 9px; font-weight: 400; color: #8a93a6; margin-left: 6px; }
 .man-table td { padding: 4px 10px 4px 0; border-bottom: 1px dashed var(--border); color: var(--text); }
 .man-table tr:last-child td { border-bottom: none; }
 .man-table td.mono { font-family: var(--mono); font-size: 10px; }
+.man-table td.dir-cell { white-space: normal; line-height: 1.45; max-width: 24em; }
 .man-table tr.man-primary { cursor: pointer; }
 .man-table tr.man-primary:hover td { background: rgba(255, 180, 84, 0.08); }
 .man-table tr.man-primary.open td { border-bottom-style: dotted; }

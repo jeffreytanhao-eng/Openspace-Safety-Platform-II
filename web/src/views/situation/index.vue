@@ -217,8 +217,26 @@ async function ensureActiveMansFromLocalIndex(): Promise<void> {
   }
 }
 
+/** If the playhead is outside the ephemeris span, clamp it (leave it if already inside).
+ *  Also shift the 24 h slider window when the clamped time would fall outside it. */
+function clampSimToEphem(set: { states: { t: number }[] } | null | undefined) {
+  if (!set?.states.length) return
+  const t0 = set.states[0].t
+  const t1 = set.states[set.states.length - 1].t
+  const t = simTimeMs.value
+  if (t >= t0 && t <= t1) return
+  const next = t < t0 ? t0 : t1
+  const half = SIM_HALF_SPAN_MS
+  if (next < simAnchorMs.value - half || next > simAnchorMs.value + half) {
+    simAnchorMs.value = next
+  }
+  simTimeMs.value = next
+  sceneRef.value?.setSimTime(next)
+}
+
 async function paintUserEphem(opts?: { track?: boolean }) {
   await ensureActiveMansFromLocalIndex()
+  if (opts?.track && activeEphem.value) clampSimToEphem(activeEphem.value)
   sceneRef.value?.showEphemOrbit?.(activeEphem.value, opts)
   sceneRef.value?.showEphemManeuver?.(maneuverStates.value, maneuverBurnMs.value)
 }
@@ -235,14 +253,14 @@ function jumpSimToManeuverStart(t0: number) {
 
 function onLocateMan(
   idx: number | null,
-  info: { t0: number; duraSec: number; lat: string; lon: string; dvMps?: number; purpose?: string; dirText?: string } | null
+  info: { t0: number; duraSec: number; lat: string; lon: string; dvMps?: number; purpose?: string; dirText?: string; globeText?: string } | null
 ) {
   if (idx == null || !info) {
     sceneRef.value?.focusEphemManIndex?.(null)
     return
   }
   jumpSimToManeuverStart(info.t0)
-  const mid = [info.dirText || fmtDvMps(info.dvMps), info.purpose].filter((s) => s && s !== '—').join(' · ')
+  const mid = [info.globeText || info.dirText || fmtDvMps(info.dvMps), info.purpose].filter((s) => s && s !== '—').join('\n')
   const label = mid
     ? `${fmtSimTime(info.t0)} UTC · ${info.duraSec} s\n${mid}\n${info.lat} / ${info.lon}`
     : `${fmtSimTime(info.t0)} UTC · ${info.duraSec} s\n${info.lat} / ${info.lon}`
@@ -484,8 +502,8 @@ async function runPendingNoradDeepLink() {
   }
 }
 
-/** 关联入库前去掉逐点协方差，避免 OCM 撑爆 IndexedDB；轨道绘制不需要 cov（保留集合级 hasCov 标记） */
-function stripStatesCov<T extends { states: { t: number; r: [number, number, number]; v: [number, number, number]; cov?: Float64Array }[]; hasCov?: boolean }>(set: T): T {
+/** 关联入库前去掉逐点协方差，避免 OCM 撑爆 IndexedDB；保留集合级 hasCov 与稀疏不确定性样本（地球椭球用）。 */
+function stripStatesCov<T extends { states: { t: number; r: [number, number, number]; v: [number, number, number]; cov?: Float64Array }[]; hasCov?: boolean; uncertainty?: unknown }>(set: T): T {
   const hadCov = set.states.some((s) => !!s.cov) || set.hasCov === true
   return {
     ...set,
@@ -512,8 +530,10 @@ function attachMansFromIndex(
 
 watch(
   activeEphem,
-  () => {
-    paintUserEphem()
+  (set, prev) => {
+    // First activation or switching to a different ephemeris: fly + halo + label.
+    // Same-id updates and deactivate (set is null) do not pass track.
+    paintUserEphem(set && set.id !== prev?.id ? { track: true } : undefined)
   },
   { flush: 'post' }
 )

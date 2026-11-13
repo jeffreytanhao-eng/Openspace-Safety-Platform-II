@@ -96,6 +96,29 @@ export function itrfToEci(r: Vec3, v: Vec3, epochMs: number): { r: Vec3; v: Vec3
 }
 
 /**
+ * ITRF → ECI 的 GMST 绕 Z 旋转矩阵（与 itrfToEci 位置部分相同）。
+ * r_eci = R · r_itrf。
+ */
+export function itrfRotation(epochMs: number): number[][] {
+  const th = gmstRad(epochMs)
+  const c = Math.cos(th)
+  const s = Math.sin(th)
+  return [
+    [c, -s, 0],
+    [s, c, 0],
+    [0, 0, 1]
+  ]
+}
+
+/**
+ * ITRF 6×6 CARTPV 协方差 → ECI：P_eci = R P_itrf Rᵀ（位置块精确）。
+ * 速度块使用同一 R，忽略地球自转耦合项，三维位置椭球只用到位置块。
+ */
+export function itrfCovToEci(cov: Float64Array, epochMs: number): Float64Array {
+  return rotateCov6(cov, itrfRotation(epochMs))
+}
+
+/**
  * 把任意参考系下的状态统一到 ECI。
  * UVW / TEME / EME2000 / ICRF 视为已近似惯性系（直接返回），仅 ITRF 做旋转。
  */

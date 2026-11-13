@@ -9,17 +9,20 @@
  * - 交互脉冲机动（applyImpulse）仍可叠加琥珀后半段
  */
 import * as THREE from 'three'
-import { eciToScene } from './scene'
+import { eciToScene, KM_TO_SCENE, uncLegend, uncScale, uncSigmaN, uncVisible } from './scene'
 import { interpolateAt } from './ephem/interp'
 import { twoBodyPropagate } from './ephem/screening'
 import { resolveCatalogModelKey, loadSharedModelGeom } from './catalogCloudThree'
-import type { EphemManSegment, EphemSet, EphemState, Vec3 } from './ephem/types'
-import { accToEci, manChevronCount, manSpeedSense } from './ephem/maneuverDisplay'
+import type { EphemManSegment, EphemSet, EphemState, UncertaintySample, Vec3 } from './ephem/types'
+import { accToEci, manChevronCount, manSignificantAxisAccs, manSpeedSense } from './ephem/maneuverDisplay'
+import { samplesAlongTrack, tubeSliceProfile, TUBE_STATIONS, TUBE_STATIONS_LOW, UNC_COLOR } from './ephem/uncertainty'
 
 export const EPH_ORBIT_COLOR = 0x81d4fa
 export const EPH_MANEUVER_COLOR = 0xffb454
 /** 星历目标标识色：更偏蓝（比轨道线的浅天蓝更深更蓝，明显区分） */
 export const EPH_MARKER_COLOR = 0x3b82f6
+/** 选中星历 3D 模型机身色：深蓝（贴图乘色，保留模型中间的结构框线） */
+export const EPH_MARKER_BODY_COLOR = 0x12356e
 export const EPH_BURN_COLOR = 0xffd166
 
 /**
@@ -161,18 +164,42 @@ function clearManObjects() {
   manHighlights = []
 }
 
-/** Stream of small blue ">" chevrons along the selected MAN burn, pointing in file-frame thrust. */
+/** Scene-space unit direction of a 1 km ECI tip from r. */
+function eciHatToSceneDir(r: Vec3, hat: Vec3, origin: THREE.Vector3, dir: THREE.Vector3): number {
+  origin.copy(eciToScene(r[0], r[1], r[2]))
+  dir.copy(eciToScene(r[0] + hat[0], r[1] + hat[1], r[2] + hat[2])).sub(origin)
+  const km = dir.length()
+  if (km < 1e-12) return 0
+  dir.multiplyScalar(1 / km)
+  return km
+}
+
+function eciUnit(vec: Vec3): Vec3 | null {
+  const mag = Math.hypot(vec[0], vec[1], vec[2])
+  if (!(mag > 0)) return null
+  return [vec[0] / mag, vec[1] / mag, vec[2] / mag]
+}
+
+/**
+ * Stream of small blue ">" chevrons along the selected MAN burn.
+ * Each glyph is oriented along one significant file-frame Δv axis (with sign).
+ * Multi-axis burns interleave orientations along the tube (T, W, T, W, …);
+ * density still follows manChevronCount (加速 dense / 减速 sparse).
+ * If acc is missing, chevrons fall back to +T (along-track); no N/W is invented.
+ */
 function updateManThrustArrow(): void {
   clearManThrustArrow()
   if (selectedManIdx == null || !currentSet?.states.length || !group) return
   const seg = currentSet.maneuvers?.[selectedManIdx]
-  if (!seg?.acc) return
+  if (!seg) return
   const high = manHighlights.find((h) => h.origIdx === selectedManIdx)
   const tStart = high ? high.draw0 : seg.t0
   const tEnd = high ? high.draw1 : seg.t1
   const midSv = manStateAt(currentSet, (tStart + tEnd) / 2)
-  const sense = midSv ? manSpeedSense(midSv.r, midSv.v, seg.acc, seg.refFrame) : null
-  const n = manChevronCount(tEnd - tStart, sense)
+  const sense = midSv && seg.acc ? manSpeedSense(midSv.r, midSv.v, seg.acc, seg.refFrame) : null
+  const axisAccs = seg.acc ? manSignificantAxisAccs(seg) : null
+  const axisCount = axisAccs && axisAccs.length ? axisAccs.length : 1
+  const n = Math.max(manChevronCount(tEnd - tStart, sense), axisCount)
   const positions: number[] = []
   const dir = new THREE.Vector3()
   const origin = new THREE.Vector3()
@@ -180,17 +207,17 @@ function updateManThrustArrow(): void {
     const t = n === 1 ? (tStart + tEnd) / 2 : tStart + ((i + 0.5) / n) * (tEnd - tStart)
     const sv = manStateAt(currentSet, t)
     if (!sv) continue
-    const accEci = accToEci(sv.r, sv.v, seg.acc, seg.refFrame)
-    if (!accEci) continue
-    const mag = Math.hypot(accEci[0], accEci[1], accEci[2])
-    if (!(mag > 0)) continue
-    const hat: Vec3 = [accEci[0] / mag, accEci[1] / mag, accEci[2] / mag]
-    origin.copy(eciToScene(sv.r[0], sv.r[1], sv.r[2]))
-    // 1 km tip → scene-units-per-km, so glyph size stays consistent with the ECI scale.
-    dir.copy(eciToScene(sv.r[0] + hat[0], sv.r[1] + hat[1], sv.r[2] + hat[2])).sub(origin)
-    const km = dir.length()
-    if (km < 1e-12) continue
-    dir.multiplyScalar(1 / km)
+    let hat: Vec3 | null = null
+    if (axisAccs && axisAccs.length) {
+      const accEci = accToEci(sv.r, sv.v, axisAccs[i % axisAccs.length], seg.refFrame)
+      hat = accEci ? eciUnit(accEci) : null
+    } else {
+      // Acc missing: along-track only (+T / velocity). Do not invent N/W components.
+      hat = eciUnit(sv.v)
+    }
+    if (!hat) continue
+    const km = eciHatToSceneDir(sv.r, hat, origin, dir)
+    if (!km) continue
     appendChevron(positions, origin, dir, CHEVRON_ARM_KM * km, CHEVRON_HALF_KM * km)
   }
   if (positions.length < 6) return
@@ -221,10 +248,18 @@ function ensureGroup(scene: THREE.Scene): THREE.Group {
   return group
 }
 
-/** 移除星历模型（geometry 归共享缓存不 dispose；材质为克隆实例需释放） */
+/** 移除星历模型（geometry 归共享缓存不 dispose；材质与结构边线为本地实例需释放） */
 function disposeMarkerModel(): void {
   if (!markerModel) return
   if (group) group.remove(markerModel)
+  for (const ch of markerModel.children) {
+    const lm = ch as THREE.LineSegments
+    lm.geometry?.dispose()
+    const cms = lm.material as THREE.Material | THREE.Material[] | undefined
+    if (Array.isArray(cms)) cms.forEach((x) => x.dispose())
+    else cms?.dispose()
+  }
+  markerModel.clear()
   const m = markerModel.material as THREE.Material | undefined
   if (m) m.dispose()
   markerModel = null
@@ -238,13 +273,27 @@ function refreshMarkerModel(set: EphemSet): void {
     if (seq !== markerModelSeq || !gm || !group) return
     disposeMarkerModel()
     const mat = (gm.mat as THREE.MeshStandardMaterial).clone()
-    mat.emissive = new THREE.Color(EPH_MARKER_COLOR) // 星历通道标识色：偏蓝自发光
+    // 选中星历目标：深蓝机身。乘色（而非替换贴图）以保留模型纹理与结构框线；
+    // 自发光压在较低强度，避免整体发白把内部线条糊掉。
+    mat.color = new THREE.Color(EPH_MARKER_BODY_COLOR)
+    mat.emissive = new THREE.Color(EPH_MARKER_COLOR)
+    mat.emissiveIntensity = 0.3
     // 轨道线/MAN 管都是透明材质（后绘制）→ 不透明模型会被轨道线盖住。
-    // 把模型也转入透明队列，renderOrder 3 > 管道 2 > 轨道线 0 → 模型绘制在轨道图层之上
+    // 把模型也转入透明队列，renderOrder 3 > 机动管 2 > 不确定度管 1 > 轨道线 0 → 模型绘制在轨道图层之上。
+    // depthWrite stays on so a stretch of 1σ under the model is occluded naturally.
     mat.transparent = true
+    mat.depthTest = true
+    mat.depthWrite = true
     markerModel = new THREE.Mesh(gm.geom, mat)
     markerModel.frustumCulled = false
     markerModel.renderOrder = 3
+    // 深蓝机身容易糊成一块：叠一层浅蓝结构边线，让中间的框线/棱线清楚可见
+    const edges = new THREE.LineSegments(
+      new THREE.EdgesGeometry(gm.geom, 28),
+      new THREE.LineBasicMaterial({ color: 0x8fc2ff, transparent: true, opacity: 0.9, depthWrite: false })
+    )
+    edges.renderOrder = 4
+    markerModel.add(edges)
     if (marker) markerModel.position.copy(marker.position)
     group.add(markerModel)
     if (marker) marker.visible = false
@@ -527,6 +576,7 @@ export function setEphemOrbit(scene: THREE.Scene | null, set: EphemSet | null): 
     markerModelSeq++
     disposeMarkerModel()
     if (marker) marker.visible = false
+    disposeUncertainty()
     return
   }
 
@@ -536,7 +586,7 @@ export function setEphemOrbit(scene: THREE.Scene | null, set: EphemSet | null): 
   if (!marker) {
     marker = new THREE.Mesh(
       new THREE.SphereGeometry(0.006, 12, 12),
-      new THREE.MeshBasicMaterial({ color: EPH_MARKER_COLOR, depthTest: true, depthWrite: false })
+      new THREE.MeshBasicMaterial({ color: EPH_MARKER_COLOR, depthTest: true, depthWrite: true })
     )
     g.add(marker)
   }
@@ -548,6 +598,12 @@ export function setEphemOrbit(scene: THREE.Scene | null, set: EphemSet | null): 
   // t204u: 星历目标 3D 模型化——按名称/NORAD 加载共享模型；就绪前浅蓝球兜底显示
   disposeMarkerModel()
   refreshMarkerModel(set)
+  // Marker first so click-to-track can resolve a position even if the tube throws.
+  try {
+    setupUncertainty(g, set)
+  } catch (e) {
+    console.warn('[situation] uncertainty tube', e)
+  }
 }
 
 export function setEphemManeuver(
@@ -620,6 +676,20 @@ export function getEphemPositionAt(simMs: number, out: THREE.Vector3): boolean {
   return true
 }
 
+/** Prefer the live marker, then interpolated currentSet, then the provided set (for first-activation races). */
+export function getEphemTrackPosition(simMs: number, out: THREE.Vector3, set?: EphemSet | null): boolean {
+  if (getEphemMarkerPosition(out)) return true
+  if (getEphemPositionAt(simMs, out)) return true
+  const src = set ?? currentSet
+  if (!src?.states.length) return false
+  const st =
+    interpolateAt(src.states, simMs) ||
+    (simMs <= src.states[0].t ? src.states[0] : src.states[src.states.length - 1])
+  if (!st) return false
+  out.copy(eciToScene(st.r[0], st.r[1], st.r[2]))
+  return true
+}
+
 /**
  * Overlay label for track reticle.
  * Prefer object name; never rewrite a name whose numeric suffix != norad into "NORAD xxx".
@@ -637,7 +707,6 @@ export function ephemDisplayLabel(set: EphemSet | null | undefined): string {
 
 export function updateEphemOrbitMarker(simMs: number): void {
   if (!currentSet?.states.length) return
-  if (!marker && !markerModel) return
   const src =
     currentImpulse && currentBurnMs != null && simMs >= currentBurnMs
       ? currentImpulse
@@ -647,12 +716,14 @@ export function updateEphemOrbitMarker(simMs: number): void {
   const pos = eciToScene(st.r[0], st.r[1], st.r[2])
   if (marker) marker.position.copy(pos)
   if (markerModel) syncMarkerModelPose(st, pos)
+  // Tube is a 20x-display-scale sweep of the whole ephemeris; not rebuilt every frame.
 }
 
 export function clearEphemOrbit(): void {
   // 先摘除星历模型（克隆材质自释放），避免 group 级 dispose 误伤共享模型几何（目标云仍在用）
   markerModelSeq++
   disposeMarkerModel()
+  disposeUncertainty()
   if (group && attachedScene) attachedScene.remove(group)
   if (group) disposeObject(group)
   group = null
@@ -695,3 +766,312 @@ export function ephemOrbitDiag(): {
     highlights: manHighlights.slice()
   }
 }
+
+
+/* ---------------- Position uncertainty ellipsoids (selected orbit) ---------------- */
+/* Translucent violet tube only (no wire/dashes) along the WHOLE ephemeris track.
+ * renderOrder 1 is under MAN tubes (2), the 3D sat model (3), and chevrons (4).
+ * depthTest is on so Earth and the opaque model occlude; a stretch hidden by
+ * the model is expected. Fill does not write depth, so translucent shells do not fight.
+ * At close range (camera within a few tube radii of the track) the fill fades out,
+ * otherwise the wall fills the screen and reads as a violet slab detached from the line. */
+
+const UNC_FILL_OPACITY = 0.26
+const UNC_FILL_OPACITY_LOW = 0.16
+/** Fade band in units of the tube radius: full above OUT, gone below IN. */
+const UNC_FADE_OUT_RADII = 10
+const UNC_FADE_IN_RADII = 3
+const UNC_FADE_MIN_OPACITY = 0.05
+/** Under 3D models (3) and maneuver tubes (2); above the cyan orbit line (0). */
+const UNC_RENDER_ORDER = 1
+const UNC_RADIAL = 12
+const UNC_RADIAL_LOW = 8
+
+let uncGroup: THREE.Group | null = null
+let uncFill: THREE.Mesh | null = null
+let uncFillMat: THREE.MeshBasicMaterial | null = null
+let lastUncVisible = true
+let lastUncKey = ''
+/** Tube axis points (scene) with the local section radius, for the close-range fade. */
+let uncAxisPts: { p: THREE.Vector3; r: number }[] = []
+let uncBaseOpacity = UNC_FILL_OPACITY
+
+function isLowEnd(): boolean {
+  if (typeof navigator === 'undefined') return false
+  const mem = (navigator as Navigator & { deviceMemory?: number }).deviceMemory
+  return mem != null && mem <= 4
+}
+
+function eciVecToScene(v: [number, number, number]): THREE.Vector3 {
+  return eciToScene(v[0], v[1], v[2])
+}
+
+function disposeUncertainty(): void {
+  if (uncGroup && uncGroup.parent) uncGroup.parent.remove(uncGroup)
+  if (uncFill) {
+    uncFill.geometry.dispose()
+    uncFill = null
+  }
+  uncFillMat?.dispose()
+  uncFillMat = null
+  uncGroup = null
+  lastUncKey = ''
+  uncAxisPts = []
+  uncLegend.value = { source: null, exaggerated: false, scale: uncScale.value, maxSigmaKm: 0 }
+}
+
+/**
+ * Per-frame view hook: fades the fill out when the camera gets within a few tube
+ * radii of the track. Tube world size still does not depend on zoom or view height.
+ */
+export function setUncertaintyView(cam?: THREE.Camera | null, _viewHeightPx?: number): void {
+  if (!cam || !uncFillMat || !uncFill || !uncFill.visible) return
+  if (!uncAxisPts.length) {
+    uncFillMat.opacity = uncBaseOpacity
+    return
+  }
+  const p = cam.position
+  let minD2 = Infinity
+  let localR = 0
+  for (const a of uncAxisPts) {
+    const d = p.distanceToSquared(a.p)
+    if (d < minD2) {
+      minD2 = d
+      localR = a.r
+    }
+  }
+  if (!(localR > 0)) {
+    uncFillMat.opacity = uncBaseOpacity
+    return
+  }
+  const lo = UNC_FADE_IN_RADII * localR
+  const hi = UNC_FADE_OUT_RADII * localR
+  const t = hi > lo ? Math.min(1, Math.max(0, (Math.sqrt(minD2) - lo) / (hi - lo))) : 1
+  const fade = UNC_FADE_MIN_OPACITY + (1 - UNC_FADE_MIN_OPACITY) * t * t * (3 - 2 * t)
+  uncFillMat.opacity = uncBaseOpacity * fade
+}
+
+/** 单位倍率（n = 1）下的一个截面：环心、长短轴方向与半轴（scene 单位）。 */
+interface TubeStation {
+  p: THREE.Vector3
+  major: THREE.Vector3
+  minor: THREE.Vector3
+  /** 长半轴（scene）——1σ、1× 下的真实值 */
+  a: number
+  /** 短半轴（scene） */
+  b: number
+}
+
+let tubeCacheSet: EphemSet | null = null
+let tubeCacheKey = ''
+let tubeCacheStations: TubeStation[] = []
+let tubeCacheMaxSigmaKm = 0
+
+/**
+ * 逐站截面只取决于星历文件（位置 + 逐历元 6×6 协方差）与轨道几何，
+ * 与 1σ/3σ、放大倍率无关（倍率只把长短轴线性放大），因此缓存下来：
+ * 切换倍率时只需重写顶点数组，不必重算协方差特征分解与平行传输。
+ */
+function buildTubeStations(set: EphemSet, low: boolean): TubeStation[] {
+  const stations = samplesAlongTrack(set, low ? TUBE_STATIONS_LOW : TUBE_STATIONS)
+  const key = `${set.id}|${set.states.length}|${stations.length}|${low ? 1 : 0}`
+  if (tubeCacheSet === set && tubeCacheKey === key) return tubeCacheStations
+  const out: TubeStation[] = []
+  let prevN: Vec3 | null = null
+  let prevMajor: THREE.Vector3 | null = null
+  let maxSigmaKm = 0
+  for (const st of stations) {
+    maxSigmaKm = Math.max(maxSigmaKm, st.sample.sigmaKm[0], st.sample.sigmaKm[1], st.sample.sigmaKm[2])
+    // (N, B) 平行传输，截面基底不会逐站翻转；此处先按 n = 1 求单位截面。
+    const slice = tubeSliceProfile(st.sample.sigmaKm, st.sample.axesEci, st.tangentEci, 1, prevN, 1)
+    prevN = slice.normal
+    const { m00, m01, m11 } = slice
+    const half = (m00 + m11) / 2
+    const disc = Math.sqrt(Math.max(0, ((m00 - m11) / 2) ** 2 + m01 * m01))
+    // 半轴 = 1/√λ：长半轴对应较小特征值。km → scene。
+    const a = (1 / Math.sqrt(Math.max(1e-24, half - disc))) * KM_TO_SCENE
+    const b = (1 / Math.sqrt(Math.max(1e-24, half + disc))) * KM_TO_SCENE
+    // 长轴方向（(N,B) 坐标下）。截面常是 15:1 量级的扁椭圆，等角度极径采样
+    // 会整段漏掉长轴尖端（实测环半径只剩应有值的 ~1/5）；按主轴生成椭圆，
+    // 长短轴端点必然落在顶点上。
+    let vn: number
+    let vb: number
+    if (Math.abs(m01) > 1e-18) {
+      const nn = Math.hypot(m01, half - disc - m00) || 1
+      vn = m01 / nn
+      vb = (half - disc - m00) / nn
+    } else if (m00 <= m11) {
+      vn = 1
+      vb = 0
+    } else {
+      vn = 0
+      vb = 1
+    }
+    const Ns = eciVecToScene(slice.normal)
+    Ns.normalize()
+    const Bs = eciVecToScene(slice.binormal)
+    Bs.normalize()
+    const major = new THREE.Vector3().addScaledVector(Ns, vn).addScaledVector(Bs, vb).normalize()
+    const minor = new THREE.Vector3().addScaledVector(Ns, -vb).addScaledVector(Bs, vn).normalize()
+    // 主轴方向有 ± 二义性：与上一站同向，否则相邻环之间会扭 180°。
+    if (prevMajor && major.dot(prevMajor) < 0) {
+      major.negate()
+      minor.negate()
+    }
+    prevMajor = major
+    out.push({ p: eciVecToScene(st.sample.r), major, minor, a, b })
+  }
+  tubeCacheSet = set
+  tubeCacheKey = key
+  tubeCacheStations = out
+  tubeCacheMaxSigmaKm = maxSigmaKm
+  return out
+}
+
+function buildTubeGeometry(
+  set: EphemSet,
+  nSigma: 1 | 3,
+  scale: number
+): { fill: THREE.BufferGeometry; maxSigmaKm: number; axisPts: { p: THREE.Vector3; r: number }[] } | null {
+  const low = isLowEnd()
+  const stations = buildTubeStations(set, low)
+  if (stations.length < 2) return null
+  const radial = low ? UNC_RADIAL_LOW : UNC_RADIAL
+  // 1σ/3σ 与显示倍率都只把长短轴按倍数放大，截面形状与轨道位置不变。
+  const n = Math.max(1e-6, nSigma * scale)
+  const nStations = stations.length
+  const pos: number[] = []
+  const indices: number[] = []
+  for (let i = 0; i < nStations; i++) {
+    const st = stations[i]
+    const c = st.p
+    const A = st.a * n
+    const B = st.b * n
+    for (let k = 0; k < radial; k++) {
+      const th = (k / radial) * Math.PI * 2
+      // 椭圆参数角：t = 0 落在长轴端点，t = π/2 落在短轴端点。
+      const ca = Math.cos(th) * A
+      const sb = Math.sin(th) * B
+      pos.push(
+        c.x + st.major.x * ca + st.minor.x * sb,
+        c.y + st.major.y * ca + st.minor.y * sb,
+        c.z + st.major.z * ca + st.minor.z * sb
+      )
+    }
+  }
+  for (let i = 0; i < nStations - 1; i++) {
+    for (let k = 0; k < radial; k++) {
+      const k2 = (k + 1) % radial
+      const i0 = i * radial + k
+      const i1 = i * radial + k2
+      const j0 = (i + 1) * radial + k
+      const j1 = (i + 1) * radial + k2
+      indices.push(i0, j0, i1, i1, j0, j1)
+    }
+  }
+  const fill = new THREE.BufferGeometry()
+  fill.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3))
+  fill.setIndex(indices)
+  // Every station so the close-range fade triggers anywhere on the track.
+  const axisPts: { p: THREE.Vector3; r: number }[] = []
+  for (let i = 0; i < nStations; i++) axisPts.push({ p: stations[i].p, r: stations[i].a * n })
+  return {
+    fill,
+    maxSigmaKm: Math.max(tubeCacheMaxSigmaKm, set.uncertainty?.maxSigmaKm ?? 0),
+    axisPts
+  }
+}
+
+function setupUncertainty(parent: THREE.Group, set: EphemSet): void {
+  disposeUncertainty()
+  uncGroup = new THREE.Group()
+  uncGroup.name = 'ephem-uncertainty'
+  parent.add(uncGroup)
+  updateUncertaintyTube()
+}
+
+function updateUncertaintyTube(): void {
+  if (!currentSet?.states.length || !uncGroup) return
+  const visible = uncVisible.value
+  const nSigma = uncSigmaN.value
+  const scale = uncScale.value
+  const source = currentSet.uncertainty?.source ?? (currentSet.hasCov ? 'file' : 'age')
+  if (!visible) {
+    if (uncGroup) uncGroup.visible = false
+    if (lastUncVisible) {
+      lastUncVisible = false
+      uncLegend.value = {
+        source,
+        exaggerated: false,
+        scale,
+        maxSigmaKm: currentSet.uncertainty?.maxSigmaKm ?? 0
+      }
+    }
+    return
+  }
+  lastUncVisible = true
+  const key = `${currentSet.id}|${nSigma}|${scale}|${source}|${currentSet.uncertainty?.samples.length ?? 0}`
+  if (key !== lastUncKey || !uncFill) {
+    lastUncKey = key
+    if (uncFill) {
+      uncGroup.remove(uncFill)
+      uncFill.geometry.dispose()
+      uncFill = null
+    }
+    const built = buildTubeGeometry(currentSet, nSigma, scale)
+    if (!built) {
+      uncLegend.value = { source, exaggerated: false, scale, maxSigmaKm: currentSet.uncertainty?.maxSigmaKm ?? 0 }
+      return
+    }
+    uncAxisPts = built.axisPts
+    uncBaseOpacity = isLowEnd() ? UNC_FILL_OPACITY_LOW : UNC_FILL_OPACITY
+    if (!uncFillMat) {
+      uncFillMat = new THREE.MeshBasicMaterial({
+        color: UNC_COLOR,
+        transparent: true,
+        opacity: uncBaseOpacity,
+        depthWrite: false,
+        depthTest: true,
+        polygonOffset: true,
+        polygonOffsetFactor: -2,
+        polygonOffsetUnits: -2,
+        side: THREE.DoubleSide
+      })
+    } else {
+      uncFillMat.color.setHex(UNC_COLOR)
+      uncFillMat.opacity = uncBaseOpacity
+    }
+    uncFill = new THREE.Mesh(built.fill, uncFillMat)
+    uncFill.renderOrder = UNC_RENDER_ORDER
+    uncFill.frustumCulled = false
+    uncGroup.add(uncFill)
+    uncLegend.value = {
+      source,
+      exaggerated: scale > 1,
+      scale,
+      maxSigmaKm: built.maxSigmaKm
+    }
+  }
+  uncGroup.visible = true
+}
+
+/** Rebuild the tube (settings changed). Kept `simMs`-tolerant for existing call sites. */
+export function refreshUncertaintyNow(_simMs?: number): void {
+  if (!currentSet) return
+  updateUncertaintyTube()
+}
+
+/** Single write path used by the ephemeris panel: set scene refs and rebuild/show the tube. */
+export function applyUncertaintyDisplay(visible: boolean, nSigma?: 1 | 3): void {
+  uncVisible.value = !!visible
+  if (nSigma === 1 || nSigma === 3) uncSigmaN.value = nSigma
+  refreshUncertaintyNow()
+}
+
+/** Change the 1σ cross-section magnification (1× / 5× / 20×) and rebuild the tube in place. */
+export function applyUncertaintyScale(scale: 1 | 5 | 20): void {
+  if (uncScale.value === scale) return
+  uncScale.value = scale
+  refreshUncertaintyNow()
+}
+

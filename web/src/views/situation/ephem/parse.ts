@@ -1,4 +1,5 @@
 import type { EphemSet, ParseResult } from './types'
+import { enrichSetWithUncertainty } from './uncertainty'
 import { detectFormat } from './detect'
 import { parseItc } from './parseItc'
 import { parseOem } from './parseOem'
@@ -102,6 +103,7 @@ export function parseEphemeris(
   }
   set.id = `${set.norad || 'X'}-${set.start}`
   set.warnings.push(`格式识别为 ${fmt.toUpperCase()}，共 ${set.states.length} 个状态点`)
+  enrichSetWithUncertainty(set)
   res.warnings = set.warnings
   return res
 }

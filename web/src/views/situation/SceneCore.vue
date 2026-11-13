@@ -8,7 +8,7 @@
  *
  * 每帧时序：推进仿真时钟 → 更新天体位置 → renderCesium → syncCameraToThree → 渲染 Three。
  */
-import { onBeforeUnmount, onMounted, ref } from 'vue'
+import { onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import * as THREE from 'three'
 import { useI18n } from '@/composables/useI18n'
 import { buildStarfield } from './starfield'
@@ -57,9 +57,12 @@ import {
   getEphemManHighlights,
   getEphemManLocatePoint,
   updateEphemOrbitMarker,
+  refreshUncertaintyNow,
+  setUncertaintyView,
   clearEphemOrbit,
   getEphemMarkerPosition,
   getEphemPositionAt,
+  getEphemTrackPosition,
   ephemDisplayLabel
 } from './ephemOrbitThree'
 import {
@@ -91,7 +94,9 @@ import {
   simSpeed,
   simTimeMs,
   skyLayers,
-  sunDirection
+  sunDirection,
+  uncVisible,
+  uncSigmaN
 } from './scene'
 
 const containerEl = ref<HTMLDivElement>()
@@ -366,14 +371,14 @@ function startCatalogTrack(item: { object_name?: string | null; norad_id: number
 
 function stopEphemTrack() {
   trackEphem = false
+  ephemFlyPending = false
   camFly.active = false
   setCameraOrbitFocusScene(null, simMs)
   setReticleVisible(false)
 }
 
 function startEphemTrack(set: EphemSet) {
-  if (!camera || !set) return
-  stopEphemTrack()
+  if (!set) return
   stopCatalogTrack()
   // Clamp sim into ephem span so marker is on-orbit
   if (set.states.length) {
@@ -384,8 +389,16 @@ function startEphemTrack(set: EphemSet) {
       simTimeMs.value = t0
     }
   }
-  updateEphemOrbitMarker(simMs)
-  if (!getEphemMarkerPosition(_trackPos) && !getEphemPositionAt(simMs, _trackPos)) return
+  try { updateEphemOrbitMarker(simMs) } catch { /* uncertainty must not block track */ }
+  // Resolve position from marker, interpolated orbit, or the set itself so a
+  // first-activation race (tube setup, delayed currentSet) cannot skip the fly.
+  const gotPos = getEphemTrackPosition(simMs, _trackPos, set)
+  if (!camera || !gotPos) {
+    lastEphemTrack = true
+    ephemFlyPending = true
+    return
+  }
+  ephemFlyPending = false
   lookAtPt.copy(_trackPos)
   _trackPrev.copy(_trackPos)
   // Camera on Earth-center → target ray (radial outward), looking at target — no polar bend
@@ -767,7 +780,9 @@ function loop(now: number) {
   updateSky(simMs)
 
   updateCatalogCloud(simMs, camera)
-  updateEphemOrbitMarker(simMs)
+  try {
+    updateEphemOrbitMarker(simMs)
+  } catch { /* uncertainty tube must not stall track / halo */ }
   updateEventCloud(simMs)
   updateEventCloudFocus(now / 1000)
   updateConjLabels()
@@ -791,6 +806,9 @@ function loop(now: number) {
     setReticleVisible(true)
     beginCamFly(toPos, _trackPos.clone())
   }
+
+  // Pending ephem fly-in: marker / camera was not ready on first startEphemTrack.
+  if (!flying && ephemFlyPending && lastEphemSet) startEphemTrack(lastEphemSet)
 
   // Old BaseScene Cesium track pattern:
   //  1) absorb user drag/zoom from Cesium → Three (when not flying)
@@ -818,6 +836,8 @@ function loop(now: number) {
 
   renderCesium(simMs)
   if (camera && !flying) syncCameraToThree(camera, simMs)
+  // 近景淡出：相机贴近轨道时降低不确定度管填充不透明度，避免紫墙糊满屏幕
+  setUncertaintyView(camera)
   if (renderer && threeScene && camera) renderer.render(threeScene, camera)
   updateReticle()
   updateManLabel()
@@ -931,6 +951,10 @@ onBeforeUnmount(() => {
 let lastEphemSet: EphemSet | null = null
 let lastManeuverStates: EphemState[] | null = null
 let lastManeuverBurnMs: number | null = null
+/** Remember whether the last showEphemOrbit asked to fly/track, so flush after viewport init can restore it. */
+let lastEphemTrack = false
+/** Retry fly/halo/label if startEphemTrack ran before the marker or camera was ready. */
+let ephemFlyPending = false
 
 function flushUserEphem() {
   const scene = threeScene
@@ -940,6 +964,7 @@ function flushUserEphem() {
     if (lastManeuverStates && lastManeuverBurnMs != null) {
       setEphemManeuver(scene, lastManeuverStates, lastManeuverBurnMs)
     }
+    if (lastEphemTrack) startEphemTrack(lastEphemSet)
   } else {
     clearEphemOrbit()
   }
@@ -948,9 +973,31 @@ function flushUserEphem() {
 /** 丢弃过期的编目 NORAD 回查（快速切换 / 取消激活星历） */
 let ephemHideToken = 0
 
+watch([uncVisible, uncSigmaN], () => {
+  refreshUncertaintyNow(simMs)
+})
+
 function showEphemOrbit(set: EphemSet | null, opts?: { track?: boolean }) {
-  const setChanged = lastEphemSet !== set
+  // Different ephemeris = new id (or first activation). Same-id object replacement is a redraw.
+  const setChanged = lastEphemSet?.id !== set?.id
   lastEphemSet = set
+  // Fly/track on a new set unless the caller explicitly opts out (maneuver-card locate).
+  // Same-set redraws (impulse overlay, etc.) must not steal the camera once tracking has started.
+  // If this set is already highlighted but a fly/halo never completed, still track
+  // (do not let "already this id" block a never-completed fly). Not during maneuver locate.
+  const neverCompleted = !!set && !trackEphem && !manLabelOn && (ephemFlyPending || lastEphemTrack)
+  const shouldTrack = !!set && (
+    opts?.track === true ||
+    (setChanged && opts?.track !== false) ||
+    (opts?.track !== false && neverCompleted)
+  )
+  if (!set) {
+    lastEphemTrack = false
+    ephemFlyPending = false
+  } else if (setChanged || opts?.track === true || shouldTrack) {
+    lastEphemTrack = shouldTrack
+    if (shouldTrack) ephemFlyPending = true
+  }
   // 同步给编目云：星历激活目标由 ephem 通道渲染，编目芯片/模型实例排除同一物理目标
   const token = ++ephemHideToken
   if (!set) {
@@ -969,19 +1016,24 @@ function showEphemOrbit(set: EphemSet | null, opts?: { track?: boolean }) {
     if (!set) stopEphemTrack()
     return
   }
-  setEphemOrbit(scene, set)
-  // setEphemOrbit clears maneuver visuals — re-apply if still requested
-  if (set && lastManeuverStates && lastManeuverBurnMs != null) {
-    setEphemManeuver(scene, lastManeuverStates, lastManeuverBurnMs)
+  try {
+    setEphemOrbit(scene, set)
+    // setEphemOrbit clears maneuver visuals — re-apply if still requested
+    if (set && lastManeuverStates && lastManeuverBurnMs != null) {
+      setEphemManeuver(scene, lastManeuverStates, lastManeuverBurnMs)
+    }
+  } catch (e) {
+    console.warn('[situation] setEphemOrbit', e)
   }
   if (!set) {
     stopEphemTrack()
     setManLabelVisible(false)
+    lastEphemTrack = false
     return
   }
   // 换星历：旧机动标签随之失效（选中态由 setEphemOrbit 内按 set 身份重置）
   if (setChanged) setManLabelVisible(false)
-  if (opts?.track) startEphemTrack(set)
+  if (shouldTrack) startEphemTrack(set)
 }
 
 /**

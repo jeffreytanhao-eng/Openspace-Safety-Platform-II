@@ -24,6 +24,7 @@ import {
   type EphemViewer
 } from '../ephem/ephemDb.js'
 import { EPH_ROOT, scanAndIngest, ingestUploadFile, peekUploadMeta } from '../ephem/ingest.js'
+import { buildUncertaintyPayload } from '../ephem/uncertainty.js'
 import { compareSources, listAccuracySources } from '../services/accuracyCompare.js'
 import { requireAuth } from './auth.js'
 import { requireSuperAdmin } from './admin.js'
@@ -263,6 +264,43 @@ router.get('/ephemerides/file', requireAuth, async (req: Request, res: Response)
     res.send(text)
   } catch (e) {
     res.status(500).json(fail(500, (e as Error).message || '读取星历文件失败'))
+  }
+})
+
+/**
+ * GET /cgi/ephemerides/uncertainty?path=ocm/001/FOO.ocm.txt.gz
+ * Sparse position-uncertainty payload (3×3 eigen at selected epochs, σ in km).
+ * Uses file COV_ when present; otherwise an empirical age-model σ (labeled in `source`).
+ * Does not change screening Pc.
+ */
+router.get('/ephemerides/uncertainty', requireAuth, async (req: Request, res: Response) => {
+  const rel = String(req.query.path || '')
+  const full = safeResolve(rel)
+  if (!full || !fs.existsSync(full)) {
+    res.status(404).json(fail(404, '文件不存在'))
+    return
+  }
+  const viewer = viewerFromAuth(req)
+  if (await ephemDbUp()) {
+    try {
+      const row = await getRowByFileDb(rel.replace(/\\/g, '/'))
+      if (row && !canViewEphemeris(row, viewer)) {
+        res.status(403).json(fail(403, '该星历为业主私有或仅 VIP 可见，无权访问'))
+        return
+      }
+    } catch {
+      res.status(503).json(fail(503, '星历元数据查询失败，无法校验权限'))
+      return
+    }
+  }
+  try {
+    const buf = fs.readFileSync(full)
+    const textBody = full.toLowerCase().endsWith('.gz') ? zlib.gunzipSync(buf).toString('utf8') : buf.toString('utf8')
+    const maxPoints = Math.max(4, Math.min(80, Number(req.query.maxPoints) || 48))
+    const payload = buildUncertaintyPayload(textBody, maxPoints)
+    res.json(ok(payload))
+  } catch (e) {
+    res.status(500).json(fail(500, (e as Error).message || '解析协方差失败'))
   }
 })
 

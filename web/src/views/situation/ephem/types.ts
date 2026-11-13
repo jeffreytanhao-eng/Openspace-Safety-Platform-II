@@ -49,6 +49,30 @@ export interface EphemManSegment {
   extras?: Record<string, string>
 }
 
+
+/** 态势位置不确定性椭球的一条稀疏样本（主轴已在 ECI，σ 单位 km） */
+export type UncSource = 'file' | 'age'
+
+export interface UncertaintySample {
+  t: number
+  r: Vec3
+  /** 1σ 主轴长度 km（sqrt of position-block eigenvalues, or UVW age σ） */
+  sigmaKm: [number, number, number]
+  /** 与 sigmaKm 对应的 ECI 单位主轴（列向量） */
+  axesEci: [Vec3, Vec3, Vec3]
+  source: UncSource
+  /** 仅龄期模型：相对星历历元的小时数 */
+  ageHours?: number
+}
+
+export interface UncertaintyCatalog {
+  source: UncSource
+  /** 龄期起算历元（通常为第一条状态 / start） */
+  epochMs: number
+  samples: UncertaintySample[]
+  maxSigmaKm: number
+}
+
 /** 一条完整的星历序列 */
 export interface EphemSet {
   id: string
@@ -67,6 +91,8 @@ export interface EphemSet {
   maneuvers?: EphemManSegment[]
   /** 集合级协方差标记：逐点 cov 数组被剥离（省 IDB 空间）时保留「含协方差」事实 */
   hasCov?: boolean
+  /** 稀疏不确定性样本（剥离逐点 cov 后仍可供地球椭球使用） */
+  uncertainty?: UncertaintyCatalog
   warnings: string[]
 }
 
