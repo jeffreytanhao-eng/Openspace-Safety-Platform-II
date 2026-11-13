@@ -584,6 +584,8 @@ function isCardActive(c: EphCard): boolean {
     left: auto;
     right: 0;
     z-index: 8;
+    /* 比通用列表面板宽 10%（300 → 330）：让机动卡片的 Δv 矢量一行放下 */
+    width: 330px;
   }
   .ephem-panel.panel-enter-from,
   .ephem-panel.panel-leave-to { transform: translateX(100%); }
@@ -681,7 +683,8 @@ function isCardActive(c: EphCard): boolean {
 /* 键值表 */
 .ep-kv { display: flex; flex-direction: column; gap: 4px; }
 .ep-kv-row { display: flex; align-items: baseline; gap: 8px; font-size: 10.5px;
-  > span { flex: none; width: 84px; color: #8ea4c4; }
+  /* 标签列 84 → 74：右侧信息列加宽约 5%，给有效期/机动卡片留出更多横向空间 */
+  > span { flex: none; width: 74px; color: #8ea4c4; white-space: nowrap; }
   b { flex: 1 1 auto; min-width: 0; color: #eaf2fc; font-weight: 600; word-break: break-all; }
   &.is-sub span { width: auto; } &.is-sub b { flex: none; } }
 .ep-kv-man b { word-break: normal; overflow-wrap: normal; }
@@ -699,9 +702,10 @@ function isCardActive(c: EphCard): boolean {
   &.is-dirlab { font-size: 9.5px; }
   &.is-vec {
     font-size: 9.5px;
-    white-space: normal;
-    overflow-wrap: anywhere;
-    word-break: break-word;
+    /* 机动 Δv 矢量必须单行显示（面板已加宽 10% 容纳它） */
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
     line-height: 1.45;
   }
   &.is-head { display: flex; align-items: baseline; gap: 6px; white-space: nowrap;

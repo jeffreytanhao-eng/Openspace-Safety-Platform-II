@@ -44,10 +44,10 @@ type Cartesian3 = import('cesium').Cartesian3
 let Cesium: CesiumModule | null = null
 let widget: CesiumWidget | null = null
 let scene: CesiumScene | null = null
-/** 自定义左键拖拽（绕地心旋转）的事件处理器（initCesium 创建，destroyCesium 销毁） */
-let dragHandler: import('cesium').ScreenSpaceEventHandler | null = null
-/** 松手后的拖拽惯性帧（destroyCesium 需取消） */
-let dragInertiaRaf = 0
+/** 自定义左键拖拽的 DOM 监听清理（initCesium 注入，destroyCesium 调用） */
+let dragCleanup: (() => void) | null = null
+/** 每帧一次的拖拽/惯性步进（initCesium 注入，renderCesium 内调用） */
+let dragStep: (() => void) | null = null
 /** 窗口失焦兜底复位（destroyCesium 需移除） */
 let dragBlurHandler: (() => void) | null = null
 /** When set, left-drag orbits around this ECEF point (sat track); else around Earth center. */
@@ -358,14 +358,25 @@ export async function initCesium(container: HTMLElement, hooks?: CesiumInitHooks
     // 首页 4.5R 时地表只有约 1/3.5 的速度（发涩、打滑），近距跟踪时又过于灵敏。
     //
     // 惯性：Cesium 的阻尼只作用于原生控制器，自写拖拽需要自己做——松手后按最后的屏幕速度衰减继续旋转。
-    dragHandler = new Cs.ScreenSpaceEventHandler(widget.canvas)
+    // 拖拽用浏览器原生 pointer 事件（不从 Cesium ScreenSpaceEventHandler 取）：
+    // 后者给的是画布内坐标，和 clientX/clientY 混用会错开画布偏移；内置浏览器里
+    // mousemove 的 buttons 也不可靠。pointerevent + setPointerCapture 两者都解决。
+    const canvasEl = widget.canvas
     let dragging = false
+    let dragPointerId = -1
     let lastX = 0
     let lastY = 0
     let lastMoveMs = 0
+    /** 本帧待应用的拖拽位移（窗口级监听累积，每帧只写一次相机，避免高频事件反复 setView） */
+    let pendingDX = 0
+    let pendingDY = 0
+    let lastDragFrameMs = 0
     /** 屏幕拖拽速度（px/ms），松手后据此做惯性 */
     let velX = 0
     let velY = 0
+    /** 松手后的惯性速度（px/ms），由每帧步进衰减 */
+    let inertiaVX = 0
+    let inertiaVY = 0
 
     /** 当前视距下每像素对应的旋转角（rad/px） */
     const radPerPx = (cam: import('cesium').Camera): number => {
@@ -373,11 +384,12 @@ export async function initCesium(container: HTMLElement, hooks?: CesiumInitHooks
       const fr = cam.frustum as import('cesium').PerspectiveFrustum
       const fovy = (fr as unknown as { fovy?: number }).fovy
       if (!canvasH || typeof fovy !== 'number') return 0
+      // 跟踪模式（绕目标旋转）：画面转动与光标位移 1:1。这里不能用 d/R——
+      // 跟星时相机距目标只有约 0.15R，会把每像素转角压到 1/7，拖起来发涩、像拖不动。
+      if (orbitFocusCart) return fovy / canvasH
+      // 绕地心旋转：让光标下的地表跟着光标走，需按「相机到地表距离 / 地球半径」放大
       const earthM = EARTH_RADIUS_KM * 1000
-      // 被拖物到相机的距离：普通模式取离地高度，跟踪模式取相机到焦点距离
-      const d = orbitFocusCart
-        ? Cs.Cartesian3.distance(cam.positionWC, orbitFocusCart)
-        : Cs.Cartesian3.magnitude(cam.positionWC) - earthM
+      const d = Cs.Cartesian3.magnitude(cam.positionWC) - earthM
       const ratio = Math.min(6, Math.max(0.06, d / earthM))
       return (fovy / canvasH) * ratio
     }
@@ -417,87 +429,129 @@ export async function initCesium(container: HTMLElement, hooks?: CesiumInitHooks
       cam.rotateUp(-dy * k)
     }
 
-    const cancelInertia = () => {
-      if (dragInertiaRaf) cancelAnimationFrame(dragInertiaRaf)
-      dragInertiaRaf = 0
-    }
-
-    /** 松手：按最后的屏幕速度衰减滑行；速度过小直接收尾 */
-    const releaseInertia = () => {
-      cancelInertia()
-      const end = () => {
-        velX = 0
-        velY = 0
-        hooks?.onMoveEnd?.()
-      }
-      if (Math.hypot(velX, velY) < 0.05) {
-        end()
-        return
-      }
-      // 惯性衰减：整体只保留约 6 成甩动速度、90ms 时间常数，避免快速甩动后转过头
-      velX *= 0.6
-      velY *= 0.6
-      let lastT = performance.now()
-      const step = (t: number) => {
-        const dt = Math.min(50, Math.max(1, t - lastT))
-        lastT = t
-        const decay = Math.exp(-dt / 90)
-        velX *= decay
-        velY *= decay
-        if (Math.hypot(velX, velY) < 0.02) {
-          dragInertiaRaf = 0
-          end()
-          return
-        }
-        orbitByPx(velX * dt, velY * dt)
-        dragInertiaRaf = requestAnimationFrame(step)
-      }
-      dragInertiaRaf = requestAnimationFrame(step)
-    }
-
-    dragHandler.setInputAction((m: { position: { x: number; y: number } }) => {
-      cancelInertia()
-      velX = 0
-      velY = 0
-      dragging = true
-      lastX = m.position.x
-      lastY = m.position.y
-      lastMoveMs = performance.now()
-      if (widget) widget.canvas.style.cursor = 'grabbing'
-      hooks?.onMoveStart?.()
-    }, Cs.ScreenSpaceEventType.LEFT_DOWN)
-    dragHandler.setInputAction((m: { endPosition: { x: number; y: number } }) => {
-      if (!dragging || !scene || !widget || widget.isDestroyed()) return
-      const now = performance.now()
-      const dx = m.endPosition.x - lastX
-      const dy = m.endPosition.y - lastY
-      if (!dx && !dy) return
-      lastX = m.endPosition.x
-      lastY = m.endPosition.y
-      const dt = Math.max(1, now - lastMoveMs)
-      lastMoveMs = now
-      // 平滑速度：用最近几帧的加权值，避免最后一帧抖动主导惯性
-      velX = velX * 0.4 + (dx / dt) * 0.6
-      velY = velY * 0.4 + (dy / dt) * 0.6
-      orbitByPx(dx, dy)
-    }, Cs.ScreenSpaceEventType.MOUSE_MOVE)
-    const endDrag = (withInertia: boolean) => {
+    /** 收尾：把未落实的位移用掉，按需交给每帧步进做惯性 */
+    const endDrag = (withInertia: boolean): void => {
       if (!dragging) return
       dragging = false
-      if (widget) widget.canvas.style.cursor = 'grab'
-      if (withInertia) releaseInertia()
-      else {
-        cancelInertia()
-        velX = 0
-        velY = 0
+      window.removeEventListener('pointermove', onWindowPointerMove, true)
+      window.removeEventListener('pointerup', onWindowPointerUp, true)
+      window.removeEventListener('pointercancel', onWindowPointerUp, true)
+      document.body.style.userSelect = ''
+      try {
+        if (dragPointerId >= 0) canvasEl.releasePointerCapture(dragPointerId)
+      } catch {
+        /* 指针已释放时忽略 */
+      }
+      dragPointerId = -1
+      // 松手瞬间先把尚未落实的位移用掉，避免最后几像素被丢掉
+      if (pendingDX || pendingDY) {
+        orbitByPx(pendingDX, pendingDY)
+        pendingDX = 0
+        pendingDY = 0
+      }
+      canvasEl.style.cursor = 'grab'
+      if (withInertia && Math.hypot(velX, velY) >= 0.05) {
+        // 只保留约 6 成甩动速度，避免快速甩动后转过头
+        inertiaVX = velX * 0.6
+        inertiaVY = velY * 0.6
+      } else {
+        inertiaVX = 0
+        inertiaVY = 0
         hooks?.onMoveEnd?.()
       }
     }
-    // mouseup 在 document 上监听（ScreenSpaceEventHandler 内建）：拖出画布松开同样收尾
-    dragHandler.setInputAction(() => endDrag(true), Cs.ScreenSpaceEventType.LEFT_UP)
-    // 切走窗口/失焦时收不到 mouseup 的兜底，避免 dragging 卡死
+
+    /**
+     * 窗口级 pointermove：只累积位移，不当场写相机。
+     * 画布已 setPointerCapture，指针划出画布/压到右侧星历面板上也能持续收到事件。
+     */
+    const onWindowPointerMove = (e: PointerEvent): void => {
+      if (!dragging || (dragPointerId >= 0 && e.pointerId !== dragPointerId)) return
+      const dx = e.clientX - lastX
+      const dy = e.clientY - lastY
+      if (!dx && !dy) return
+      const now = performance.now()
+      const dt = Math.max(1, now - lastMoveMs)
+      lastX = e.clientX
+      lastY = e.clientY
+      lastMoveMs = now
+      pendingDX += dx
+      pendingDY += dy
+      // 平滑速度：最近几帧加权，避免最后一帧抖动主导惯性
+      velX = velX * 0.6 + (dx / dt) * 0.4
+      velY = velY * 0.6 + (dy / dt) * 0.4
+      e.preventDefault()
+    }
+    const onWindowPointerUp = (): void => endDrag(true)
+
+    /** 每帧一次：先落实本帧累计位移，再在松手后做惯性滑行（renderCesium 内调用） */
+    const applyDragStep = (): void => {
+      const now = performance.now()
+      const dt = lastDragFrameMs ? Math.min(50, Math.max(1, now - lastDragFrameMs)) : 16
+      lastDragFrameMs = now
+      if (pendingDX || pendingDY) {
+        orbitByPx(pendingDX, pendingDY)
+        pendingDX = 0
+        pendingDY = 0
+        return
+      }
+      if (dragging || (!inertiaVX && !inertiaVY)) return
+      const decay = Math.exp(-dt / 110)
+      inertiaVX *= decay
+      inertiaVY *= decay
+      if (Math.hypot(inertiaVX, inertiaVY) < 0.02) {
+        inertiaVX = 0
+        inertiaVY = 0
+        hooks?.onMoveEnd?.()
+        return
+      }
+      orbitByPx(inertiaVX * dt, inertiaVY * dt)
+    }
+
+    const onCanvasPointerDown = (e: PointerEvent): void => {
+      if (e.button !== 0 || dragging) return
+      dragging = true
+      dragPointerId = e.pointerId
+      velX = 0
+      velY = 0
+      inertiaVX = 0
+      inertiaVY = 0
+      pendingDX = 0
+      pendingDY = 0
+      lastX = e.clientX
+      lastY = e.clientY
+      lastMoveMs = performance.now()
+      canvasEl.style.cursor = 'grabbing'
+      // 拖动期间禁止选中文本（指针划过右侧面板时不会顺手把文字刷蓝）
+      document.body.style.userSelect = 'none'
+      // 指针捕获：即使光标移出画布（压到面板上）也继续收到 pointermove
+      try {
+        canvasEl.setPointerCapture(e.pointerId)
+      } catch {
+        /* 不支持捕获时退化为窗口监听 */
+      }
+      window.addEventListener('pointermove', onWindowPointerMove, true)
+      window.addEventListener('pointerup', onWindowPointerUp, true)
+      window.addEventListener('pointercancel', onWindowPointerUp, true)
+      hooks?.onMoveStart?.()
+    }
+    canvasEl.addEventListener('pointerdown', onCanvasPointerDown)
+    // 切走窗口/失焦时收不到 pointerup 的兜底，避免 dragging 卡死
     dragBlurHandler = () => endDrag(false)
     window.addEventListener('blur', dragBlurHandler)
+    dragStep = applyDragStep
+    dragCleanup = () => {
+      canvasEl.removeEventListener('pointerdown', onCanvasPointerDown)
+      window.removeEventListener('pointermove', onWindowPointerMove, true)
+      window.removeEventListener('pointerup', onWindowPointerUp, true)
+      window.removeEventListener('pointercancel', onWindowPointerUp, true)
+      dragging = false
+      pendingDX = 0
+      pendingDY = 0
+      inertiaVX = 0
+      inertiaVY = 0
+      document.body.style.userSelect = ''
+    }
 
     // 相机移动开始/结束（对齐原 controls 'start'/'end' → userInteracting 暂停卫星传播）
     if (hooks?.onMoveStart) scene.camera.moveStart.addEventListener(hooks.onMoveStart)
@@ -574,6 +628,8 @@ const _sLook = new THREE.Vector3()
 /** 渲染一帧 Cesium：先注入模拟时间（驱动晨昏线/光照），再手动渲染（useDefaultRenderLoop=false） */
 export function renderCesium(simTimeMs: number): void {
   if (!cesiumReady || !Cesium || !widget || widget.isDestroyed()) return
+  // 先落实本帧累计的左键拖拽位移 / 松手惯性，再渲染，保证同一帧内相机只有一次写入
+  dragStep?.()
   widget.clock.currentTime = Cesium.JulianDate.fromDate(new Date(simTimeMs))
   widget.clock.shouldAnimate = false
   widget.render()
@@ -691,12 +747,11 @@ export function destroyCesium(): void {
   orbitFocusCart = null
   cesiumReady = false
   scene = null
-  if (dragInertiaRaf) cancelAnimationFrame(dragInertiaRaf)
-  dragInertiaRaf = 0
+  dragStep = null
+  dragCleanup?.()
+  dragCleanup = null
   if (dragBlurHandler) window.removeEventListener('blur', dragBlurHandler)
   dragBlurHandler = null
-  if (dragHandler && !dragHandler.isDestroyed()) dragHandler.destroy()
-  dragHandler = null
   if (widget && !widget.isDestroyed()) {
     try {
       widget.destroy()
