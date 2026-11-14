@@ -5,7 +5,8 @@
  *  - 组织不存在则创建（并保持 plan/status 为约定值）；
  *  - 用户不存在则创建；
  *  - 用户已存在则校正组织/角色/启用态，密码不一致时重置；
- *  - 平台超管账号 admin 同时覆盖旧超管口令（以本文件为准）。
+ *  - createOnly 账号（平台超管 admin）仅不存在时创建：已存在则完全跳过，
+ *    保留运维在线上自行修改过的密码，重部署不再重置；
  *
  * 登录支持用户名（无 @ 时自动补 @openspace.local，见 routes/auth.ts）。
  */
@@ -19,6 +20,8 @@ interface FixedAccount {
   displayName: string
   role: 'platform_super_admin' | 'org_admin'
   org: { name: string; plan: 'normal' | 'vip' } | null
+  /** true = 仅不存在时创建；已存在不再校正（保留线上改过的密码与资料） */
+  createOnly?: boolean
 }
 
 const FIXED_ACCOUNTS: FixedAccount[] = [
@@ -41,7 +44,8 @@ const FIXED_ACCOUNTS: FixedAccount[] = [
     password: 'a1234',
     displayName: '平台超管',
     role: 'platform_super_admin',
-    org: null
+    org: null,
+    createOnly: true
   }
 ]
 
@@ -82,6 +86,8 @@ export async function ensureFixedAccounts(): Promise<void> {
       console.log(`[test-account] created ${acc.email}`)
       continue
     }
+    // 仅创建型账号：已存在则保留现状（不改密码/角色/资料），避免重部署覆盖线上口令
+    if (acc.createOnly) continue
     const row = rows[0]
     const same = await bcrypt.compare(acc.password, String(row.password_hash))
     await pool.query(
