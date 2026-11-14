@@ -152,6 +152,13 @@ let trackEphem = false
 let trackCat = false
 /** Fly-in pending until the selected entry has a position (async cloud rebuild). */
 let catFlyPending = false
+/**
+ * 仿真时刻跳变（滑杆 / 深链 / 机动卡片跳 t0）时置位。
+ * 跟踪模式靠「目标位移增量」平移相机，参考点 _trackPrev 若停在跳变前的时刻，
+ * 下一帧的增量就是几小时的轨道位移 → 相机被甩到远处（表现为「飞过去又变回远景」）。
+ * 置位后第一帧只重锚参考点、不做位移。
+ */
+let trackResync = false
 /** 机动卡片定位标签状态：锚定的场景坐标 + 是否显示 */
 const manLabelPos = new THREE.Vector3()
 let manLabelOn = false
@@ -340,6 +347,7 @@ function stopCatalogTrack() {
   if (!trackCat) return
   trackCat = false
   catFlyPending = false
+  trackResync = false
   if (!trackEphem) {
     setCameraOrbitFocusScene(null, simMs)
     setReticleVisible(false)
@@ -352,6 +360,7 @@ function startCatalogTrack(item: { object_name?: string | null; norad_id: number
   stopEphemTrack()
   trackCat = true
   catFlyPending = false
+  trackResync = false
   const nameEl = reticleNameEl.value
   const label = labelOverride || item.object_name || `NORAD ${item.norad_id}`
   if (nameEl) nameEl.textContent = label
@@ -372,6 +381,7 @@ function startCatalogTrack(item: { object_name?: string | null; norad_id: number
 function stopEphemTrack() {
   trackEphem = false
   ephemFlyPending = false
+  trackResync = false
   camFly.active = false
   setCameraOrbitFocusScene(null, simMs)
   setReticleVisible(false)
@@ -401,6 +411,7 @@ function startEphemTrack(set: EphemSet) {
   ephemFlyPending = false
   lookAtPt.copy(_trackPos)
   _trackPrev.copy(_trackPos)
+  trackResync = false
   // Camera on Earth-center → target ray (radial outward), looking at target — no polar bend
   const radial = _trackPos.clone().normalize()
   const toPos = _trackPos.clone().addScaledVector(radial, TRACK_CAM_DIST)
@@ -741,6 +752,8 @@ function resetCameraHome() {
 }
 
 function setSimTime(ms: number) {
+  // 跟踪中时间跳变：不能拿跳变前的参考位置算增量（会把相机甩出轨道），先重锚
+  if (ms !== simMs && (trackEphem || trackCat)) trackResync = true
   simMs = ms
   simTimeMs.value = ms
 }
@@ -816,22 +829,32 @@ function loop(now: number) {
   //  3) push Three → Cesium when flying/tracking so follow is not wiped by sync
   //  4) renderCesium; sync again when !flying
   const tracking = trackEphem || trackCat
+  let aimLook = false
   if (!flying && tracking && camera) {
     let ok = false
     if (trackEphem) ok = !!getEphemMarkerPosition(_trackPos)
     else ok = getCatalogFocusPos(simMs, _trackPos)
     if (ok) {
-      _trackDelta.subVectors(_trackPos, _trackPrev)
-      camera.position.add(_trackDelta)
-      lookAtPt.add(_trackDelta)
-      _trackPrev.copy(_trackPos)
-      setCameraOrbitFocusScene(lookAtPt, simMs)
+      if (trackResync) {
+        // 时间刚跳变：只重锚参考点并改瞄新位置，不做位移（否则相机被甩到几小时外）
+        trackResync = false
+        lookAtPt.copy(_trackPos)
+        _trackPrev.copy(_trackPos)
+        setCameraOrbitFocusScene(lookAtPt, simMs)
+        aimLook = true
+      } else {
+        _trackDelta.subVectors(_trackPos, _trackPrev)
+        camera.position.add(_trackDelta)
+        lookAtPt.add(_trackDelta)
+        _trackPrev.copy(_trackPos)
+        setCameraOrbitFocusScene(lookAtPt, simMs)
+      }
     }
   }
 
   if (flying || tracking) {
     // Fly aims at target; track keeps current view dir (orbit/zoom around lookAt)
-    applySceneCamera(flying)
+    applySceneCamera(flying || aimLook)
   }
 
   renderCesium(simMs)
@@ -1058,7 +1081,9 @@ function focusEphemManIndex(idx: number | null, labelText?: string): boolean {
     }
   }
   if (!getEphemManLocatePoint(idx, _trackPos)) return false
+  // 机动定位是「相机对准燃烧段」：顺手停掉编目跟随，避免它的位移增量在同帧把机位拽走
   stopEphemTrack()
+  stopCatalogTrack()
   setEphemManSelected(idx)
   manLabelPos.copy(_trackPos)
   const txtEl = manLabelTextEl.value

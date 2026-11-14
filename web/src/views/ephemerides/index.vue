@@ -327,6 +327,9 @@ const totalPagesView = computed(() => {
   return Math.max(1, Math.ceil(clientFiltered.value.length / PAGE_SIZE))
 })
 
+/** 当前筛选条件下的星历总数（服务端 total；legacy 回退用客户端过滤结果） */
+const totalCount = computed(() => (serverActive.value ? serverTotal.value : clientFiltered.value.length))
+
 const paged = computed(() => {
   if (serverActive.value) return displayItems.value
   const p = Math.min(page.value, totalPagesView.value)
@@ -1090,10 +1093,13 @@ onMounted(() => {
       <aside class="list-pane">
         <div class="list-tools">
           <input v-model="filter" type="search" :placeholder="t('eph.filter')" />
-          <div class="seg">
-            <button type="button" :class="{ on: statusFilter === 'all' }" @click="statusFilter = 'all'">{{ t('eph.all') }}</button>
-            <button type="button" :class="{ on: statusFilter === 'ITC' }" @click="statusFilter = 'ITC'">ITC</button>
-            <button type="button" :class="{ on: statusFilter === 'OCM' }" @click="statusFilter = 'OCM'">OCM</button>
+          <div class="seg-row">
+            <div class="seg">
+              <button type="button" :class="{ on: statusFilter === 'all' }" @click="statusFilter = 'all'">{{ t('eph.all') }}</button>
+              <button type="button" :class="{ on: statusFilter === 'ITC' }" @click="statusFilter = 'ITC'">ITC</button>
+              <button type="button" :class="{ on: statusFilter === 'OCM' }" @click="statusFilter = 'OCM'">OCM</button>
+            </div>
+            <span class="seg-total">{{ t('eph.totalCount', { n: totalCount }) }}</span>
           </div>
         </div>
         <div v-if="loading" class="list-empty">{{ t('eph.loadingList') }}</div>
@@ -1357,6 +1363,9 @@ h1 { margin: 0; font-size: 16px; font-weight: 650; }
   color: var(--text); border-radius: 4px; padding: 7px 9px; font-size: 12px; outline: none;
 }
 .seg { display: flex; flex-wrap: wrap; gap: 4px; }
+/* 格式筛选行右侧的星历总数 */
+.seg-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.seg-total { flex: none; font-size: 10px; color: var(--text-muted); white-space: nowrap; }
 .seg button {
   appearance: none; border: 1px solid var(--border); background: var(--bg-deep); color: var(--text-muted);
   font-size: 10px; padding: 3px 7px; border-radius: 3px; cursor: pointer;
