@@ -15,6 +15,8 @@ import { ingestUploadFile } from '../ephem/ingest.js'
 import {
   ensureStarlinkSchema,
   getStarlinkPullConfig,
+  getStarlinkPullCursor,
+  saveStarlinkPullCursor,
   saveStarlinkPullStatus,
   type StarlinkFormat,
   type StarlinkPullStatus
@@ -40,8 +42,8 @@ interface PullTarget {
   name: string
 }
 
-/** 从清单挑出本次要拉取的条目：OCM 按目标名去重，ITC 按文件名去重，保持清单顺序 */
-function pickTargets(manifest: string, format: StarlinkFormat, count: number): PullTarget[] {
+/** 清单去重后的全部条目：OCM 按目标名去重，ITC 按文件名去重，保持清单顺序 */
+export function collectManifestTargets(manifest: string, format: StarlinkFormat): PullTarget[] {
   const lines = manifest
     .split(/\r?\n/)
     .map((s) => s.trim())
@@ -60,9 +62,25 @@ function pickTargets(manifest: string, format: StarlinkFormat, count: number): P
       seen.add(line)
       targets.push({ name, file: line })
     }
-    if (targets.length >= count) break
   }
   return targets
+}
+
+/**
+ * 按游标从全清单环形取 count 个目标。
+ * 返回本次目标与推进后的游标；清单短于 count 时取全量并回到起点。
+ */
+export function pickTargetsByCursor(
+  all: PullTarget[],
+  count: number,
+  cursor: number
+): { targets: PullTarget[]; nextCursor: number } {
+  if (!all.length) return { targets: [], nextCursor: 0 }
+  const start = ((Math.floor(cursor) % all.length) + all.length) % all.length
+  const take = Math.min(count, all.length)
+  const targets: PullTarget[] = []
+  for (let i = 0; i < take; i++) targets.push(all[(start + i) % all.length])
+  return { targets, nextCursor: (start + take) % all.length }
 }
 
 /** 执行一次拉取（多文件并行；单条失败不中断整批） */
@@ -96,7 +114,24 @@ export async function runStarlinkPull(opts: {
 
   try {
     const manifest = (await downloadPublicFile(MANIFEST_URL, 90_000)).toString('utf8')
-    const targets = pickTargets(manifest, opts.format, count)
+    const all = collectManifestTargets(manifest, opts.format)
+    let targets: PullTarget[]
+    if (opts.format === 'OCM') {
+      // OCM 清单有数千个目标：按持久化游标环形轮换，避免每天只刷新同一批前 N 个
+      const cursor = await getStarlinkPullCursor()
+      const picked = pickTargetsByCursor(all, count, cursor)
+      targets = picked.targets
+      console.log(`[starlink] rotation: total=${all.length} cursor=${cursor} -> ${picked.nextCursor}`)
+      // 先推进游标再下载：个别文件失败也不会导致次日重复同一批
+      try {
+        await saveStarlinkPullCursor(picked.nextCursor)
+      } catch (e) {
+        console.error('[starlink] save cursor failed:', (e as Error).message)
+      }
+    } else {
+      // ITC 清单条目很少（个位数），每次全量刷新
+      targets = all.slice(0, count)
+    }
     if (!targets.length) throw new Error('MANIFEST 中没有可拉取条目')
     console.log(`[starlink] pull start: format=${opts.format} count=${targets.length} by=${opts.triggeredBy}`)
 

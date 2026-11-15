@@ -34,6 +34,8 @@ export interface StarlinkPullStatus {
 
 const CONFIG_KEY = 'starlink.pull.config'
 const STATUS_KEY = 'starlink.pull.status'
+/** OCM 每日轮换游标：下一次拉取从清单的第几个目标开始 */
+const CURSOR_KEY = 'starlink.pull.cursor'
 
 export const DEFAULT_STARLINK_CONFIG: StarlinkPullConfig = {
   enabled: false,
@@ -94,6 +96,24 @@ export async function getStarlinkPullConfig(): Promise<StarlinkPullConfig> {
 export async function saveStarlinkPullConfig(cfg: StarlinkPullConfig): Promise<void> {
   if (!(await ensureStarlinkSchema())) throw new Error('数据库不可用')
   await writeKey(CONFIG_KEY, JSON.stringify(cfg))
+}
+
+/** 读取 OCM 轮换游标（缺失/异常回退 0） */
+export async function getStarlinkPullCursor(): Promise<number> {
+  if (!(await ensureStarlinkSchema())) return 0
+  try {
+    const raw = await readKey(CURSOR_KEY)
+    const n = Number(raw)
+    return Number.isFinite(n) && n >= 0 ? Math.floor(n) : 0
+  } catch {
+    return 0
+  }
+}
+
+/** 保存 OCM 轮换游标（落库失败只告警，不影响本轮拉取） */
+export async function saveStarlinkPullCursor(cursor: number): Promise<void> {
+  if (!(await ensureStarlinkSchema())) return
+  await writeKey(CURSOR_KEY, String(Math.max(0, Math.floor(cursor))))
 }
 
 /** 最近一次拉取状态（无记录返回 null） */
