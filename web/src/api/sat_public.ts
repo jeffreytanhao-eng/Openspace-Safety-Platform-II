@@ -1,7 +1,8 @@
 /**
  * 前台公开卫星接口（/cgi 免登录）
  * 供免登录页面（如 /test 3D 轨道视图）消费，与后台 /api 卫星逻辑保持一致。
- * 类型收口于 ./satTypes，保证字段结构前后端一致；函数走 httpCgi（baseURL='/cgi'），不触发登录校验。
+ * 类型收口于 ./satTypes，保证字段结构前后端一致；函数走 httpCgi（baseURL='/cgi'），
+ * 已登录时自动携带 Bearer token（服务端按档位裁剪可见范围）。
  */
 import { httpCgi } from '@/utils/request'
 import type { ConstellationSnapshot, SatTleItem } from './satTypes'

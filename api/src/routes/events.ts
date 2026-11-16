@@ -22,7 +22,7 @@ import { requireAuth, type AuthContext } from './auth.js'
 import { writeUserAudit } from '../db/adminDb.js'
 import { quotaExceeded } from '../middleware/plan.js'
 import { parseCdmText } from '../services/cdmParse.js'
-import { resolvePoolPolicy, poolBadge } from '../services/systemPool.js'
+import { resolvePoolPolicyForUser, poolBadge } from '../services/systemPool.js'
 import { buildSatrec, propagateJ2000 } from '../screen/coarse.js'
 import { tleCovariance } from '../screen/covariance.js'
 import { encounterPlane, foster2D } from '../screen/pc.js'
@@ -468,7 +468,7 @@ router.post('/events/import', requireAuth, async (req: ScopedRequest, res) => {
  *  列表过滤 Pc < 1e-7 的事件（无 Pc 仍可按脱靶距离保留）；不删除库内 CDM。 */
 router.get('/events', requireAuth, async (req: ScopedRequest, res) => {
   const org = req.auth?.org ?? null
-  const policy = await resolvePoolPolicy(org)
+  const policy = await resolvePoolPolicyForUser(req.auth)
   const { from, to } = windowRange(String(req.query.window ?? ''), policy.cdmDays)
   const rawSource = String(req.query.eventSource ?? 'cdm').trim().toLowerCase()
   const eventSource = rawSource || 'cdm'

@@ -39,6 +39,25 @@ export interface PoolPolicy {
 /** 匿名/平台账号按免费档样例窗放行（公共小子集） */
 const ANON_PRIORITY = 2
 
+/** 平台账号（超管/运维）不受档位裁剪，直接看全量系统池 */
+export const FULL_POOL_POLICY: PoolPolicy = {
+  scope: TLE_SCOPE.FULL,
+  mode: 'full',
+  sampleLimit: TLE_SAMPLE_LIMIT,
+  cdmDays: 365,
+  managedNorads: null,
+  priority: 0
+}
+
+/** 按登录身份解析系统池策略：平台账号全量，其余按组织档位 */
+export async function resolvePoolPolicyForUser(
+  auth: { user?: { role?: string } | null; org?: SafeOrg | null } | null | undefined
+): Promise<PoolPolicy> {
+  const role = auth?.user?.role
+  if (role === 'platform_super_admin' || role === 'platform_ops') return FULL_POOL_POLICY
+  return resolvePoolPolicy(auth?.org ?? null)
+}
+
 export async function resolvePoolPolicy(org: SafeOrg | null): Promise<PoolPolicy> {
   if (!org) {
     return {

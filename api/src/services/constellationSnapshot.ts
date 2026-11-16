@@ -124,12 +124,15 @@ export async function buildConstellationSnapshot(force = false): Promise<Constel
     for (const row of rows) {
       try {
         const satrec = satellite.twoline2satrec(row.tle_line1.trim(), row.tle_line2.trim())
-        const pv = satellite.propagate(satrec, date)
-        if (!pv.position || typeof pv.position === 'boolean') {
+        const pv = satellite.propagate(satrec, date) as {
+          position?: { x: number; y: number; z: number } | boolean | null
+          velocity?: { x: number; y: number; z: number } | boolean | null
+        } | null
+        if (!pv || !pv.position || typeof pv.position === 'boolean') {
           skipped++
           continue
         }
-        const pos = pv.position as { x: number; y: number; z: number }
+        const pos = pv.position
         const vel =
           pv.velocity && typeof pv.velocity !== 'boolean'
             ? (pv.velocity as { x: number; y: number; z: number })
@@ -143,7 +146,7 @@ export async function buildConstellationSnapshot(force = false): Promise<Constel
           nameMap.set(name, nameIdx)
         }
 
-        const typ = normType(row.object_type)
+        const typ = normType(row.object_type) as (typeof POINT_TYPE_KEYS)[number]
         let typeIdx = typeMap.get(typ)
         if (typeIdx == null) {
           typeIdx = typeIndex.length
@@ -151,7 +154,7 @@ export async function buildConstellationSnapshot(force = false): Promise<Constel
           typeMap.set(typ, typeIdx)
         }
 
-        const reg = normRegime(row.regime)
+        const reg = normRegime(row.regime) as (typeof POINT_REGIME_KEYS)[number]
         let regimeIdx = regimeMap.get(reg) ?? regimeMap.get('OTHER')!
 
         const owner = String(row.owner_code || '--') || '--'

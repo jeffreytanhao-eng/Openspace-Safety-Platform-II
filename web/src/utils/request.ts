@@ -14,12 +14,23 @@ export interface ApiResult<T = unknown> {
   data: T
 }
 
+/** 有登录态时附带 Bearer token（无 token 时保持匿名请求，由服务端判定） */
+function authHeaders(): Record<string, string> {
+  try {
+    const t = localStorage.getItem('osp-token')
+    return t ? { Authorization: `Bearer ${t}` } : {}
+  } catch {
+    return {}
+  }
+}
+
 /** 调用 /cgi 接口并解包 data（code !== 0 抛错） */
 export async function httpCgi<T>(cfg: AxiosRequestConfig): Promise<T> {
   const res = await axios.request<ApiResult<T>>({
     baseURL: '/cgi',
     timeout: 30000,
-    ...cfg
+    ...cfg,
+    headers: { ...authHeaders(), ...(cfg.headers as Record<string, string> | undefined) }
   })
   const body = res.data
   if (!body || body.code !== 0) throw new Error(body?.msg || '请求失败')

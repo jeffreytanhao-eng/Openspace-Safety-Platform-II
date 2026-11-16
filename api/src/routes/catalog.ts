@@ -3,7 +3,7 @@ import type { RowDataPacket } from 'mysql2/promise'
 import { pool, pingDb } from '../db/pool.js'
 import { ok } from '../utils/response.js'
 import { optionalAuth, requireAuth } from './auth.js'
-import { cdmIsolation, getVisibleNorads, poolBadge, resolvePoolPolicy, type PoolPolicy } from '../services/systemPool.js'
+import { cdmIsolation, getVisibleNorads, poolBadge, resolvePoolPolicyForUser, type PoolPolicy } from '../services/systemPool.js'
 import { getDailyFetchStatus } from '../db/fetchDb.js'
 
 const router = Router()
@@ -71,7 +71,7 @@ router.get('/catalog/stats', optionalAuth, async (req, res) => {
   } catch {
     dailyFetch = null
   }
-  const policy = await resolvePoolPolicy(req.auth?.org ?? null)
+  const policy = await resolvePoolPolicyForUser(req.auth)
   let tleVisible = tle
   if (policy.mode === 'none') tleVisible = 0
   else if (policy.mode === 'managed') tleVisible = policy.managedNorads?.length ?? 0
@@ -112,7 +112,7 @@ router.get('/catalog/tles', requireAuth, async (req, res) => {
     res.status(503).json({ code: 503, msg: 'database down', data: null })
     return
   }
-  const policy = await resolvePoolPolicy(req.auth?.org ?? null)
+  const policy = await resolvePoolPolicyForUser(req.auth)
   const badge = { data_source: 'system_pool', pool: poolBadge(policy) }
   if (policy.mode === 'none') {
     res.json(ok({ total: 0, items: [], ...badge }))
@@ -183,7 +183,7 @@ router.get('/catalog/cdms', requireAuth, async (req, res) => {
     res.status(503).json({ code: 503, msg: 'database down', data: null })
     return
   }
-  const policy = await resolvePoolPolicy(req.auth?.org ?? null)
+  const policy = await resolvePoolPolicyForUser(req.auth)
   const badge = { data_source: 'system_pool', pool: poolBadge(policy) }
   const limit = Math.min(Math.max(Number(req.query.limit) || 50, 1), 500)
   if (policy.cdmDays <= 0) {

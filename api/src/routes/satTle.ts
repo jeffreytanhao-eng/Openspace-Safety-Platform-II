@@ -18,7 +18,7 @@ import {
 import { requireAuth } from './auth.js'
 import { requireSuperAdmin } from './admin.js'
 import { PLAN_FORBIDDEN } from '../middleware/plan.js'
-import { getVisibleNorads, poolBadge, resolvePoolPolicy, type PoolPolicy } from '../services/systemPool.js'
+import { getVisibleNorads, poolBadge, resolvePoolPolicyForUser, type PoolPolicy } from '../services/systemPool.js'
 
 const router = Router()
 
@@ -38,7 +38,7 @@ router.get('/constellation', requireAuth, async (req, res) => {
   try {
     const force = String(req.query.refresh || '') === '1'
     const t0 = Date.now()
-    const policy = await resolvePoolPolicy(req.auth?.org ?? null)
+    const policy = await resolvePoolPolicyForUser(req.auth)
     const snap = await buildConstellationSnapshot(force)
     const vs = await visibleSet(policy)
     const list = vs === 'all' ? snap.list : snap.list.filter((r) => vs.has(r[0]))
@@ -65,7 +65,7 @@ router.get('/tle_lines', requireAuth, async (req, res) => {
     return
   }
   try {
-    const policy = await resolvePoolPolicy(req.auth?.org ?? null)
+    const policy = await resolvePoolPolicyForUser(req.auth)
     const data = await listTleLines()
     const vs = await visibleSet(policy)
     const list = (vs === 'all' ? data.list : data.list.filter((r) => vs.has(r[0]))) as [number, string, string][]
@@ -89,7 +89,7 @@ router.get('/detail/:noradId', requireAuth, async (req, res) => {
     res.status(503).json({ code: 503, msg: 'database down', data: null })
     return
   }
-  const policy = await resolvePoolPolicy(req.auth?.org ?? null)
+  const policy = await resolvePoolPolicyForUser(req.auth)
   if (policy.mode === 'none') {
     res.status(403).json({
       code: PLAN_FORBIDDEN,
