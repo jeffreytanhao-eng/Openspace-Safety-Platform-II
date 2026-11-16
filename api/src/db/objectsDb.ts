@@ -240,6 +240,16 @@ export interface ObjectCatalogInfo {
   regime: string | null
 }
 
+/** GP 的 launch_date 为 DATE 列（mysql2 返回 Date），统一成 YYYY-MM-DD 供前端展示 */
+function toDateOnly(v: unknown): string | null {
+  if (v == null || v === '') return null
+  if (v instanceof Date) {
+    const p = (n: number) => String(n).padStart(2, '0')
+    return `${v.getFullYear()}-${p(v.getMonth() + 1)}-${p(v.getDate())}`
+  }
+  return String(v)
+}
+
 /** 批量取 NORAD 的编目基线，供列表展示只读参考（不写回档案） */
 export async function loadObjectCatalogInfo(
   norads: number[]
@@ -271,15 +281,24 @@ export async function loadObjectCatalogInfo(
         catalog_size: r.catalog_size == null ? null : String(r.catalog_size),
         country: r.country == null ? null : String(r.country),
         country_code: r.country_code == null ? null : String(r.country_code),
-        launch_date: r.launch_date == null ? null : String(r.launch_date),
+        launch_date: toDateOnly(r.launch_date),
         object_type: null,
         regime: null
       })
     }
     const [gp] = await pool.query<
-      Array<RowDataPacket & { norad_id: number; object_type: string | null; regime: string | null }>
+      Array<
+        RowDataPacket & {
+          norad_id: number
+          object_type: string | null
+          regime: string | null
+          owner_code: string | null
+          launch_date: string | null
+        }
+      >
     >(
-      `SELECT norad_id, MAX(object_type) AS object_type, MAX(regime) AS regime
+      `SELECT norad_id, MAX(object_type) AS object_type, MAX(regime) AS regime,
+              MAX(owner_code) AS owner_code, MAX(launch_date) AS launch_date
          FROM sat_tle WHERE norad_id IN (?) GROUP BY norad_id`,
       [uniq]
     )
@@ -296,6 +315,9 @@ export async function loadObjectCatalogInfo(
       }
       cur.object_type = r.object_type == null ? null : String(r.object_type)
       cur.regime = r.regime == null ? null : String(r.regime)
+      // 档案缺失时用 GP 快照兜底：国别代码与发射日期（如新发射目标尚无编目档案）
+      if (!cur.country_code && r.owner_code) cur.country_code = String(r.owner_code)
+      if (!cur.launch_date && r.launch_date) cur.launch_date = toDateOnly(r.launch_date)
       out.set(n, cur)
     }
   } catch (e) {
