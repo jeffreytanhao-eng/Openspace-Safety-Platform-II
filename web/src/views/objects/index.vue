@@ -297,6 +297,12 @@ function jumpDiscPage() {
   void gotoDiscPage(n)
 }
 
+/** 业主认领模式：编目发现点选目标后带入 NORAD 并预览，不走批量关注 */
+function pickDiscTarget(norad: number) {
+  claimNorad.value = String(norad)
+  void doLookup()
+}
+
 function toggleDisc(norad: number) {
   const i = discPicked.value.indexOf(norad)
   if (i >= 0) discPicked.value.splice(i, 1)
@@ -1445,7 +1451,7 @@ function lvLabel(v?: string | null): string {
 
         <!-- R2-2：通用编目发现 + 批量认领（任意名称 / NORAD / 星座标签批次） -->
         <div class="block disc-block">
-          <div class="bt">{{ t('obj.discover') }}</div>
+          <div class="bt">{{ claimType === 'owner' ? t('obj.discoverOwner') : t('obj.discover') }}</div>
           <div class="claim-row">
             <input v-model="discQ" type="search" :placeholder="t('obj.discSearch')" @keyup.enter="searchCatalog(1)" />
             <button type="button" class="btn" :disabled="discLoading" @click="searchCatalog(1)">
@@ -1453,7 +1459,7 @@ function lvLabel(v?: string | null): string {
             </button>
           </div>
           <div v-if="discMsg" class="hint">{{ discMsg }}</div>
-          <div v-if="discRows.length" class="disc-head">
+          <div v-if="discRows.length && claimType !== 'owner'" class="disc-head">
             <label class="disc-all">
               <input type="checkbox" :checked="discPageAllPicked" @change="toggleDiscAll" />
               {{ t('obj.discAll') }}
@@ -1466,10 +1472,20 @@ function lvLabel(v?: string | null): string {
             <li
               v-for="r in discRows"
               :key="r.norad_id"
-              :class="{ on: discPicked.includes(r.norad_id) }"
-              @click="toggleDisc(r.norad_id)"
+              :class="{
+                on:
+                  claimType === 'owner'
+                    ? preview?.sat.norad_id === r.norad_id
+                    : discPicked.includes(r.norad_id)
+              }"
+              @click="claimType === 'owner' ? pickDiscTarget(r.norad_id) : toggleDisc(r.norad_id)"
             >
-              <input type="checkbox" :checked="discPicked.includes(r.norad_id)" @click.stop="toggleDisc(r.norad_id)" />
+              <input
+                v-if="claimType !== 'owner'"
+                type="checkbox"
+                :checked="discPicked.includes(r.norad_id)"
+                @click.stop="toggleDisc(r.norad_id)"
+              />
               <span class="disc-name">{{ r.object_name }}</span>
               <span class="mono dim">{{ r.norad_id }}</span>
               <span class="dim">{{ r.regime || r.object_type || '' }}</span>
