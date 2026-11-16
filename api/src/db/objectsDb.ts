@@ -364,6 +364,7 @@ export async function upgradeNormalToOwner(
 export interface OwnerClaimReviewRow {
   id: number
   norad_id: number
+  name: string
   claim_status: ClaimStatus
   created_at: string
   review_note: string | null
@@ -382,7 +383,7 @@ export async function listOwnerClaims(
   const where = status === 'all' ? '' : 'AND o.claim_status = ?'
   const args = status === 'all' ? [] : [status]
   const [rows] = await pool.query<RowDataPacket[]>(
-    `SELECT o.id, o.norad_id, o.claim_status, o.created_at, o.review_note,
+    `SELECT o.id, o.norad_id, o.name, o.claim_status, o.created_at, o.review_note,
             o.org_id, COALESCE(g.name, '') AS org_name,
             o.requested_by_user_id AS user_id, COALESCE(u.email, '') AS user_email,
             o.reviewed_by, o.reviewed_at

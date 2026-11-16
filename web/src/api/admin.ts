@@ -40,6 +40,7 @@ export type ObjectClaimStatus = 'pending' | 'claimed' | 'rejected'
 export interface AdminObjectClaim {
   id: number
   norad_id: number
+  name: string
   claim_status: ObjectClaimStatus
   created_at: string
   review_note: string | null

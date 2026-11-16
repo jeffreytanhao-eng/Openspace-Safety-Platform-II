@@ -6,6 +6,7 @@ import {
   adminListObjectClaims,
   adminApproveObjectClaim,
   adminRejectObjectClaim,
+  adminReleaseOwner,
   type AdminObjectClaim,
   type ObjectClaimStatus
 } from '@/api/admin'
@@ -60,6 +61,28 @@ async function reject(row: AdminObjectClaim) {
     await adminRejectObjectClaim(row.id, reason)
     msg.value = `NORAD ${row.norad_id} 认领已驳回`
     note.value = ''
+    await load()
+  } catch (e) {
+    error.value = e instanceof AuthError ? e.message : String((e as Error).message || e)
+  } finally {
+    acting.value = 0
+  }
+}
+
+async function revoke(row: AdminObjectClaim) {
+  const name = row.name ? `${row.name}（NORAD ${row.norad_id}）` : `NORAD ${row.norad_id}`
+  if (
+    !window.confirm(
+      `撤销 ${row.org_name || `#${row.org_id}`} 对 ${name} 的业主认领？\n撤销后该目标恢复为无业主状态，已绑定的星历会解除绑定，档案参数一并删除，操作不可恢复。`
+    )
+  )
+    return
+  acting.value = row.id
+  error.value = ''
+  msg.value = ''
+  try {
+    await adminReleaseOwner(row.norad_id)
+    msg.value = `NORAD ${row.norad_id} 业主认领已撤销`
     await load()
   } catch (e) {
     error.value = e instanceof AuthError ? e.message : String((e as Error).message || e)
@@ -150,6 +173,15 @@ onMounted(load)
                 <button type="button" class="btn small primary" :disabled="acting === row.id" @click="approve(row)">通过</button>
                 <button type="button" class="btn small danger" :disabled="acting === row.id" @click="reject(row)">驳回</button>
               </template>
+              <button
+                v-else-if="row.claim_status === 'claimed'"
+                type="button"
+                class="btn small danger"
+                :disabled="acting === row.id"
+                @click="revoke(row)"
+              >
+                {{ acting === row.id ? '撤销中…' : '撤销认领' }}
+              </button>
               <span v-else class="mono dim">—</span>
             </td>
           </tr>
