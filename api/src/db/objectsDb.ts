@@ -229,10 +229,13 @@ export async function getObjectOrgName(orgId: number): Promise<string> {
   return String(rows[0]?.name ?? '')
 }
 
-/** 列表补充信息：公开编目档案（质量/尺寸）+ GP 类型/轨道；缺失时返回 null 字段 */
+/** 列表补充信息：公开编目档案（质量/尺寸/国家/发射日期）+ GP 类型/轨道；缺失时返回 null 字段 */
 export interface ObjectCatalogInfo {
   mass_kg: number | null
   catalog_size: string | null
+  country: string | null
+  country_code: string | null
+  launch_date: string | null
   object_type: string | null
   regime: string | null
 }
@@ -246,9 +249,19 @@ export async function loadObjectCatalogInfo(
   if (!uniq.length) return out
   try {
     const [prof] = await pool.query<
-      Array<RowDataPacket & { norad_id: number; mass_kg: number | null; catalog_size: string | null }>
+      Array<
+        RowDataPacket & {
+          norad_id: number
+          mass_kg: number | null
+          catalog_size: string | null
+          country: string | null
+          country_code: string | null
+          launch_date: string | null
+        }
+      >
     >(
-      `SELECT norad_id, MAX(catalog_mass_kg) AS mass_kg, MAX(catalog_size) AS catalog_size
+      `SELECT norad_id, MAX(catalog_mass_kg) AS mass_kg, MAX(catalog_size) AS catalog_size,
+              MAX(country) AS country, MAX(country_code) AS country_code, MAX(launch_date) AS launch_date
          FROM sat_catalog_profile WHERE norad_id IN (?) GROUP BY norad_id`,
       [uniq]
     )
@@ -256,6 +269,9 @@ export async function loadObjectCatalogInfo(
       out.set(Number(r.norad_id), {
         mass_kg: r.mass_kg == null ? null : Number(r.mass_kg),
         catalog_size: r.catalog_size == null ? null : String(r.catalog_size),
+        country: r.country == null ? null : String(r.country),
+        country_code: r.country_code == null ? null : String(r.country_code),
+        launch_date: r.launch_date == null ? null : String(r.launch_date),
         object_type: null,
         regime: null
       })
@@ -272,6 +288,9 @@ export async function loadObjectCatalogInfo(
       const cur = out.get(n) ?? {
         mass_kg: null,
         catalog_size: null,
+        country: null,
+        country_code: null,
+        launch_date: null,
         object_type: null,
         regime: null
       }

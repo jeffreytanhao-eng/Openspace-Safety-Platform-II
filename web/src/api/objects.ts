@@ -62,6 +62,9 @@ export interface ManagedObject {
   catalog?: {
     mass_kg: number | null
     catalog_size: string | null
+    country: string | null
+    country_code: string | null
+    launch_date: string | null
     object_type: string | null
     regime: string | null
   } | null

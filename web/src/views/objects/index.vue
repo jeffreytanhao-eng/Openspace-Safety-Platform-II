@@ -125,6 +125,16 @@ function rowTypeOrbit(o: ManagedObject): string {
   return parts.length ? parts.join(' · ') : '—'
 }
 
+/** 国家列：编目国家代码优先本地化，回退英文国名 */
+function rowCountry(o: ManagedObject): string {
+  const code = catalogCountryCode(o.catalog?.country_code, o.catalog?.country)
+  if (code) {
+    const translated = translateOr(`obj.cc.${code}`, '')
+    if (translated) return translated
+  }
+  return o.catalog?.country?.trim() || '—'
+}
+
 function objectLabel(o: { name: string; alias?: string | null; norad_id: number }): string {
   return displayName(o.alias, o.name, o.norad_id)
 }
@@ -1309,8 +1319,8 @@ function lvLabel(v?: string | null): string {
             <th>{{ t('obj.col.mass') }}</th>
             <th>{{ t('obj.col.cs') }}</th>
             <th>{{ t('obj.col.prop') }}</th>
-            <th>{{ t('obj.col.pc') }}</th>
-            <th>{{ t('obj.col.miss') }}</th>
+            <th>{{ t('obj.col.country') }}</th>
+            <th>{{ t('obj.col.launch') }}</th>
             <th>{{ t('obj.col.bound') }}</th>
             <th>{{ t('obj.col.updated') }}</th>
           </tr>
@@ -1381,12 +1391,8 @@ function lvLabel(v?: string | null): string {
             </td>
             <td class="dim" :title="t('obj.catalogRef')">{{ rowSize(o) }}</td>
             <td class="dim">{{ rowTypeOrbit(o) }}</td>
-            <td class="mono" :class="{ dim: o.accepted_pc == null }" :title="o.accepted_pc == null ? t('obj.defaultThreshold') : ''">
-              {{ fmtPc(o.accepted_pc ?? 1e-4) }}
-            </td>
-            <td class="mono" :class="{ dim: o.accepted_miss_km == null }" :title="o.accepted_miss_km == null ? t('obj.defaultThreshold') : ''">
-              {{ fmtNum(o.accepted_miss_km ?? 1) }}
-            </td>
+            <td>{{ rowCountry(o) }}</td>
+            <td class="mono dim">{{ fmtDateOnly(o.catalog?.launch_date) }}</td>
             <td><span class="pill" :class="o.bound_ephemerides ? 'fresh' : 'missing'">{{ o.bound_ephemerides ?? 0 }}</span></td>
             <td class="dim">{{ fmtTime(o.updated_at) }}</td>
           </tr>
