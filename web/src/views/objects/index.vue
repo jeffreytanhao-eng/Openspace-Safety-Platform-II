@@ -95,6 +95,36 @@ function fmtTime(s: string): string {
   return s ? s.slice(0, 16).replace('T', ' ') : '—'
 }
 
+/** 质量列：业主档案优先，缺失时回退公开编目并标注来源 */
+function rowMass(o: ManagedObject): { text: string; fromCatalog: boolean } {
+  if (o.mass_kg != null) return { text: fmtNum(o.mass_kg), fromCatalog: false }
+  if (o.catalog?.mass_kg != null) return { text: `${fmtNum(o.catalog.mass_kg)}*`, fromCatalog: true }
+  return { text: '—', fromCatalog: false }
+}
+
+/** 尺寸列：公开编目外形尺寸优先，其次档案截面积 */
+function rowSize(o: ManagedObject): string {
+  const sz = o.catalog?.catalog_size
+  if (sz) return catalogSizeFallback(sz, isZh.value) || sz
+  if (o.cross_section_m2 != null) return `${fmtNum(o.cross_section_m2)} m²`
+  return '—'
+}
+
+function fmtObjectType(v: string | null | undefined): string {
+  const k = (v || '').toUpperCase()
+  if (k === 'PAYLOAD') return t('obj.otype.payload')
+  if (k === 'DEBRIS') return t('obj.otype.debris')
+  if (k === 'ROCKET BODY') return t('obj.otype.rocket')
+  if (k === 'UNKNOWN') return t('obj.otype.unknown')
+  return v || ''
+}
+
+/** 类型/轨道列：GP 的 object_type + regime，无数据时显示 — */
+function rowTypeOrbit(o: ManagedObject): string {
+  const parts = [fmtObjectType(o.catalog?.object_type), o.catalog?.regime].filter(Boolean)
+  return parts.length ? parts.join(' · ') : '—'
+}
+
 function objectLabel(o: { name: string; alias?: string | null; norad_id: number }): string {
   return displayName(o.alias, o.name, o.norad_id)
 }
@@ -1344,11 +1374,19 @@ function lvLabel(v?: string | null): string {
                 {{ o.claim_type === 'owner' ? t('obj.claimTypeOwner') : t('obj.claimTypeNormal') }}
               </span>
             </td>
-            <td class="mono">{{ fmtNum(o.mass_kg) }}</td>
-            <td class="mono">{{ fmtNum(o.cross_section_m2) }}</td>
-            <td>{{ o.propulsion || '—' }}</td>
-            <td class="mono">{{ fmtPc(o.accepted_pc) }}</td>
-            <td class="mono">{{ fmtNum(o.accepted_miss_km) }}</td>
+            <td class="mono">
+              <span :class="{ dim: rowMass(o).fromCatalog }" :title="rowMass(o).fromCatalog ? t('obj.catalogRef') : ''">
+                {{ rowMass(o).text }}
+              </span>
+            </td>
+            <td class="dim" :title="t('obj.catalogRef')">{{ rowSize(o) }}</td>
+            <td class="dim">{{ rowTypeOrbit(o) }}</td>
+            <td class="mono" :class="{ dim: o.accepted_pc == null }" :title="o.accepted_pc == null ? t('obj.defaultThreshold') : ''">
+              {{ fmtPc(o.accepted_pc ?? 1e-4) }}
+            </td>
+            <td class="mono" :class="{ dim: o.accepted_miss_km == null }" :title="o.accepted_miss_km == null ? t('obj.defaultThreshold') : ''">
+              {{ fmtNum(o.accepted_miss_km ?? 1) }}
+            </td>
             <td><span class="pill" :class="o.bound_ephemerides ? 'fresh' : 'missing'">{{ o.bound_ephemerides ?? 0 }}</span></td>
             <td class="dim">{{ fmtTime(o.updated_at) }}</td>
           </tr>

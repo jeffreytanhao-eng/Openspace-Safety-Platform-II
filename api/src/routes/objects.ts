@@ -25,6 +25,7 @@ import {
   updateObjectAlias,
   deleteObject,
   countBoundEphem,
+  loadObjectCatalogInfo,
   checkClaimScope,
   normalizeAlias,
   findAliasConflict,
@@ -353,14 +354,32 @@ router.get('/objects', async (req: ScopedRequest, res) => {
     }
     const all = await listAllObjects()
     const bound = await countBoundEphem(all.map((o) => o.id))
-    res.json(ok(all.map((o) => ({ ...o, bound_ephemerides: bound.get(o.id) ?? 0 }))))
+    const info = await loadObjectCatalogInfo(all.map((o) => o.norad_id))
+    res.json(
+      ok(
+        all.map((o) => ({
+          ...o,
+          bound_ephemerides: bound.get(o.id) ?? 0,
+          catalog: info.get(o.norad_id) ?? null
+        }))
+      )
+    )
     return
   }
   const orgId = Number(req.auth.user.orgId)
   // 待审核业主申请也返回本组织列表，便于用户看到「待审核」状态（不影响日更/其它只取 claimed 的场景）
   const list = await listObjectsByOrg(orgId, { includePending: true })
   const bound = await countBoundEphem(list.map((o) => o.id))
-  res.json(ok(list.map((o) => ({ ...o, bound_ephemerides: bound.get(o.id) ?? 0 }))))
+  const info = await loadObjectCatalogInfo(list.map((o) => o.norad_id))
+  res.json(
+    ok(
+      list.map((o) => ({
+        ...o,
+        bound_ephemerides: bound.get(o.id) ?? 0,
+        catalog: info.get(o.norad_id) ?? null
+      }))
+    )
+  )
 })
 
 /**

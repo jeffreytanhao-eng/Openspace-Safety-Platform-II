@@ -58,6 +58,13 @@ export interface ManagedObject {
   updated_at: string
   /** 绑定的星历数（列表接口附带） */
   bound_ephemerides?: number
+  /** 公开编目基线（只读参考，列表接口附带；不写回档案） */
+  catalog?: {
+    mass_kg: number | null
+    catalog_size: string | null
+    object_type: string | null
+    regime: string | null
+  } | null
   /** 所属组织名（平台账号全平台只读列表附带） */
   org_name?: string
 }

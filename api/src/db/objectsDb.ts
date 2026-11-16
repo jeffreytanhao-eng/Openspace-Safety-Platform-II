@@ -229,6 +229,62 @@ export async function getObjectOrgName(orgId: number): Promise<string> {
   return String(rows[0]?.name ?? '')
 }
 
+/** 列表补充信息：公开编目档案（质量/尺寸）+ GP 类型/轨道；缺失时返回 null 字段 */
+export interface ObjectCatalogInfo {
+  mass_kg: number | null
+  catalog_size: string | null
+  object_type: string | null
+  regime: string | null
+}
+
+/** 批量取 NORAD 的编目基线，供列表展示只读参考（不写回档案） */
+export async function loadObjectCatalogInfo(
+  norads: number[]
+): Promise<Map<number, ObjectCatalogInfo>> {
+  const out = new Map<number, ObjectCatalogInfo>()
+  const uniq = [...new Set(norads.filter((n) => Number.isFinite(n)))]
+  if (!uniq.length) return out
+  try {
+    const [prof] = await pool.query<
+      Array<RowDataPacket & { norad_id: number; mass_kg: number | null; catalog_size: string | null }>
+    >(
+      `SELECT norad_id, MAX(catalog_mass_kg) AS mass_kg, MAX(catalog_size) AS catalog_size
+         FROM sat_catalog_profile WHERE norad_id IN (?) GROUP BY norad_id`,
+      [uniq]
+    )
+    for (const r of prof) {
+      out.set(Number(r.norad_id), {
+        mass_kg: r.mass_kg == null ? null : Number(r.mass_kg),
+        catalog_size: r.catalog_size == null ? null : String(r.catalog_size),
+        object_type: null,
+        regime: null
+      })
+    }
+    const [gp] = await pool.query<
+      Array<RowDataPacket & { norad_id: number; object_type: string | null; regime: string | null }>
+    >(
+      `SELECT norad_id, MAX(object_type) AS object_type, MAX(regime) AS regime
+         FROM sat_tle WHERE norad_id IN (?) GROUP BY norad_id`,
+      [uniq]
+    )
+    for (const r of gp) {
+      const n = Number(r.norad_id)
+      const cur = out.get(n) ?? {
+        mass_kg: null,
+        catalog_size: null,
+        object_type: null,
+        regime: null
+      }
+      cur.object_type = r.object_type == null ? null : String(r.object_type)
+      cur.regime = r.regime == null ? null : String(r.regime)
+      out.set(n, cur)
+    }
+  } catch (e) {
+    console.error('[objects] catalog enrich failed:', (e as Error).message)
+  }
+  return out
+}
+
 export async function getObjectById(id: number): Promise<ObjectRow | null> {
   const [rows] = await pool.query<RawObject[]>(`SELECT ${COLS} FROM objects WHERE id = ?`, [id])
   return (rows[0] as ObjectRow) ?? null
