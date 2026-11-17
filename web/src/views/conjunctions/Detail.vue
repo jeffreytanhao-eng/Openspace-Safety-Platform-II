@@ -938,6 +938,7 @@ async function doExport(kind: 'md' | 'html' | 'csv'): Promise<void> {
               <label class="radio"><input v-model="caForm.hbrMode" type="radio" value="single" :disabled="rcParamsSource !== 'default'" /> {{ t('ca.single') }}</label>
               <label class="radio"><input v-model="caForm.hbrMode" type="radio" value="both" :disabled="rcParamsSource !== 'default'" /> {{ t('ca.both') }}</label>
             </span>
+            <span class="cf-hint">{{ t('ca.hbrRecomputeOnly') }}</span>
           </label>
           <label class="cf field">
             <span class="lbl">{{ caForm.hbrMode === 'both' ? `${t('ca.f.hbr')} (A / B)` : t('ca.f.hbr') }}</span>
@@ -952,6 +953,7 @@ async function doExport(kind: 'md' | 'html' | 'csv'): Promise<void> {
           <label class="cf field">
             <span class="lbl">{{ t('ca.f.acceptedPc') }}</span>
             <span class="row"><OspNumberInput v-model="caForm.acceptedPc" min="1e-9" max="1" step="1e-5" :disabled="rcParamsSource !== 'default'" /></span>
+            <span class="cf-hint">{{ t('ca.acceptHint') }}</span>
           </label>
           <label class="cf field">
             <span class="lbl">{{ t('ca.f.acceptedMiss') }}</span>
@@ -966,7 +968,7 @@ async function doExport(kind: 'md' | 'html' | 'csv'): Promise<void> {
             <span class="row">
               <select v-model="caForm.covarianceMode">
                 <option value="tle-age">{{ t('ca.covTleAge') }}</option>
-                <option value="cdm">CDM</option>
+                <option value="cdm" disabled>{{ t('ca.covCdm') }}</option>
               </select>
             </span>
           </label>
@@ -975,7 +977,7 @@ async function doExport(kind: 'md' | 'html' | 'csv'): Promise<void> {
             <span class="row">
               <select v-model="caForm.propagator">
                 <option value="sgp4">SGP4</option>
-                <option value="numeric">{{ t('ca.propNumeric') }}</option>
+                <option value="numeric" disabled>{{ t('ca.propNumeric') }}</option>
               </select>
             </span>
           </label>
@@ -985,6 +987,7 @@ async function doExport(kind: 'md' | 'html' | 'csv'): Promise<void> {
               <OspNumberInput v-model="caForm.windowH" min="1" max="168" step="1" /> h /
               <OspNumberInput v-model="caForm.stepS" min="1" max="3600" step="1" /> s
             </span>
+            <span class="cf-hint">{{ t('ca.stepRecordOnly') }}</span>
           </label>
           <div class="cf field">
             <span class="lbl">{{ t('ca.f.methods') }}</span>

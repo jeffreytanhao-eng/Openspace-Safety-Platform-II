@@ -726,6 +726,7 @@ function lvOf(l: string): string {
                 <td class="edit-col">
                   <label class="radio"><input v-model="form.hbr_mode" type="radio" value="single" :disabled="!canEdit" @change="onEdit" /> {{ t('ca.single') }}</label>
                   <label class="radio"><input v-model="form.hbr_mode" type="radio" value="both" :disabled="!canEdit" @change="onEdit" /> {{ t('ca.both') }}</label>
+                  <div class="why">{{ t('ca.hbrRecomputeOnly') }}</div>
                 </td>
               </tr>
               <!-- HBR 值 -->
@@ -757,6 +758,7 @@ function lvOf(l: string): string {
                 </td>
                 <td class="edit-col">
                   <OspNumberInput v-model="form.accepted_pc" min="1e-9" max="1" step="1e-5" :disabled="!canEdit" @input="onEdit" />
+                  <div class="why">{{ t('ca.acceptHint') }}</div>
                 </td>
               </tr>
               <!-- 接受最小脱靶 -->
@@ -786,7 +788,7 @@ function lvOf(l: string): string {
               <!-- 协方差模式 -->
               <tr>
                 <td>{{ t('ca.f.covMode') }}</td>
-                <td class="mono">{{ saved ? (saved.covariance_mode === 'cdm' ? 'CDM' : t('ca.covTleAge')) : t('ca.notSet') }}</td>
+                <td class="mono">{{ saved ? (saved.covariance_mode === 'cdm' ? t('ca.covCdm') : t('ca.covTleAge')) : t('ca.notSet') }}</td>
                 <td>
                   <div class="sug">{{ t('ca.covTleAge') }}</div>
                   <div class="why">{{ sugReason('covariance_mode') }}</div>
@@ -794,7 +796,7 @@ function lvOf(l: string): string {
                 <td class="edit-col">
                   <select v-model="form.covariance_mode" :disabled="!canEdit" @change="onEdit">
                     <option value="tle-age">{{ t('ca.covTleAge') }}</option>
-                    <option value="cdm">CDM</option>
+                    <option value="cdm" disabled>{{ t('ca.covCdm') }}</option>
                   </select>
                 </td>
               </tr>
@@ -809,7 +811,7 @@ function lvOf(l: string): string {
                 <td class="edit-col">
                   <select v-model="form.propagator" :disabled="!canEdit" @change="onEdit">
                     <option value="sgp4">SGP4</option>
-                    <option value="numeric">{{ t('ca.propNumeric') }}</option>
+                    <option value="numeric" disabled>{{ t('ca.propNumeric') }}</option>
                   </select>
                 </td>
               </tr>
@@ -824,6 +826,7 @@ function lvOf(l: string): string {
                 <td class="edit-col">
                   <OspNumberInput v-model="form.window_h" min="1" max="168" step="1" :disabled="!canEdit" @input="onEdit" /> h /
                   <OspNumberInput v-model="form.step_s" min="1" max="3600" step="1" :disabled="!canEdit" @input="onEdit" /> s
+                  <div class="why">{{ t('ca.stepRecordOnly') }}</div>
                 </td>
               </tr>
               <!-- Pc 方法勾选 -->
@@ -894,6 +897,7 @@ function lvOf(l: string): string {
               <span>
                 <label class="radio"><input v-model="slotForm.hbr_mode" type="radio" value="single" /> {{ t('ca.single') }}</label>
                 <label class="radio"><input v-model="slotForm.hbr_mode" type="radio" value="both" /> {{ t('ca.both') }}</label>
+                <span class="why">{{ t('ca.hbrRecomputeOnly') }}</span>
               </span>
             </label>
             <label class="slot-row">
@@ -922,14 +926,14 @@ function lvOf(l: string): string {
               <span>{{ t('ca.f.covMode') }}</span>
               <select v-model="slotForm.covariance_mode">
                 <option value="tle-age">{{ t('ca.covTleAge') }}</option>
-                <option value="cdm">CDM</option>
+                <option value="cdm" disabled>{{ t('ca.covCdm') }}</option>
               </select>
             </label>
             <label class="slot-row">
               <span>{{ t('ca.f.propagator') }}</span>
               <select v-model="slotForm.propagator">
                 <option value="sgp4">SGP4</option>
-                <option value="numeric">{{ t('ca.propNumeric') }}</option>
+                <option value="numeric" disabled>{{ t('ca.propNumeric') }}</option>
               </select>
             </label>
             <label class="slot-row">
@@ -937,6 +941,7 @@ function lvOf(l: string): string {
               <span>
                 <OspNumberInput v-model="slotForm.window_h" min="1" max="168" step="1" /> h /
                 <OspNumberInput v-model="slotForm.step_s" min="1" max="3600" step="1" /> s
+                <span class="why">{{ t('ca.stepRecordOnly') }}</span>
               </span>
             </label>
             <label class="slot-row">

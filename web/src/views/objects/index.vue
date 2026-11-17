@@ -1761,25 +1761,26 @@ function lvLabel(v?: string | null): string {
                   <label class="radio"><input v-model="caForm.hbrMode" type="radio" value="single" :disabled="!ownerEditable" /> {{ t('ca.single') }}</label>
                   <label class="radio"><input v-model="caForm.hbrMode" type="radio" value="both" :disabled="!ownerEditable" /> {{ t('ca.both') }}</label>
                 </span>
+                <span class="type-hint">{{ t('ca.hbrRecomputeOnly') }}</span>
               </label>
               <label v-if="caForm.hbrMode === 'single'"><span>{{ t('ca.f.hbr') }} (m)</span><OspNumberInput v-model="caForm.hbrM" min="1" max="1000" step="1" :disabled="!ownerEditable" /></label>
               <template v-else>
                 <label><span>HBR A (m)</span><OspNumberInput v-model="caForm.hbrAM" min="0.1" max="1000" step="0.1" :disabled="!ownerEditable" /></label>
                 <label><span>HBR B (m)</span><OspNumberInput v-model="caForm.hbrBM" min="0.1" max="1000" step="0.1" :disabled="!ownerEditable" /></label>
               </template>
-              <label><span>{{ t('ca.f.acceptedPc') }}</span><OspNumberInput v-model="caForm.acceptedPc" min="1e-9" max="1" step="1e-5" :disabled="!ownerEditable" /></label>
+              <label><span>{{ t('ca.f.acceptedPc') }}</span><OspNumberInput v-model="caForm.acceptedPc" min="1e-9" max="1" step="1e-5" :disabled="!ownerEditable" /><span class="type-hint">{{ t('ca.acceptHint') }}</span></label>
               <label><span>{{ t('ca.f.acceptedMiss') }} (km)</span><OspNumberInput v-model="caForm.acceptedMissKm" min="0.01" max="100" step="0.1" :disabled="!ownerEditable" /></label>
               <label><span>{{ t('ca.f.screenDist') }} (km)</span><OspNumberInput v-model="caForm.screenDistanceKm" min="0.5" max="100" step="0.5" :disabled="!ownerEditable" /></label>
               <label><span>{{ t('ca.f.covMode') }}</span>
                 <select v-model="caForm.covarianceMode" :disabled="!ownerEditable">
                   <option value="tle-age">{{ t('ca.covTleAge') }}</option>
-                  <option value="cdm">CDM</option>
+                  <option value="cdm" disabled>{{ t('ca.covCdm') }}</option>
                 </select>
               </label>
               <label><span>{{ t('ca.f.propagator') }}</span>
                 <select v-model="caForm.propagator" :disabled="!ownerEditable">
                   <option value="sgp4">SGP4</option>
-                  <option value="numeric">{{ t('ca.propNumeric') }}</option>
+                  <option value="numeric" disabled>{{ t('ca.propNumeric') }}</option>
                 </select>
               </label>
               <label><span>{{ t('ca.f.windowStep') }}</span>
@@ -1787,6 +1788,7 @@ function lvLabel(v?: string | null): string {
                   <OspNumberInput v-model="caForm.windowH" min="1" max="168" step="1" :disabled="!ownerEditable" /> h /
                   <OspNumberInput v-model="caForm.stepS" min="1" max="3600" step="1" :disabled="!ownerEditable" /> s
                 </span>
+                <span class="type-hint">{{ t('ca.stepRecordOnly') }}</span>
               </label>
               <label class="span2">
                 <span>{{ t('ca.f.methods') }}</span>
