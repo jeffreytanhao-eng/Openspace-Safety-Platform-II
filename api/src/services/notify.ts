@@ -18,9 +18,10 @@ export interface DeliveryResult {
   error: string | null
 }
 
-/** webhook 密钥解密（secret_enc 密文 → 明文）；无密钥返回空 */
+/** webhook / 钉钉密钥解密（secret_enc 密文 → 明文）；无密钥返回空 */
 export function channelSecret(ch: NotifyChannel): string {
-  if (ch.kind !== 'webhook' || !ch.secret_enc) return ''
+  if (ch.kind !== 'webhook' && ch.kind !== 'dingtalk') return ''
+  if (!ch.secret_enc) return ''
   try {
     return JSON.parse(decryptSecret(ch.secret_enc)).secret ?? ''
   } catch {
@@ -73,6 +74,48 @@ export async function deliverWebhook(ch: NotifyChannel, kind: string, payload: u
     if (m) lastCode = Number(m[1])
     if (!attempts) attempts = 1
     return { status: 'failed', attempts, statusCode: lastCode, error: lastErr }
+  }
+}
+
+/** 投递钉钉群机器人：text 消息；配置加签密钥时附 timestamp + sign */
+export async function deliverDingTalk(ch: NotifyChannel, kind: string, text: string): Promise<DeliveryResult> {
+  const secret = channelSecret(ch)
+  let url = ch.target
+  if (secret) {
+    const ts = Date.now()
+    const sign = crypto.createHmac('sha256', secret).update(`${ts}\n${secret}`).digest('base64')
+    url += `${url.includes('?') ? '&' : '?'}timestamp=${ts}&sign=${encodeURIComponent(sign)}`
+  }
+  const body = JSON.stringify({ msgtype: 'text', text: { content: text } })
+  let lastCode: number | null = null
+  let attempts = 0
+  try {
+    const res = await fetchWithRetry(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-Osp-Event': kind },
+      body,
+      retries: 2,
+      timeoutMs: 15_000,
+      onAttempt: (n) => { attempts = n }
+    })
+    lastCode = res.status
+    const raw = await res.text().catch(() => '')
+    // 钉钉业务错误以 200 + errcode 返回
+    try {
+      const j = JSON.parse(raw) as { errcode?: number; errmsg?: string }
+      if (typeof j.errcode === 'number' && j.errcode !== 0) {
+        return { status: 'failed', attempts, statusCode: lastCode, error: `errcode=${j.errcode} ${j.errmsg ?? ''}`.trim() }
+      }
+    } catch {
+      /* 非 JSON 响应视为已送达 */
+    }
+    return { status: 'success', attempts, statusCode: lastCode, error: null }
+  } catch (e) {
+    const err = e instanceof Error ? e.message : String(e)
+    const m = /HTTP (\d{3})/.exec(err)
+    if (m) lastCode = Number(m[1])
+    if (!attempts) attempts = 1
+    return { status: 'failed', attempts, statusCode: lastCode, error: err }
   }
 }
 

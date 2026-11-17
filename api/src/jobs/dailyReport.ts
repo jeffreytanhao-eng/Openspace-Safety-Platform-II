@@ -14,6 +14,7 @@ import {
   getPrevReport,
   listChannels,
   listActiveOrgIds,
+  findOrgAdminUserId,
   recordDelivery,
   markChannelOk,
   markChannelError,
@@ -21,12 +22,19 @@ import {
   type DeliveryKind,
   type MinLevel
 } from '../db/notifyDb.js'
-import { getDailyFetchStatus } from '../db/fetchDb.js'
 import { listObjectsByOrg } from '../db/objectsDb.js'
 import { aggregateEvents, type ConjunctionEvent, type EventLevel } from '../routes/events.js'
-import { deliverWebhook, deliverEmail, smtpConfigured } from '../services/notify.js'
+import { deliverWebhook, deliverEmail, deliverDingTalk, smtpConfigured } from '../services/notify.js'
 import { isOrgFlagEnabled } from '../db/planDb.js'
 import { cdmIsolation } from '../services/systemPool.js'
+import {
+  saveUserDocument,
+  ensureUserDocsSchema,
+  DOCS_QUOTA_PERSONAL,
+  DOCS_QUOTA_VIP_ORG,
+  type DocsViewer
+} from '../db/userDocsDb.js'
+import { writeAudit } from '../db/adminDb.js'
 
 export type { EventLevel }
 
@@ -72,7 +80,6 @@ export interface DailyReportPayload {
     to: EventLevel
     change: 'upgrade' | 'downgrade' | 'new' | 'resolved'
   }>
-  data_sources: Record<string, { status: string; last_success: string | null; total: number; inserted: number }>
 }
 
 /** 取组织窗口内 CDM 行（managed=托管 NORAD 相关 + 本组织上传；global=系统池全量） */
@@ -160,27 +167,13 @@ export async function buildDailyReport(orgId: number, date: string, scope: 'mana
   }
   changes.sort((a, b) => LEVEL_RANK[b.to] - LEVEL_RANK[a.to])
 
-  const st = await getDailyFetchStatus()
-  const data_sources: DailyReportPayload['data_sources'] = {}
-  for (const [src, b] of Object.entries(st.last_batch)) {
-    // last_success 运行时可能是 Date（mysql2 DATETIME），统一转 ISO 字符串
-    const ls = st.last_success[src]
-    data_sources[src] = {
-      status: b?.status ?? 'none',
-      last_success: ls ? new Date(ls as unknown as string | Date).toISOString() : null,
-      total: b?.total ?? 0,
-      inserted: b?.inserted ?? 0
-    }
-  }
-
   return {
     date,
     generated_at: new Date().toISOString(),
     scope,
     events: { window: { from: eventWindow().from.toISOString(), to: eventWindow().to.toISOString() }, counts, top },
     levels,
-    level_changes: changes,
-    data_sources
+    level_changes: changes
   }
 }
 
@@ -219,36 +212,105 @@ function prevNames(prev: { payload_json: string } | null, key: string): string {
 
 /* ------------------------------ 投递 ------------------------------ */
 
-function dailyText(p: DailyReportPayload, orgName: string): string {
-  const zhLevel: Record<EventLevel, string> = { red: '红(高危)', orange: '橙(警告)', yellow: '黄(关注)', low: '灰(低)' }
+/* ------------------------------ 内容渲染 ------------------------------ */
+
+export type ContentKey = 'counts' | 'changes' | 'top'
+const CONTENT_KEYS: ContentKey[] = ['counts', 'changes', 'top']
+
+/** 渠道内容勾选（空/非法时回退默认三项） */
+export function contentOf(ch: NotifyChannel): ContentKey[] {
+  const keys = String(ch.content || '')
+    .split(',')
+    .map((s) => s.trim())
+    .filter((s): s is ContentKey => (CONTENT_KEYS as string[]).includes(s))
+  return keys.length ? [...new Set(keys)] : [...CONTENT_KEYS]
+}
+
+const ZH_LEVEL: Record<EventLevel, string> = { red: '红(高危)', orange: '橙(警告)', yellow: '黄(关注)', low: '灰(低)' }
+const ZH_CHANGE: Record<string, string> = { new: '新增高危', upgrade: '升级', downgrade: '降级', resolved: '已消除' }
+
+/** 纯文本（邮件 / 钉钉）：按渠道勾选内容拼接 */
+export function reportText(p: DailyReportPayload, orgName: string, keys: ContentKey[]): string {
   const lines: string[] = []
-  lines.push(`[Openspace Safety] 日报 ${p.date} · ${orgName}`)
+  lines.push(`[Openspace Safety] 通知日报 ${p.date} · ${orgName}`)
   lines.push(`范围：${p.scope === 'managed' ? '目标相关' : '系统池全量'} · 窗口 ${p.events.window.from.slice(0, 16)} ~ ${p.events.window.to.slice(0, 16)} UTC`)
-  lines.push('')
-  lines.push(`事件概览：红 ${p.events.counts.red} · 橙 ${p.events.counts.orange} · 黄 ${p.events.counts.yellow} · 灰 ${p.events.counts.low}`)
-  if (p.level_changes.length) {
-    lines.push(`分级变化：${p.level_changes.length} 项`)
-    for (const c of p.level_changes.slice(0, 10)) {
-      const label = c.change === 'new' ? '新增高危' : c.change === 'upgrade' ? '升级' : c.change === 'downgrade' ? '降级' : '已消除'
-      lines.push(`  - [${label}] ${c.names} ${c.from ? `${c.from}→` : ''}${c.to} · TCA ${c.tca.slice(0, 16)}`)
-    }
-  } else {
-    lines.push('分级变化：无')
-  }
-  if (p.events.top.length) {
+  if (keys.includes('counts')) {
     lines.push('')
-    lines.push('Top 事件：')
-    for (const e of p.events.top.slice(0, 10)) {
-      lines.push(`  - [${zhLevel[e.level]}] ${e.nameA || e.noradA} × ${e.nameB || e.noradB} · TCA ${e.tca.slice(0, 16)} · Pc ${e.pc?.toExponential(2) ?? '—'} · miss ${e.missKm?.toFixed(2) ?? '—'} km`)
+    lines.push(`事件概览：红 ${p.events.counts.red} · 橙 ${p.events.counts.orange} · 黄 ${p.events.counts.yellow} · 灰 ${p.events.counts.low}`)
+  }
+  if (keys.includes('changes')) {
+    if (p.level_changes.length) {
+      lines.push('')
+      lines.push(`分级变化：${p.level_changes.length} 项`)
+      for (const c of p.level_changes.slice(0, 10)) {
+        lines.push(`  - [${ZH_CHANGE[c.change] ?? c.change}] ${c.names} ${c.from ? `${c.from}→` : ''}${c.to} · TCA ${c.tca.slice(0, 16)}`)
+      }
+    } else {
+      lines.push('')
+      lines.push('分级变化：无')
     }
   }
-  lines.push('')
-  lines.push('数据源健康：')
-  for (const [src, s] of Object.entries(p.data_sources)) {
-    lines.push(`  - ${src}: ${s.status} · 上次成功 ${s.last_success ? s.last_success.slice(0, 16) : '—'} · 批次 ${s.total} 条（新 ${s.inserted}）`)
+  if (keys.includes('top')) {
+    if (p.events.top.length) {
+      lines.push('')
+      lines.push('高危事件：')
+      for (const e of p.events.top.slice(0, 10)) {
+        lines.push(`  - [${ZH_LEVEL[e.level]}] ${e.nameA || e.noradA} × ${e.nameB || e.noradB} · TCA ${e.tca.slice(0, 16)} · Pc ${e.pc?.toExponential(2) ?? '—'} · miss ${e.missKm?.toFixed(2) ?? '—'} km`)
+      }
+    } else {
+      lines.push('')
+      lines.push('高危事件：窗口内无黄/橙/红事件')
+    }
   }
   lines.push('')
   lines.push('免责声明：本报告由 Openspace Safety 平台自动生成，作业辅助非认证 CARA，数据可能存在误差，不作为唯一决策依据。')
+  return lines.join('\n')
+}
+
+/** Markdown（存入「我的文档」/ 下载）：包含全部内容项 */
+export function reportMarkdown(p: DailyReportPayload, orgName: string): string {
+  const lines: string[] = []
+  lines.push(`# 通知日报 ${p.date} · ${orgName}`)
+  lines.push('')
+  lines.push(`- 范围：${p.scope === 'managed' ? '目标相关' : '系统池全量'}`)
+  lines.push(`- 窗口：${p.events.window.from.slice(0, 16)} ~ ${p.events.window.to.slice(0, 16)} UTC`)
+  lines.push(`- 生成时间：${p.generated_at.slice(0, 19).replace('T', ' ')} UTC`)
+  lines.push('')
+  lines.push('## 事件概览')
+  lines.push('')
+  lines.push(`| 等级 | 数量 |`)
+  lines.push(`| --- | --- |`)
+  lines.push(`| 红 · 高危 | ${p.events.counts.red} |`)
+  lines.push(`| 橙 · 警告 | ${p.events.counts.orange} |`)
+  lines.push(`| 黄 · 关注 | ${p.events.counts.yellow} |`)
+  lines.push(`| 灰 · 低 | ${p.events.counts.low} |`)
+  lines.push('')
+  lines.push('## 分级变化（对比上一份日报）')
+  lines.push('')
+  if (p.level_changes.length) {
+    lines.push(`| 变化 | 目标 | 等级 | TCA |`)
+    lines.push(`| --- | --- | --- | --- |`)
+    for (const c of p.level_changes.slice(0, 30)) {
+      lines.push(`| ${ZH_CHANGE[c.change] ?? c.change} | ${c.names} | ${c.from ? `${c.from} → ` : ''}${c.to} | ${c.tca.slice(0, 16)} |`)
+    }
+  } else {
+    lines.push('无分级变化。')
+  }
+  lines.push('')
+  lines.push('## 高危事件（窗口 now-1d ~ now+3d）')
+  lines.push('')
+  if (p.events.top.length) {
+    lines.push(`| 等级 | 目标 | TCA | Pc | 脱靶 |`)
+    lines.push(`| --- | --- | --- | --- | --- |`)
+    for (const e of p.events.top) {
+      lines.push(`| ${ZH_LEVEL[e.level]} | ${e.nameA || e.noradA} × ${e.nameB || e.noradB} | ${e.tca.slice(0, 16)} | ${e.pc?.toExponential(2) ?? '—'} | ${e.missKm?.toFixed(2) ?? '—'} km |`)
+    }
+  } else {
+    lines.push('窗口内无黄/橙/红事件。')
+  }
+  lines.push('')
+  lines.push('> 免责声明：本报告由 Openspace Safety 平台自动生成，作业辅助非认证 CARA，数据可能存在误差，不作为唯一决策依据。')
+  lines.push('')
   return lines.join('\n')
 }
 
@@ -274,7 +336,7 @@ async function deliverOne(
   payload: DailyReportPayload
 ): Promise<'success' | 'skipped' | 'failed'> {
   // Epic I 功能开关：webhook_enabled 关闭的组织，Webhook 渠道跳过投递（留审计不算失败）
-  if (ch.kind === 'webhook' && !(await isOrgFlagEnabled(ch.org_id, 'webhook_enabled'))) {
+  if ((ch.kind === 'webhook' || ch.kind === 'dingtalk') && !(await isOrgFlagEnabled(ch.org_id, 'webhook_enabled'))) {
     await recordDelivery({
       org_id: ch.org_id,
       channel_id: ch.id,
@@ -287,14 +349,19 @@ async function deliverOne(
     })
     return 'skipped'
   }
-  const payloadJson = JSON.stringify({ event: kind, org: orgName, report: payload })
+  const payloadJson = JSON.stringify({ event: kind, org: orgName, content: contentOf(ch), report: payload })
   let result
   if (ch.kind === 'webhook') {
-    result = await deliverWebhook(ch, kind, { event: kind, org: orgName, report: payload })
+    result = await deliverWebhook(ch, kind, { event: kind, org: orgName, content: contentOf(ch), report: payload })
   } else {
     const isDaily = kind === 'daily_report'
-    const subject = `[Openspace Safety] ${isDaily ? '日报' : '分级变化提醒'} ${payload.date} · ${orgName}`
-    result = await deliverEmail(ch, subject, dailyText(payload, orgName))
+    const subject = `[Openspace Safety] ${isDaily ? '通知日报' : '分级变化提醒'} ${payload.date} · ${orgName}`
+    // 分级变化通知必须包含变化明细，其余按渠道勾选
+    const keys = kind === 'level_change' ? (['changes'] as ContentKey[]) : contentOf(ch)
+    const text = reportText(payload, orgName, keys)
+    result = ch.kind === 'dingtalk'
+      ? await deliverDingTalk(ch, kind, text)
+      : await deliverEmail(ch, subject, text)
   }
   await recordDelivery({
     org_id: ch.org_id,
@@ -315,8 +382,118 @@ async function deliverOne(
   return result.status === 'skipped' ? 'skipped' : 'failed'
 }
 
+export interface DeliverSummary {
+  delivered: number
+  failed: number
+  skipped: number
+}
+
+/** 把一份已生成的报告投递给本组织启用渠道（手动出报 / 历史重发共用） */
+export async function deliverReport(
+  orgId: number,
+  orgName: string,
+  payload: DailyReportPayload,
+  triggeredBy: string
+): Promise<DeliverSummary> {
+  const channels = (await listChannels(orgId)).filter((c) => c.enabled)
+  let delivered = 0
+  let failed = 0
+  let skipped = 0
+  const detail: Array<{ channel_id: number; kind: string; status: string }> = []
+  for (const ch of channels) {
+    if (subscribed(ch, 'daily_report')) {
+      const st = await deliverOne(ch, orgName, 'daily_report', payload)
+      detail.push({ channel_id: ch.id, kind: 'daily_report', status: st })
+      if (st === 'success') delivered++
+      else if (st === 'skipped') skipped++
+      else failed++
+    }
+    if (payload.level_changes.length && subscribed(ch, 'level_change') && levelGateOk(ch, payload)) {
+      const st = await deliverOne(ch, orgName, 'level_change', payload)
+      detail.push({ channel_id: ch.id, kind: 'level_change', status: st })
+      if (st === 'success') delivered++
+      else if (st === 'skipped') skipped++
+      else failed++
+    }
+  }
+  // 超管日志留痕：本次通知发送结果（含每渠道状态）
+  await writeAudit({
+    actorUserId: null,
+    actorEmail: triggeredBy,
+    orgId,
+    action: 'notify.deliver',
+    after: {
+      summary: `通知投递 ${payload.date}：成功 ${delivered} / 失败 ${failed} / 跳过 ${skipped}`,
+      date: payload.date,
+      delivered,
+      failed,
+      skipped,
+      channels: detail
+    }
+  })
+  return { delivered, failed, skipped }
+}
+
+/** 组织是否 VIP 档（决定归档文档的配额范围） */
+async function orgIsVip(orgId: number): Promise<boolean> {
+  try {
+    const [rows] = await pool.query<import('mysql2/promise').RowDataPacket[]>(
+      `SELECT plan FROM organizations WHERE id = ? LIMIT 1`,
+      [orgId]
+    )
+    return String(rows[0]?.plan ?? '') === 'vip'
+  } catch {
+    return false
+  }
+}
+
+/** 把日报写入「我的文档」（同名同日已存在则跳过，避免重复归档） */
+export async function archiveDailyReport(
+  orgId: number,
+  payload: DailyReportPayload,
+  ownerUserId: number | null,
+  vip: boolean
+): Promise<void> {
+  try {
+    if (!ownerUserId) return
+    if (!(await ensureUserDocsSchema())) return
+    const prefix = `通知日报-${payload.date}`
+    const [dups] = await pool.query<import('mysql2/promise').RowDataPacket[]>(
+      `SELECT id FROM user_documents WHERE owner_user_id = ? AND title LIKE ? LIMIT 1`,
+      [ownerUserId, `${prefix}%`]
+    )
+    if (dups.length) return
+    const viewer: DocsViewer = {
+      userId: ownerUserId,
+      orgId,
+      superAdmin: false,
+      vip,
+      quotaMax: vip ? DOCS_QUOTA_VIP_ORG : DOCS_QUOTA_PERSONAL,
+      quotaScope: vip ? 'org' : 'personal'
+    }
+    const md = reportMarkdown(payload, await orgNameOf(orgId))
+    await saveUserDocument({
+      viewer,
+      buffer: Buffer.from(md, 'utf8'),
+      titleBase: prefix,
+      ext: '.md',
+      mime: 'text/markdown',
+      originalName: `${prefix}.md`,
+      sourceType: 'report'
+    })
+  } catch (e) {
+    // 配额/存储异常不阻断出报与投递
+    console.warn(`[daily-report] org=${orgId} archive to documents skipped:`, (e as Error).message)
+  }
+}
+
 /** 给组织出报并投递（同日重复调用 = 覆盖重投） */
-export async function runDailyReportForOrg(orgId: number, orgName: string, triggeredBy: string): Promise<{
+export async function runDailyReportForOrg(
+  orgId: number,
+  orgName: string,
+  triggeredBy: string,
+  opts?: { archiveUserId?: number; vip?: boolean }
+): Promise<{
   date: string
   scope: 'managed' | 'global'
   upgrades: number
@@ -336,24 +513,12 @@ export async function runDailyReportForOrg(orgId: number, orgName: string, trigg
   const payload = await buildDailyReport(orgId, date, scope)
   await upsertReport(orgId, date, scope, JSON.stringify(payload))
 
-  const channels = (await listChannels(orgId)).filter((c) => c.enabled)
-  let delivered = 0
-  let failed = 0
-  let skipped = 0
-  for (const ch of channels) {
-    if (subscribed(ch, 'daily_report')) {
-      const st = await deliverOne(ch, orgName, 'daily_report', payload)
-      if (st === 'success') delivered++
-      else if (st === 'skipped') skipped++
-      else failed++
-    }
-    if (payload.level_changes.length && subscribed(ch, 'level_change') && levelGateOk(ch, payload)) {
-      const st = await deliverOne(ch, orgName, 'level_change', payload)
-      if (st === 'success') delivered++
-      else if (st === 'skipped') skipped++
-      else failed++
-    }
-  }
+  const { delivered, failed, skipped } = await deliverReport(orgId, orgName, payload, triggeredBy)
+  // 手动出报用当前操作人归档；定时出报归属组织管理员
+  const archiveUserId = opts?.archiveUserId ?? (await findOrgAdminUserId(orgId))
+  const vip = opts?.vip ?? (await orgIsVip(orgId))
+  await archiveDailyReport(orgId, payload, archiveUserId, vip)
+
   console.log(
     `[daily-report] org=${orgId}(${orgName}) date=${date} scope=${scope} ` +
       `red=${payload.events.counts.red} orange=${payload.events.counts.orange} yellow=${payload.events.counts.yellow} ` +

@@ -7,7 +7,7 @@
 import { pool } from './pool.js'
 import type { RowDataPacket } from 'mysql2'
 
-export type ChannelKind = 'webhook' | 'email'
+export type ChannelKind = 'webhook' | 'email' | 'dingtalk'
 export type MinLevel = 'yellow' | 'orange' | 'red'
 export type ChannelStatus = 'success' | 'failed' | 'skipped'
 export type DeliveryKind = 'daily_report' | 'level_change' | 'test'
@@ -19,7 +19,9 @@ export interface NotifyChannel {
   target: string
   min_level: MinLevel
   subscribe: string // 逗号分隔：daily,changes
-  secret_enc: string | null // webhook HMAC 密钥（AES-256-GCM 密文）
+  /** 日报内容勾选（逗号分隔：counts,changes,top） */
+  content: string
+  secret_enc: string | null // webhook / 钉钉加签密钥（AES-256-GCM 密文）
   enabled: boolean
   last_ok_at: string | null
   last_error: string | null
@@ -53,11 +55,12 @@ const SCHEMA = `
 CREATE TABLE IF NOT EXISTS \`notify_channels\` (
   \`id\`          bigint NOT NULL AUTO_INCREMENT,
   \`org_id\`      bigint unsigned NOT NULL,
-  \`kind\`        varchar(10) NOT NULL COMMENT 'webhook | email',
-  \`target\`      varchar(500) NOT NULL COMMENT 'webhook URL 或 收件邮箱',
+  \`kind\`        varchar(10) NOT NULL COMMENT 'webhook | email | dingtalk',
+  \`target\`      varchar(500) NOT NULL COMMENT 'webhook URL / 钉钉机器人 Webhook 或 收件邮箱',
   \`min_level\`   varchar(8) NOT NULL DEFAULT 'yellow' COMMENT '分级变化通知的最低等级（daily 不受此限）',
   \`subscribe\`   varchar(32) NOT NULL DEFAULT 'daily,changes' COMMENT '订阅项：daily 日报 | changes 分级变化',
-  \`secret_enc\`  varchar(512) NULL COMMENT 'webhook HMAC 密钥（AES-256-GCM 密文）',
+  \`content\`     varchar(64) NOT NULL DEFAULT 'counts,changes,top' COMMENT '日报内容项：counts 概览 | changes 分级变化 | top 高危事件',
+  \`secret_enc\`  varchar(512) NULL COMMENT 'webhook / 钉钉加签密钥（AES-256-GCM 密文）',
   \`enabled\`     tinyint(1) NOT NULL DEFAULT 1,
   \`last_ok_at\`  datetime(3) NULL,
   \`last_error\`  text NULL,
@@ -106,6 +109,14 @@ export function ensureNotifySchema(): Promise<boolean> {
       for (const ddl of SCHEMA.split(';').map((s) => s.trim()).filter(Boolean)) {
         await pool.query(ddl)
       }
+      // 老库补 content 列（幂等；重复列忽略）
+      try {
+        await pool.query(
+          "ALTER TABLE `notify_channels` ADD COLUMN `content` varchar(64) NOT NULL DEFAULT 'counts,changes,top' COMMENT '日报内容项：counts 概览 | changes 分级变化 | top 高危事件' AFTER `subscribe`"
+        )
+      } catch (e) {
+        if (!/duplicate column/i.test((e as Error).message)) throw e
+      }
       return true
     })().catch((e) => {
       console.error('[notify] ensure schema failed:', (e as Error).message)
@@ -141,6 +152,7 @@ export interface ChannelPatch {
   target: string
   min_level: MinLevel
   subscribe: string
+  content: string
   /** null = 清除密钥；undefined = 保持不变 */
   secret_enc?: string | null
   enabled: boolean
@@ -148,9 +160,9 @@ export interface ChannelPatch {
 
 export async function createChannel(orgId: number, p: ChannelPatch, createdBy: string): Promise<number> {
   const [r] = await pool.query(
-    `INSERT INTO notify_channels (org_id, kind, target, min_level, subscribe, secret_enc, enabled, created_by)
-     VALUES (?,?,?,?,?,?,?,?)`,
-    [orgId, p.kind, p.target, p.min_level, p.subscribe, p.secret_enc ?? null, p.enabled ? 1 : 0, createdBy]
+    `INSERT INTO notify_channels (org_id, kind, target, min_level, subscribe, content, secret_enc, enabled, created_by)
+     VALUES (?,?,?,?,?,?,?,?,?)`,
+    [orgId, p.kind, p.target, p.min_level, p.subscribe, p.content, p.secret_enc ?? null, p.enabled ? 1 : 0, createdBy]
   )
   return Number((r as { insertId: number }).insertId)
 }
@@ -159,14 +171,14 @@ export async function updateChannel(orgId: number, id: number, p: ChannelPatch):
   // secret_enc 三态：undefined=不更新该列（保持原值），null=清除，字符串=重设
   if (p.secret_enc === undefined) {
     await pool.query(
-      `UPDATE notify_channels SET kind=?, target=?, min_level=?, subscribe=?, enabled=? WHERE org_id=? AND id=?`,
-      [p.kind, p.target, p.min_level, p.subscribe, p.enabled ? 1 : 0, orgId, id]
+      `UPDATE notify_channels SET kind=?, target=?, min_level=?, subscribe=?, content=?, enabled=? WHERE org_id=? AND id=?`,
+      [p.kind, p.target, p.min_level, p.subscribe, p.content, p.enabled ? 1 : 0, orgId, id]
     )
     return
   }
   await pool.query(
-    `UPDATE notify_channels SET kind=?, target=?, min_level=?, subscribe=?, secret_enc=?, enabled=? WHERE org_id=? AND id=?`,
-    [p.kind, p.target, p.min_level, p.subscribe, p.secret_enc, p.enabled ? 1 : 0, orgId, id]
+    `UPDATE notify_channels SET kind=?, target=?, min_level=?, subscribe=?, content=?, secret_enc=?, enabled=? WHERE org_id=? AND id=?`,
+    [p.kind, p.target, p.min_level, p.subscribe, p.content, p.secret_enc, p.enabled ? 1 : 0, orgId, id]
   )
 }
 
@@ -222,6 +234,25 @@ export async function getPrevReport(orgId: number, beforeDate: string): Promise<
     [orgId, beforeDate]
   )
   return rows[0] ?? null
+}
+
+/** 报告历史（最新在前） */
+export async function listReports(orgId: number, limit: number): Promise<DailyReportRow[]> {
+  const [rows] = await pool.query<RawReport[]>(
+    `SELECT * FROM daily_reports WHERE org_id = ? ORDER BY report_date DESC LIMIT ?`,
+    [orgId, Math.min(Math.max(limit, 1), 100)]
+  )
+  return rows
+}
+
+/** 自动出报归档「我的文档」时，取组织内一个启用中的管理员作为归属人 */
+export async function findOrgAdminUserId(orgId: number): Promise<number | null> {
+  const [rows] = await pool.query<RowDataPacket[]>(
+    `SELECT id FROM users WHERE org_id = ? AND role = 'org_admin' AND status = 'active' ORDER BY id ASC LIMIT 1`,
+    [orgId]
+  )
+  const id = Number(rows[0]?.id)
+  return Number.isFinite(id) && id > 0 ? id : null
 }
 
 /** 全部活跃组织（cron 逐组织出报） */

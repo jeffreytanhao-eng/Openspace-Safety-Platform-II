@@ -24,6 +24,7 @@ import {
   updateChannel,
   deleteChannel,
   listDeliveries,
+  listReports,
   getLatestReport,
   getReportByDate,
   recordDelivery,
@@ -33,17 +34,19 @@ import {
   type MinLevel,
   type NotifyChannel
 } from '../db/notifyDb.js'
-import { deliverWebhook, deliverEmail, maskWebhookUrl, channelSecret, smtpConfigured } from '../services/notify.js'
+import { deliverWebhook, deliverEmail, deliverDingTalk, maskWebhookUrl, channelSecret, smtpConfigured } from '../services/notify.js'
 import { encryptSecret } from '../utils/secretBox.js'
-import { runDailyReportForOrg } from '../jobs/dailyReport.js'
+import { runDailyReportForOrg, deliverReport, archiveDailyReport, reportMarkdown, type DailyReportPayload } from '../jobs/dailyReport.js'
 import { isOrgFlagEnabled } from '../db/planDb.js'
+import { writeUserAudit } from '../db/adminDb.js'
 
 const router = Router()
 
 type ScopedRequest = Request & { auth?: AuthContext }
 
 const MIN_LEVELS: MinLevel[] = ['yellow', 'orange', 'red']
-const KINDS: ChannelKind[] = ['webhook', 'email']
+const KINDS: ChannelKind[] = ['webhook', 'email', 'dingtalk']
+const CONTENT_KEYS = ['counts', 'changes', 'top'] as const
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
 
 function isAdmin(auth: AuthContext | undefined): boolean {
@@ -63,10 +66,11 @@ function channelView(ch: NotifyChannel): Record<string, unknown> {
   return {
     id: ch.id,
     kind: ch.kind,
-    target: ch.kind === 'webhook' ? maskWebhookUrl(ch.target) : ch.target,
+    target: ch.kind === 'email' ? ch.target : maskWebhookUrl(ch.target),
     min_level: ch.min_level,
     subscribe: ch.subscribe,
-    has_secret: ch.kind === 'webhook' ? Boolean(ch.secret_enc) : false,
+    content: ch.content || 'counts,changes,top',
+    has_secret: ch.kind === 'email' ? false : Boolean(ch.secret_enc),
     enabled: Boolean(ch.enabled),
     last_ok_at: ch.last_ok_at,
     last_error: ch.last_error,
@@ -76,17 +80,27 @@ function channelView(ch: NotifyChannel): Record<string, unknown> {
 }
 
 /** 校验并归一渠道入参；返回错误信息或 null。secret 三态：undefined=未提供（编辑时保持），''=清除，字符串=设置 */
-function validateBody(body: Record<string, unknown>): { error: string } | { kind: ChannelKind; target: string; min_level: MinLevel; subscribe: string; enabled: boolean; secret: string | undefined } {
+function validateBody(body: Record<string, unknown>): {
+  error: string
+} | {
+  kind: ChannelKind
+  target: string
+  min_level: MinLevel
+  subscribe: string
+  content: string
+  enabled: boolean
+  secret: string | undefined
+} {
   const kind = String(body.kind ?? '')
-  if (!KINDS.includes(kind as ChannelKind)) return { error: 'kind 必须为 webhook 或 email' }
+  if (!KINDS.includes(kind as ChannelKind)) return { error: 'kind 必须为 webhook、email 或 dingtalk' }
   const target = String(body.target ?? '').trim()
   if (!target || target.length > 500) return { error: 'target 不能为空且不超过 500 字' }
-  if (kind === 'webhook') {
+  if (kind === 'webhook' || kind === 'dingtalk') {
     try {
       const u = new URL(target)
-      if (u.protocol !== 'http:' && u.protocol !== 'https:') return { error: 'webhook URL 仅支持 http/https' }
+      if (u.protocol !== 'http:' && u.protocol !== 'https:') return { error: 'Webhook URL 仅支持 http/https' }
     } catch {
-      return { error: 'webhook URL 格式无效' }
+      return { error: 'Webhook URL 格式无效' }
     }
   } else if (!EMAIL_RE.test(target) || target.length > 200) {
     return { error: '邮箱格式不正确' }
@@ -96,12 +110,22 @@ function validateBody(body: Record<string, unknown>): { error: string } | { kind
   const rawSubs = Array.isArray(body.subscribe) ? body.subscribe.map((s) => String(s)) : String(body.subscribe ?? 'daily,changes').split(',')
   const subs = [...new Set(rawSubs.map((s) => s.trim()).filter((s) => s === 'daily' || s === 'changes'))]
   if (!subs.length) return { error: '至少订阅一项（daily / changes）' }
+  const rawContent = Array.isArray(body.content) ? body.content.map((s) => String(s)) : String(body.content ?? '').split(',')
+  const content = [...new Set(rawContent.map((s) => s.trim()).filter((s): s is (typeof CONTENT_KEYS)[number] => (CONTENT_KEYS as readonly string[]).includes(s)))]
   let secret: string | undefined = undefined
-  if (kind === 'webhook' && body.secret !== undefined && body.secret !== null) {
+  if (kind !== 'email' && body.secret !== undefined && body.secret !== null) {
     secret = String(body.secret).trim()
     if (secret && secret.length > 200) return { error: '签名密钥不超过 200 字' }
   }
-  return { kind: kind as ChannelKind, target, min_level: min_level as MinLevel, subscribe: subs.join(','), enabled: body.enabled === undefined ? true : Boolean(body.enabled), secret }
+  return {
+    kind: kind as ChannelKind,
+    target,
+    min_level: min_level as MinLevel,
+    subscribe: subs.join(','),
+    content: (content.length ? content : [...CONTENT_KEYS]).join(','),
+    enabled: body.enabled === undefined ? true : Boolean(body.enabled),
+    secret
+  }
 }
 
 /** 渠道列表（本组织；组织成员可读） */
@@ -136,9 +160,13 @@ router.post('/notify/channels', requireAuth, async (req: ScopedRequest, res) => 
     target: v.target,
     min_level: v.min_level,
     subscribe: v.subscribe,
-    secret_enc: v.kind === 'webhook' && v.secret ? encryptSecret(JSON.stringify({ secret: v.secret })) : null,
+    content: v.content,
+    secret_enc: v.kind !== 'email' && v.secret ? encryptSecret(JSON.stringify({ secret: v.secret })) : null,
     enabled: v.enabled
   }, auth.user.email)
+  await writeUserAudit(auth, 'notify.channel.create', {
+    after: { summary: `新增通知渠道「${v.kind} ${v.target}」`, kind: v.kind, target: v.target, content: v.content }
+  })
   const ch = await getChannel(auth.org.id, id)
   res.json(ok({ channel: ch ? channelView(ch) : null }))
 })
@@ -160,13 +188,16 @@ router.put('/notify/channels/:id', requireAuth, async (req: ScopedRequest, res) 
     res.status(404).json(fail(404, '渠道不存在'))
     return
   }
-  const v = validateBody((req.body ?? {}) as Record<string, unknown>)
+  const body = { ...(req.body ?? {}) } as Record<string, unknown>
+  // 编辑时 target 留空 = 沿用原地址（前端回显的是掩码地址，不能直接提交）
+  if (!String(body.target ?? '').trim()) body.target = ch.target
+  const v = validateBody(body)
   if ('error' in v) {
     res.status(400).json(fail(400, v.error))
     return
   }
   let secretEnc: string | null | undefined
-  if (v.kind === 'webhook') {
+  if (v.kind !== 'email') {
     if (v.secret === undefined) secretEnc = undefined // 保持
     else if (v.secret === '') secretEnc = null // 清除
     else secretEnc = encryptSecret(JSON.stringify({ secret: v.secret }))
@@ -176,8 +207,13 @@ router.put('/notify/channels/:id', requireAuth, async (req: ScopedRequest, res) 
     target: v.target,
     min_level: v.min_level,
     subscribe: v.subscribe,
+    content: v.content,
     secret_enc: secretEnc,
     enabled: v.enabled
+  })
+  await writeUserAudit(auth, 'notify.channel.update', {
+    before: { kind: ch.kind, target: maskWebhookUrl(ch.target), subscribe: ch.subscribe, content: ch.content },
+    after: { summary: `更新通知渠道「${v.kind} ${v.target}」`, kind: v.kind, target: v.target, subscribe: v.subscribe, content: v.content }
   })
   const after = await getChannel(auth.org.id, id)
   res.json(ok({ channel: after ? channelView(after) : null }))
@@ -201,6 +237,10 @@ router.delete('/notify/channels/:id', requireAuth, async (req: ScopedRequest, re
     return
   }
   await deleteChannel(auth.org.id, id)
+  await writeUserAudit(auth, 'notify.channel.delete', {
+    before: { kind: ch.kind, target: maskWebhookUrl(ch.target), subscribe: ch.subscribe, content: ch.content },
+    after: { summary: `删除通知渠道「${ch.kind} ${maskWebhookUrl(ch.target)}」` }
+  })
   res.json(ok({ deleted: id }))
 })
 
@@ -231,8 +271,8 @@ router.post('/notify/channels/:id/test', requireAuth, async (req: ScopedRequest,
       disclaimer: '作业辅助非认证 CARA，不作为唯一决策依据。'
     }
   }
-  // Epic I 功能开关：webhook_enabled 关闭的组织，Webhook 测试投递同样跳过（留审计）
-  if (ch.kind === 'webhook' && !(await isOrgFlagEnabled(ch.org_id, 'webhook_enabled'))) {
+  // Epic I 功能开关：webhook_enabled 关闭的组织，Webhook / 钉钉测试投递同样跳过（留审计）
+  if ((ch.kind === 'webhook' || ch.kind === 'dingtalk') && !(await isOrgFlagEnabled(ch.org_id, 'webhook_enabled'))) {
     await recordDelivery({
       org_id: ch.org_id,
       channel_id: ch.id,
@@ -249,7 +289,9 @@ router.post('/notify/channels/:id/test', requireAuth, async (req: ScopedRequest,
   const result =
     ch.kind === 'webhook'
       ? await deliverWebhook(ch, 'test', payload)
-      : await deliverEmail(ch, `[Openspace Safety] 通知测试 · ${auth.org.name}`, dailyTestText(auth.org.name))
+      : ch.kind === 'dingtalk'
+        ? await deliverDingTalk(ch, 'test', dailyTestText(auth.org.name))
+        : await deliverEmail(ch, `[Openspace Safety] 通知测试 · ${auth.org.name}`, dailyTestText(auth.org.name))
   await recordDelivery({
     org_id: ch.org_id,
     channel_id: ch.id,
@@ -262,6 +304,13 @@ router.post('/notify/channels/:id/test', requireAuth, async (req: ScopedRequest,
   })
   if (result.status === 'success') await markChannelOk(ch.id)
   else await markChannelError(ch.id, result.error ?? 'failed')
+  await writeUserAudit(auth, 'notify.channel.test', {
+    after: {
+      summary: `测试通知渠道「${ch.kind} ${ch.kind === 'email' ? ch.target : maskWebhookUrl(ch.target)}」：${result.status}`,
+      status: result.status,
+      error: result.error
+    }
+  })
   res.json(ok({ status: result.status, attempts: result.attempts, status_code: result.statusCode, error: result.error }))
 })
 
@@ -285,6 +334,88 @@ router.get('/notify/deliveries', requireAuth, async (req: ScopedRequest, res) =>
   const limit = Number(req.query.limit ?? 20)
   const rows = await listDeliveries(org.id, Number.isFinite(limit) ? limit : 20)
   res.json(ok({ deliveries: rows }))
+})
+
+/** 报告历史（本组织，最新在前；含概览计数，便于按日期查看） */
+router.get('/notify/reports', requireAuth, async (req: ScopedRequest, res) => {
+  const org = req.auth?.org
+  if (!org) {
+    res.status(404).json(fail(404, '平台账号无所属组织'))
+    return
+  }
+  const limit = Number(req.query.limit ?? 30)
+  const rows = await listReports(org.id, Number.isFinite(limit) ? limit : 30)
+  const items = rows.map((r) => {
+    const p = safeJson(r.payload_json)
+    const counts = (p?.events as { counts?: Record<string, number> } | undefined)?.counts ?? {}
+    const changes = (p?.level_changes as unknown[] | undefined)?.length ?? 0
+    return {
+      report_date: dateStr(r.report_date),
+      scope: r.scope,
+      created_at: r.created_at,
+      counts,
+      changes
+    }
+  })
+  res.json(ok({ items }))
+})
+
+/** 下载指定日期报告（Markdown，文件名带日期） */
+router.get('/notify/report/:date/file', requireAuth, async (req: ScopedRequest, res) => {
+  const org = req.auth?.org
+  if (!org) {
+    res.status(404).json(fail(404, '平台账号无所属组织'))
+    return
+  }
+  const date = String(req.params.date ?? '')
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+    res.status(400).json(fail(400, '日期格式应为 YYYY-MM-DD'))
+    return
+  }
+  const row = await getReportByDate(org.id, date)
+  if (!row) {
+    res.status(404).json(fail(404, '该日期无报告'))
+    return
+  }
+  const payload = safeJson(row.payload_json) as unknown as DailyReportPayload | null
+  const md = payload ? reportMarkdown(payload, org.name) : String(row.payload_json)
+  const filename = `通知日报-${date}.md`
+  res.setHeader('Content-Type', 'text/markdown; charset=utf-8')
+  res.setHeader('Content-Disposition', `attachment; filename*=UTF-8''${encodeURIComponent(filename)}`)
+  res.send(md)
+})
+
+/** 重发指定日期报告（使用已存内容，不重新计算） */
+router.post('/notify/report/:date/resend', requireAuth, async (req: ScopedRequest, res) => {
+  const auth = req.auth
+  if (!auth?.org) {
+    res.status(404).json(fail(404, '平台账号无所属组织'))
+    return
+  }
+  if (!isAdmin(auth)) {
+    res.status(403).json(fail(403, '仅组织管理员可重发报告'))
+    return
+  }
+  const date = String(req.params.date ?? '')
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+    res.status(400).json(fail(400, '日期格式应为 YYYY-MM-DD'))
+    return
+  }
+  const row = await getReportByDate(auth.org.id, date)
+  if (!row) {
+    res.status(404).json(fail(404, '该日期无报告'))
+    return
+  }
+  const payload = safeJson(row.payload_json) as unknown as DailyReportPayload | null
+  if (!payload) {
+    res.status(400).json(fail(400, '报告内容损坏，无法重发'))
+    return
+  }
+  const r = await deliverReport(auth.org.id, auth.org.name, payload, `resend:${auth.user.email}`)
+  await writeUserAudit(auth, 'notify.report.resend', {
+    after: { summary: `重发 ${date} 报告：成功 ${r.delivered} / 失败 ${r.failed} / 跳过 ${r.skipped}`, date, ...r }
+  })
+  res.json(ok({ date, ...r }))
 })
 
 /** 最新日报（预览；无组织账号 404） */
@@ -334,7 +465,17 @@ router.post('/notify/report/run', requireAuth, async (req: ScopedRequest, res) =
     return
   }
   try {
-    const r = await runDailyReportForOrg(auth.org.id, auth.org.name, `manual:${auth.user.email}`)
+    const vip = auth.org.plan === 'vip' || Boolean(auth.user.isVip)
+    const r = await runDailyReportForOrg(auth.org.id, auth.org.name, `manual:${auth.user.email}`, {
+      archiveUserId: auth.user.id,
+      vip
+    })
+    await writeUserAudit(auth, 'notify.report.run', {
+      after: {
+        summary: `手动生成 ${r.date} 通知日报：投递成功 ${r.delivered} / 失败 ${r.failed} / 跳过 ${r.skipped}（已存入我的文档）`,
+        ...r
+      }
+    })
     res.json(ok(r))
   } catch (e) {
     console.error('[notify/report/run]', e)

@@ -12,12 +12,17 @@ const page = ref(1)
 const limit = 50
 const loading = ref(false)
 const error = ref('')
+const actionFilter = ref('')
+const qFilter = ref('')
 
 async function load() {
   loading.value = true
   error.value = ''
   try {
-    const d = await adminListAudit(page.value, limit)
+    const d = await adminListAudit(page.value, limit, {
+      action: actionFilter.value || undefined,
+      q: qFilter.value.trim() || undefined
+    })
     items.value = d.items
     total.value = d.total
   } catch (e) {
@@ -25,6 +30,11 @@ async function load() {
   } finally {
     loading.value = false
   }
+}
+
+function applyFilters() {
+  if (page.value !== 1) page.value = 1
+  else void load()
 }
 
 const totalPages = computed(() => Math.max(Math.ceil(total.value / limit), 1))
@@ -108,6 +118,17 @@ onMounted(load)
 
     <div v-if="error" class="error">{{ error }}</div>
 
+    <div class="filters">
+      <select v-model="actionFilter" @change="applyFilters">
+        <option value="">{{ t('adm.audit.fAll') }}</option>
+        <option value="auth.">{{ t('adm.audit.fAuth') }}</option>
+        <option value="notify.">{{ t('adm.audit.fNotify') }}</option>
+        <option value="document.">{{ t('adm.audit.fDoc') }}</option>
+      </select>
+      <input v-model="qFilter" type="text" :placeholder="t('adm.audit.fKeyword')" @keyup.enter="applyFilters" />
+      <button type="button" class="btn" @click="applyFilters">{{ t('adm.audit.fApply') }}</button>
+    </div>
+
     <div class="card">
       <table class="tbl">
         <thead>
@@ -149,5 +170,17 @@ onMounted(load)
 .delta {
   max-width: 520px;
   overflow-wrap: anywhere;
+}
+.filters {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  margin-bottom: 10px;
+}
+.filters select {
+  width: 180px;
+}
+.filters input {
+  width: 260px;
 }
 </style>

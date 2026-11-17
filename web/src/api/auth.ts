@@ -86,6 +86,15 @@ export function authMe(): Promise<{ user: AuthUser; org: AuthOrg | null }> {
   return cgiCall({ method: 'GET', url: '/auth/me', headers: authHeaders() })
 }
 
+/** 退出登录：服务端仅写审计（JWT 无会话），失败也不阻断本地清除 */
+export async function authLogout(): Promise<void> {
+  try {
+    await cgiCall({ method: 'POST', url: '/auth/logout', headers: authHeaders() })
+  } catch {
+    /* ignore */
+  }
+}
+
 /** R2-21：自助修改当前账号密码（仅本人） */
 export function authChangePassword(oldPassword: string, newPassword: string): Promise<{ changed: boolean }> {
   return cgiCall({

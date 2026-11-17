@@ -29,6 +29,7 @@ import {
   type UserRow,
   type OrgRow
 } from '../db/orgDb.js'
+import { writeAudit, writeUserAudit } from '../db/adminDb.js'
 
 const router = Router()
 
@@ -236,10 +237,24 @@ router.post('/auth/login', async (req, res) => {
       }
     }
     if (!user) {
+      await writeAudit({
+        actorUserId: null,
+        actorEmail: rawId,
+        orgId: null,
+        action: 'auth.login_failed',
+        after: { summary: `登录失败（账号或密码错误）：${rawId}`, reason: 'bad_credentials' }
+      })
       res.status(401).json(fail(401, '账号或密码错误'))
       return
     }
     if (user.status !== 'active') {
+      await writeAudit({
+        actorUserId: user.id,
+        actorEmail: user.email,
+        orgId: user.org_id,
+        action: 'auth.login_failed',
+        after: { summary: `登录失败（账号已停用）：${user.email}`, reason: 'disabled' }
+      })
       res.status(403).json(fail(403, '账号已停用，请联系平台管理员'))
       return
     }
@@ -262,12 +277,18 @@ router.post('/auth/login', async (req, res) => {
       const ws = await ensurePersonalWorkspace(user.id).catch(() => null)
       if (ws) {
         user = ws.user
+        await writeUserAudit({ user: toSafeUser(user), org: toSafeOrg(ws.org) }, 'auth.login', {
+          after: { summary: `登录成功：${user.email}` }
+        })
         res.json(
           ok({ token: signToken(user), user: toSafeUser(user), org: toSafeOrg(ws.org) })
         )
         return
       }
     }
+    await writeUserAudit({ user: toSafeUser(user), org: org ? toSafeOrg(org) : null }, 'auth.login', {
+      after: { summary: `登录成功：${user.email}` }
+    })
     res.json(ok({ token: signToken(user), user: toSafeUser(user), org: org ? toSafeOrg(org) : null }))
   } catch (e) {
     console.error('[auth] login failed:', (e as Error).message)
@@ -278,6 +299,17 @@ router.post('/auth/login', async (req, res) => {
 /** 当前登录用户 + 组织（受保护接口样例，供前端「保持登录」探测） */
 router.get('/auth/me', requireAuth, async (req, res) => {
   res.json(ok(req.auth ?? null))
+})
+
+/** 退出登录（JWT 无服务端会话，仅留审计；前端同时清除本地 token） */
+router.post('/auth/logout', requireAuth, async (req: Request, res: Response) => {
+  const auth = (req as Request & { auth?: AuthContext }).auth
+  if (auth) {
+    await writeUserAudit(auth, 'auth.logout', {
+      after: { summary: `退出登录：${auth.user.email}` }
+    })
+  }
+  res.json(ok({ loggedOut: true }))
 })
 
 /**

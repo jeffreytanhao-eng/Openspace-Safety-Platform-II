@@ -684,7 +684,10 @@ router.get('/admin/audit', requireAuth, requireSuperAdmin, async (req, res) => {
   }
   const limit = Math.min(Math.max(Number(req.query.limit) || 50, 1), 200)
   const page = Math.max(Number(req.query.page) || 1, 1)
-  const { items, total } = await listAudit(limit, (page - 1) * limit)
+  const { items, total } = await listAudit(limit, (page - 1) * limit, {
+    action: String(req.query.action ?? '').trim() || undefined,
+    q: String(req.query.q ?? '').trim() || undefined
+  })
   res.json(ok({ items, total, page, limit }))
 })
 

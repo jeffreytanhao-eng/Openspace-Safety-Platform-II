@@ -252,13 +252,16 @@ export function adminCreateMember(
   return cgiCall({ method: 'POST', url: `/admin/orgs/${id}/members`, data: payload, headers: headers() })
 }
 
-export function adminListAudit(page = 1, limit = 50): Promise<{
+export function adminListAudit(page = 1, limit = 50, filters?: { action?: string; q?: string }): Promise<{
   items: AuditItem[]
   total: number
   page: number
   limit: number
 }> {
-  return cgiCall({ method: 'GET', url: `/admin/audit?page=${page}&limit=${limit}`, headers: headers() })
+  const qs = new URLSearchParams({ page: String(page), limit: String(limit) })
+  if (filters?.action) qs.set('action', filters.action)
+  if (filters?.q) qs.set('q', filters.q)
+  return cgiCall({ method: 'GET', url: `/admin/audit?${qs.toString()}`, headers: headers() })
 }
 
 /** 当前账号是否平台侧（超管/运维） */

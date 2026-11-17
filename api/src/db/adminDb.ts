@@ -111,11 +111,33 @@ export async function writeUserAudit(
   })
 }
 
-export async function listAudit(limit: number, offset: number): Promise<{ items: AuditRow[]; total: number }> {
+export async function listAudit(
+  limit: number,
+  offset: number,
+  opts?: { action?: string; q?: string }
+): Promise<{ items: AuditRow[]; total: number }> {
+  const where: string[] = []
+  const params: unknown[] = []
+  const action = (opts?.action || '').trim()
+  if (action) {
+    // 支持前缀过滤（如 auth. 命中全部登录相关事件）
+    where.push('action LIKE ?')
+    params.push(`${action}%`)
+  }
+  const q = (opts?.q || '').trim()
+  if (q) {
+    where.push('(actor_email LIKE ? OR after_json LIKE ? OR before_json LIKE ?)')
+    const like = `%${q}%`
+    params.push(like, like, like)
+  }
+  const clause = where.length ? ` WHERE ${where.join(' AND ')}` : ''
   const [items] = await pool.query<RowDataPacket[]>(
-    'SELECT * FROM admin_audit_logs ORDER BY id DESC LIMIT ? OFFSET ?',
-    [limit, offset]
+    `SELECT * FROM admin_audit_logs${clause} ORDER BY id DESC LIMIT ? OFFSET ?`,
+    [...params, limit, offset]
   )
-  const [cnt] = await pool.query<RowDataPacket[]>('SELECT COUNT(*) AS n FROM admin_audit_logs')
+  const [cnt] = await pool.query<RowDataPacket[]>(
+    `SELECT COUNT(*) AS n FROM admin_audit_logs${clause}`,
+    params
+  )
   return { items: items as AuditRow[], total: Number((cnt[0] as { n: number }).n) }
 }

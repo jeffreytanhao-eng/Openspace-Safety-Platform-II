@@ -9,6 +9,7 @@ import { ref } from 'vue'
 import {
   TOKEN_KEY,
   authLogin,
+  authLogout,
   authMe,
   authRegister,
   type AuthOrg,
@@ -81,6 +82,8 @@ export const useAuthStore = defineStore('auth', () => {
   }
 
   function logout(): void {
+    // 先带 token 通知服务端写退出审计，再清本地
+    void authLogout()
     persist(null)
     user.value = null
     org.value = null
