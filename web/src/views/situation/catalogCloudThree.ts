@@ -247,11 +247,23 @@ function cloudGate(): boolean {
   return activeTypes.length > 0 || consOverrideActive() || stationFocus != null || selectedNorad != null
 }
 
+/** 单个重点显示的目标（选中 / 空间站聚焦）统一沿用星历目标配色：深蓝机身 + 蓝点 + 浅蓝轨道 */
+const FOCUS_MARKER_COLOR = 0x3b82f6
+const FOCUS_MODEL_BODY_COLOR = 0x12356e
+const FOCUS_ORBIT_COLOR = 0x81d4fa
+
+function isFocusNorad(norad: number): boolean {
+  return norad === selectedNorad || (stationFocus != null && norad === stationFocus)
+}
+
 function colorVec(type: string, out: THREE.Color, selected: boolean): THREE.Color {
+  if (selected) {
+    out.setHex(FOCUS_MARKER_COLOR)
+    return out
+  }
   const key = normalizeObjectType(type)
   const n = TYPE_COLOR[key] ?? 0x90a4ae
   out.setHex(n)
-  if (selected) out.multiplyScalar(1.25)
   return out
 }
 
@@ -367,11 +379,11 @@ function writeOne(e: CloudEntry, whenMs: number, tmp: THREE.Color, forceProp = f
     hideOne(e)
     return
   }
-  const isPri = e.norad === selectedNorad || (stationFocus != null && e.norad === stationFocus)
+  const isPri = isFocusNorad(e.norad)
   if (isPri || forceProp) propEntry(e, whenMs)
   else coastEntry(e, whenMs)
   writeBufPos(e)
-  colorVec(e.type, tmp, e.norad === selectedNorad)
+  colorVec(e.type, tmp, isFocusNorad(e.norad))
   const i3 = e.pi * 3
   colors[i3] = tmp.r
   colors[i3 + 1] = tmp.g
@@ -919,7 +931,7 @@ function rewriteModelMatrices(): void {
 /** 空间站模型统一蓝色标识（天宫 osp_css / 国际空间站 osp_iss） */
 const STATION_MODEL_COLOR = 0x3b82f6
 
-/** 逐实例着色：类型色 / 选中提亮（与 Points colorVec 同一口径）；空间站模型固定蓝色 */
+/** 逐实例着色：类型色；单个重点目标用星历深蓝机身，空间站模型固定蓝色 */
 function paintModelColors(): void {
   if (!modelsActive) return
   const tmp = _colTmp
@@ -930,9 +942,9 @@ function paintModelColors(): void {
     const station = model === 'osp_iss' || model === 'osp_css'
     for (let local = 0; local < idxs.length; local++) {
       const e = entries[idxs[local]]
-      if (station) tmp.setHex(STATION_MODEL_COLOR)
-      else colorVec(e.type, tmp, e.norad === selectedNorad)
-      if (e.norad === selectedNorad) tmp.multiplyScalar(1.25)
+      if (isFocusNorad(e.norad)) tmp.setHex(FOCUS_MODEL_BODY_COLOR)
+      else if (station) tmp.setHex(STATION_MODEL_COLOR)
+      else colorVec(e.type, tmp, false)
       imesh.setColorAt(local, tmp)
     }
     if (imesh.instanceColor) imesh.instanceColor.needsUpdate = true
@@ -1448,12 +1460,11 @@ function rebuildOrbits(whenMs: number): void {
     const pts = orbitLinePoints(e, whenMs, ORBIT_SAMPLES)
     if (pts.length < 8) continue
     const geo = new THREE.BufferGeometry().setFromPoints(pts)
-    const tmp = new THREE.Color()
-    colorVec(e.type, tmp, e.norad === selectedNorad)
+    const tmp = new THREE.Color(FOCUS_ORBIT_COLOR)
     const mat = new THREE.LineBasicMaterial({
       color: tmp.getHex(),
       transparent: true,
-      opacity: e.norad === selectedNorad ? 0.85 : 0.28,
+      opacity: e.norad === selectedNorad ? 0.9 : 0.6,
       depthWrite: false
     })
     const line = new THREE.Line(geo, mat)

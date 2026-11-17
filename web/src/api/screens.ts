@@ -134,3 +134,12 @@ export function cancelScreen(id: number): Promise<{ cancel: 'cancelled' | 'reque
     headers: headers()
   })
 }
+
+/** 删除自己的筛查任务（仅终态；连带清理该任务产出的交会事件） */
+export function deleteScreen(id: number): Promise<{ deleted: number }> {
+  return cgiCall<{ deleted: number }>({
+    method: 'DELETE',
+    url: `/screens/${id}`,
+    headers: headers()
+  })
+}

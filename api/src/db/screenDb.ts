@@ -364,6 +364,34 @@ export async function finishCancelledJob(id: number): Promise<void> {
   )
 }
 
+/** 用户删除自己的筛查任务：仅终态可删，连带清理产出的交会事件与再筛查引用 */
+export async function deleteScreenJob(
+  orgId: number,
+  id: number
+): Promise<'deleted' | 'active' | 'gone'> {
+  const [rows] = await pool.query<RawJob[]>(
+    `SELECT status FROM screening_jobs WHERE id = ? AND org_id = ?`,
+    [id, orgId]
+  )
+  const job = rows[0]
+  if (!job) return 'gone'
+  if (job.status === 'queued' || job.status === 'running') return 'active'
+  const conn = await pool.getConnection()
+  try {
+    await conn.beginTransaction()
+    await conn.query(`DELETE FROM conjunction_events WHERE job_id = ?`, [id])
+    await conn.query(`UPDATE maneuver_plans SET rescreen_job_id = NULL WHERE rescreen_job_id = ?`, [id])
+    await conn.query(`DELETE FROM screening_jobs WHERE id = ? AND org_id = ?`, [id, orgId])
+    await conn.commit()
+  } catch (e) {
+    await conn.rollback()
+    throw e
+  } finally {
+    conn.release()
+  }
+  return 'deleted'
+}
+
 export async function getScreenJob(orgId: number, id: number): Promise<ScreenJobRow | null> {
   const [rows] = await pool.query<RawJob[]>(`SELECT * FROM screening_jobs WHERE id = ? AND org_id = ?`, [id, orgId])
   return rows[0] ?? null

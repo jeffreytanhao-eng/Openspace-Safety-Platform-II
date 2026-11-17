@@ -5,6 +5,7 @@ import logoUrl from '@/assets/logo/openspace-logo.png'
 import { useI18n } from '@/composables/useI18n'
 import type { MessageKey } from '@/i18n/messages'
 import { useAuthStore } from '@/stores/auth'
+import { applyFontLarge, fontLargeEnabled } from '@/utils/fontScale'
 
 const route = useRoute()
 const router = useRouter()
@@ -99,9 +100,17 @@ function tick() {
   clockBeijing.value = `${pad(bj.getUTCHours())}:${pad(bj.getUTCMinutes())}:${pad(bj.getUTCSeconds())}`
 }
 
+/** 字号模式：默认「正常」，选择结果本地记忆 */
+const largeFont = ref(fontLargeEnabled())
+function setLargeFont(on: boolean) {
+  largeFont.value = on
+  applyFontLarge(on)
+}
+
 onMounted(() => {
   tick()
   clockTimer = window.setInterval(tick, 1000)
+  applyFontLarge(largeFont.value)
   // 恢复登录会话（有 token 时拉取 /auth/me；失败自动清空）
   void auth.init()
 })
@@ -159,7 +168,20 @@ onUnmounted(() => {
             @click="setLocale('en')"
           >{{ t('langEn') }}</button>
         </div>
-        <span class="env">{{ t('staging') }}</span>
+        <div class="lang fs" role="group" :aria-label="t('fs.toggle')">
+          <button
+            type="button"
+            class="lang-btn"
+            :class="{ on: !largeFont }"
+            @click="setLargeFont(false)"
+          >{{ t('fs.normal') }}</button>
+          <button
+            type="button"
+            class="lang-btn"
+            :class="{ on: largeFont }"
+            @click="setLargeFont(true)"
+          >{{ t('fs.large') }}</button>
+        </div>
       </div>
     </header>
 
@@ -255,14 +277,6 @@ onUnmounted(() => {
   display: flex;
   align-items: center;
   gap: 10px;
-}
-.top-right .env {
-  font-size: 10px;
-  letter-spacing: 0.08em;
-  color: var(--text-dim);
-  border: 1px solid var(--border);
-  border-radius: 4px;
-  padding: 3px 8px;
 }
 
 .account {

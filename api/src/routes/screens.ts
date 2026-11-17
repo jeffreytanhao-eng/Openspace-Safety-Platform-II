@@ -17,6 +17,7 @@ import {
   getScreenJobAny,
   listJobEvents,
   cancelScreenJob,
+  deleteScreenJob,
   pageOfScreenJob
 } from '../db/screenDb.js'
 import { pool } from '../db/pool.js'
@@ -345,6 +346,36 @@ router.post('/screens/:id/cancel', requireOrg, async (req: ScopedRequest, res) =
     }
   })
   res.json(ok({ cancel: r, job }))
+})
+
+/** 删除自己组织的筛查任务（仅终态；排队/计算中需先取消） */
+router.delete('/screens/:id', requireOrg, async (req: ScopedRequest, res) => {
+  const org = req.auth!.org!
+  const id = Number(req.params.id)
+  if (!Number.isInteger(id) || id <= 0) {
+    res.status(400).json(fail(400, '任务 ID 无效'))
+    return
+  }
+  const job = await getScreenJob(org.id, id)
+  const r = await deleteScreenJob(org.id, id)
+  if (r === 'gone') {
+    res.status(404).json(fail(404, '任务不存在'))
+    return
+  }
+  if (r === 'active') {
+    res.status(409).json(fail(409, '任务仍在排队或计算中，请先取消，结束后再删除'))
+    return
+  }
+  await writeUserAudit(req.auth, 'screen.delete', {
+    after: {
+      summary: `删除筛查 #${id}`,
+      jobId: id,
+      windowH: job?.window_h,
+      status: job?.status,
+      nEvents: job?.n_events
+    }
+  })
+  res.json(ok({ deleted: id }))
 })
 
 /** 任务列表（本组织，最新在前）；平台账号返回全平台只读列表。

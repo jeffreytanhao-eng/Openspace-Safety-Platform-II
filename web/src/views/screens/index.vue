@@ -6,6 +6,7 @@ import type { MessageKey } from '@/i18n/messages'
 import {
   cancelScreen,
   createScreen,
+  deleteScreen,
   getScreen,
   listScreensPage,
   type ScreenEvent,
@@ -221,6 +222,39 @@ async function askCancel(j: ScreenJob) {
     cancelError.value = e instanceof Error ? e.message : String(e)
   } finally {
     cancellingId.value = null
+  }
+}
+
+/* --------------------------- 删除已结束的任务 --------------------------- */
+
+const deletingId = ref<number | null>(null)
+
+/** 仅终态可删；排队/计算中需先取消 */
+function canDelete(j: ScreenJob): boolean {
+  return j.status === 'done' || j.status === 'failed' || j.status === 'cancelled'
+}
+
+async function askDelete(j: ScreenJob) {
+  if (deletingId.value !== null) return
+  if (!canDelete(j)) {
+    cancelError.value = t('scr.deleteBlocked')
+    return
+  }
+  if (!window.confirm(t('scr.deleteConfirm'))) return
+  deletingId.value = j.id
+  cancelError.value = ''
+  try {
+    await deleteScreen(j.id)
+    if (selectedId.value === j.id) {
+      selectedId.value = null
+      detail.value = null
+      await router.replace({ name: 'screens' })
+    }
+    await loadJobs()
+  } catch (e) {
+    cancelError.value = e instanceof Error ? e.message : String(e)
+  } finally {
+    deletingId.value = null
   }
 }
 
@@ -603,7 +637,22 @@ function pcSourceLabel(e: ScreenEvent): string {
                   >
                     {{ cancellingId === j.id ? t('scr.cancelling') : t('scr.cancel') }}
                   </button>
-                  <span v-else-if="j.cancel_requested" class="cancel-pending">{{ t('scr.cancelling') }}</span>
+                  <span
+                    v-else-if="
+                      j.cancel_requested && (j.status === 'queued' || j.status === 'running')
+                    "
+                    class="cancel-pending"
+                    >{{ t('scr.cancelling') }}</span
+                  >
+                  <button
+                    v-if="canDelete(j) && !isPlatform"
+                    type="button"
+                    class="cancel del"
+                    :disabled="deletingId === j.id"
+                    @click.stop="askDelete(j)"
+                  >
+                    {{ t('scr.delete') }}
+                  </button>
                 </div>
                 <div class="job-meta">
                   <span>{{ t('scr.col.window') }} {{ j.window_h }}h</span>
@@ -929,6 +978,8 @@ function pcSourceLabel(e: ScreenEvent): string {
 }
 .cancel:hover { background: rgba(196, 91, 91, 0.12); }
 .cancel:disabled { opacity: 0.5; cursor: default; }
+.cancel.del { border-color: var(--border); color: var(--text-dim); }
+.cancel.del:hover { border-color: rgba(196, 91, 91, 0.45); color: var(--danger); }
 .cancel-pending { font-size: 9px; color: var(--warn); }
 .cancel-err { padding: 4px 8px; }
 .job-progress { margin-top: 6px; }
