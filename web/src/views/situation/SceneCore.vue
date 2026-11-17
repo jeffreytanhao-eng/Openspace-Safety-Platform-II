@@ -20,6 +20,7 @@ import {
   resizeCesium,
   setCameraFromScene,
   setCameraOrbitFocusScene,
+  setEventFocusScene,
   syncCameraToThree,
   getCesiumScene
 } from './cesiumEarth'
@@ -358,6 +359,7 @@ function stopCatalogTrack() {
 function startCatalogTrack(item: { object_name?: string | null; norad_id: number }, labelOverride?: string) {
   if (!camera || !item) return
   stopEphemTrack()
+  setEventFocusScene(null, simMs)
   trackCat = true
   catFlyPending = false
   trackResync = false
@@ -390,6 +392,7 @@ function stopEphemTrack() {
 function startEphemTrack(set: EphemSet) {
   if (!set) return
   stopCatalogTrack()
+  setEventFocusScene(null, simMs)
   // Clamp sim into ephem span so marker is on-orbit
   if (set.states.length) {
     const t0 = set.states[0].t
@@ -737,6 +740,7 @@ function applyHomeCamera() {
   if (!camera) return
   stopEphemTrack()
   stopCatalogTrack()
+  setEventFocusScene(null, simMs)
   const dir = homeDirection(simMs)
   camera.position.copy(dir).multiplyScalar(HOME_CAM_DIST)
   lookAtPt.set(0, 0, 0)
@@ -1135,10 +1139,15 @@ function showEventCloud(items: (EventCloudItem & { pos: THREE.Vector3 })[] | nul
 /** 深链/列表定位：相机飞向事件云锚点并高亮；fly=false 仅高亮（点击场景已可见）；key=null 取消高亮 */
 function focusEventCloud(key: string | null, fly = true): boolean {
   setEventCloudSelected(key)
-  if (!key || !camera || !fly) return true
+  if (!key) {
+    setEventFocusScene(null, simMs)
+    return true
+  }
   if (!getEventCloudAnchor(key, _trackPos)) return false
+  // 滚轮以事件为固定枢轴：缩放只沿视线推拉，事件不会漂出屏幕正中
+  setEventFocusScene(_trackPos, simMs)
   // R2-7：交会选中近景（双方模型 + 双方轨道 + 白圈）
-  framePointAtDist(_trackPos, CONJ_CAM_DIST)
+  if (camera && fly) framePointAtDist(_trackPos, CONJ_CAM_DIST)
   return true
 }
 

@@ -52,6 +52,10 @@ let dragStep: (() => void) | null = null
 let dragBlurHandler: (() => void) | null = null
 /** When set, left-drag orbits around this ECEF point (sat track); else around Earth center. */
 let orbitFocusCart: import('cesium').Cartesian3 | null = null
+/** 交会事件聚焦点：滚轮沿「相机→事件」视线推拉，事件保持在屏幕正中（null = 交还 Cesium 默认滚轮） */
+let eventFocusCart: import('cesium').Cartesian3 | null = null
+/** 滚轮监听清理（initCesium 注入，destroyCesium 调用） */
+let wheelCleanup: (() => void) | null = null
 let cesiumReady = false
 
 /* ---------------- 离线数据配置（initCesium 前调用 configureEarthBase 生效） ---------------- */
@@ -553,6 +557,37 @@ export async function initCesium(container: HTMLElement, hooks?: CesiumInitHooks
       document.body.style.userSelect = ''
     }
 
+    // 交会事件聚焦时接管滚轮：Cesium 默认以鼠标位置为枢轴缩放，光标不在焦点上时事件会被推出屏幕。
+    // 这里改为沿「相机→事件」视线推拉，焦点始终固定在屏幕正中。
+    const onCanvasWheel = (e: WheelEvent) => {
+      if (!eventFocusCart || !scene || !Cesium) return
+      e.preventDefault()
+      e.stopImmediatePropagation()
+      const cam = scene.camera
+      const focus = eventFocusCart
+      const offset = Cesium.Cartesian3.subtract(cam.positionWC, focus, new Cesium.Cartesian3())
+      const dist = Cesium.Cartesian3.magnitude(offset)
+      if (!(dist > 1)) return
+      const dy = e.deltaMode === 1 ? e.deltaY * 16 : e.deltaMode === 2 ? e.deltaY * 120 : e.deltaY
+      const factor = Math.min(2, Math.max(0.5, Math.exp(dy * 0.0012)))
+      const minDist = 0.002 * EARTH_RADIUS_KM * 1000
+      const maxDist = 400 * EARTH_RADIUS_KM * 1000
+      const newDist = Math.min(maxDist, Math.max(minDist, dist * factor))
+      const newPos = Cesium.Cartesian3.add(
+        focus,
+        Cesium.Cartesian3.multiplyByScalar(offset, newDist / dist, new Cesium.Cartesian3()),
+        new Cesium.Cartesian3()
+      )
+      const dir = Cesium.Cartesian3.normalize(
+        Cesium.Cartesian3.subtract(focus, newPos, new Cesium.Cartesian3()),
+        new Cesium.Cartesian3()
+      )
+      const up = Cesium.Ellipsoid.WGS84.geodeticSurfaceNormal(focus, new Cesium.Cartesian3())
+      cam.setView({ destination: newPos, orientation: { direction: dir, up } })
+    }
+    canvasEl.addEventListener('wheel', onCanvasWheel, { capture: true, passive: false })
+    wheelCleanup = () => canvasEl.removeEventListener('wheel', onCanvasWheel, true)
+
     // 相机移动开始/结束（对齐原 controls 'start'/'end' → userInteracting 暂停卫星传播）
     if (hooks?.onMoveStart) scene.camera.moveStart.addEventListener(hooks.onMoveStart)
     if (hooks?.onMoveEnd) scene.camera.moveEnd.addEventListener(hooks.onMoveEnd)
@@ -687,6 +722,19 @@ export function setCameraOrbitFocusScene(pos: THREE.Vector3 | null, simTimeMs: n
   scene.screenSpaceCameraController.minimumZoomDistance = 0.01 * EARTH_RADIUS_KM * 1000
 }
 
+/**
+ * 交会事件聚焦：设置滚轮缩放的固定枢轴（事件位置），缩放时事件保持在屏幕正中。
+ * 传 null 交还 Cesium 默认滚轮行为（以鼠标位置为枢轴）。
+ */
+export function setEventFocusScene(pos: THREE.Vector3 | null, simTimeMs: number): void {
+  if (!pos) {
+    eventFocusCart = null
+    return
+  }
+  if (!cesiumReady || !scene) return
+  eventFocusCart = sceneToCartesian(pos, simTimeMs)
+}
+
 export function setCameraFromScene(
   pos: THREE.Vector3,
   dir: THREE.Vector3,
@@ -745,9 +793,12 @@ export function pickEarthLonLat(clientX: number, clientY: number): EarthPickResu
 /** 销毁 Cesium 底座（BaseScene onBeforeUnmount 调用，先于 Three 资源回收） */
 export function destroyCesium(): void {
   orbitFocusCart = null
+  eventFocusCart = null
   cesiumReady = false
   scene = null
   dragStep = null
+  wheelCleanup?.()
+  wheelCleanup = null
   dragCleanup?.()
   dragCleanup = null
   if (dragBlurHandler) window.removeEventListener('blur', dragBlurHandler)
