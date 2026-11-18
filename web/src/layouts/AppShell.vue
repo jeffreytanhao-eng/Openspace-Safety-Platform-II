@@ -196,12 +196,22 @@ onUnmounted(() => {
             v-for="item in nav"
             :key="item.key"
             :to="item.to"
-            class="nav-item"
-            :class="{ on: activeKey === item.key, reserved: item.reserved }"
+            custom
+            v-slot="{ navigate }"
           >
-            <span class="nav-label">{{ item.label }}</span>
-            <span class="nav-hint">{{ item.hint }}</span>
-            <span v-if="item.reserved" class="tag">RES</span>
+            <!-- 不用真实 href：避免浏览器左下角弹出链接地址、遮挡事件警铃 -->
+            <a
+              class="nav-item"
+              :class="{ on: activeKey === item.key, reserved: item.reserved }"
+              role="link"
+              tabindex="0"
+              @click="navigate"
+              @keydown.enter.prevent="navigate()"
+            >
+              <span class="nav-label">{{ item.label }}</span>
+              <span class="nav-hint">{{ item.hint }}</span>
+              <span v-if="item.reserved" class="tag">RES</span>
+            </a>
           </RouterLink>
         </nav>
         <div class="rail-foot"><EventBell /></div>
