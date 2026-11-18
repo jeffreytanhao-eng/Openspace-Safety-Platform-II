@@ -335,7 +335,26 @@ function toCloudItem(e: ConjunctionEvent): EventCloudItem {
 async function ensureEventRaw(): Promise<ConjunctionEvent[]> {
   if (eventRaw.value.length) return eventRaw.value
   const { events } = await listEvents('7d')
-  eventRaw.value = events.filter((e) => e.level !== 'low')
+  // 筛查任务事件（TLE/星历/AOE 三种主星源）一并纳入事件云与深链定位
+  const screenSources = ['tle', 'ephem', 'aoe'] as const
+  const extra = await Promise.all(
+    screenSources.map((s) =>
+      listEvents('7d', 'all', s)
+        .then((r) => r.events)
+        .catch(() => [] as ConjunctionEvent[])
+    )
+  )
+  const merged = [...events]
+  const seen = new Set(events.map((e) => `${e.noradA}:${e.noradB}:${e.tca}`))
+  for (const list of extra) {
+    for (const e of list) {
+      const k = `${e.noradA}:${e.noradB}:${e.tca}`
+      if (seen.has(k)) continue
+      seen.add(k)
+      merged.push(e)
+    }
+  }
+  eventRaw.value = merged.filter((e) => e.level !== 'low')
   return eventRaw.value
 }
 
@@ -450,14 +469,12 @@ async function runPendingEventDeepLink() {
     if (!ok) return
   }
   const [a, b] = conj.split('-').map((n) => Number(n))
-  let hit = tcaMs
-    ? eventItems.value.find((x) => x.key === `${a}:${b}:${tcaMs}`)
-    : undefined
+  const samePair = eventItems.value.filter((it) => it.noradA === a && it.noradB === b)
+  let hit = tcaMs ? samePair.find((x) => x.tcaMs === tcaMs) : samePair[0]
   if (!hit) {
-    // 数据刷新后 TCA 可能漂移：同交会对 ±6h 内取最近
+    // 数据刷新后 TCA 可能漂移：同交会对 ±6h 内取最近（筛查事件 key 非 A:B:TCA，同样适用）
     let bestD = 6 * 3600e3
-    for (const it of eventItems.value) {
-      if (it.noradA !== a || it.noradB !== b) continue
+    for (const it of samePair) {
       const d = tcaMs ? Math.abs(it.tcaMs - tcaMs) : 0
       if (d < bestD) {
         bestD = d

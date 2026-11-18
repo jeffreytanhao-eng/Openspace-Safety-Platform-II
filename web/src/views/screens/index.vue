@@ -438,6 +438,13 @@ function pcSourceLabel(e: ScreenEvent): string {
   if (e.pc_source === 'cdm') return `CDM · ${e.cdm_id || ''}`
   return t('scr.pcCore')
 }
+
+/** 筛查事件 → 交会详情（key 由后端按 scr-{jobId}-{eventId} 解析） */
+function openEvent(e: ScreenEvent): void {
+  const jobId = detail.value?.job.id
+  if (!jobId) return
+  void router.push(`/conjunctions/scr-${jobId}-${e.id}`)
+}
 </script>
 
 <template>
@@ -704,7 +711,15 @@ function pcSourceLabel(e: ScreenEvent): string {
           <div class="event-scroll">
             <div v-if="detailLoading && !detail" class="empty">{{ t('obj.loading') }}</div>
             <div v-else-if="!detail || !detail.events.length" class="empty">{{ t('scr.noEvents') }}</div>
-            <div v-for="e in detail?.events ?? []" :key="e.id" class="event">
+            <div
+              v-for="e in detail?.events ?? []"
+              :key="e.id"
+              class="event"
+              role="button"
+              tabindex="0"
+              @click="openEvent(e)"
+              @keydown.enter.prevent="openEvent(e)"
+            >
               <div class="ev-left">
                 <span class="level-pill" :class="e.level">
                   {{ t(levelLabel(e.level)) }}<template v-if="e.diluted">·{{ t('scr.diluted') }}</template>
@@ -1051,7 +1066,10 @@ function pcSourceLabel(e: ScreenEvent): string {
   display: flex;
   justify-content: space-between;
   gap: 10px;
+  cursor: pointer;
 }
+.event:hover { border-color: var(--accent); }
+.event:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 .ev-left { display: flex; gap: 8px; min-width: 0; }
 .level-pill {
   flex: 0 0 auto;

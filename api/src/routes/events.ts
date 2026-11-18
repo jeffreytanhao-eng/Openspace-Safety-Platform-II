@@ -544,6 +544,53 @@ router.get('/events', requireAuth, async (req: ScopedRequest, res) => {
 /** 事件详情：成员 CDM（不含 raw）+ 双方 sat_tle 档案（R0-1 登录可读；C3：客户 CDM 组织隔离） */
 router.get('/events/:key', requireAuth, async (req: ScopedRequest, res) => {
   const key = String(req.params.key ?? '')
+  // 筛查任务产出的事件：key 形如 scr-{jobId}-{eventId}，仅本组织可读
+  const scr = /^scr-(\d+)-(\d+)$/.exec(key)
+  if (scr) {
+    const orgId = Number(req.auth?.org?.id ?? req.auth?.user.orgId ?? 0)
+    if (!orgId) {
+      res.status(403).json(fail(403, '无权查看该交会事件'))
+      return
+    }
+    if (!(await ensureScreenSchema())) {
+      res.status(503).json(fail(503, '数据库不可用'))
+      return
+    }
+    const jobId = Number(scr[1])
+    const eventId = Number(scr[2])
+    const [scrRows] = await pool.query<Array<OrgScreenEventRow & RowDataPacket & { primary_source: string }>>(
+      `SELECT e.*, j.primary_source
+         FROM conjunction_events e
+         INNER JOIN screening_jobs j ON j.id = e.job_id
+        WHERE e.id = ? AND e.job_id = ? AND e.org_id = ? AND j.org_id = ?
+        LIMIT 1`,
+      [eventId, jobId, orgId, orgId]
+    )
+    const scrRow = scrRows[0]
+    const scrEvent = scrRow
+      ? screenRowsToEvents([scrRow], String(scrRow.primary_source || 'tle') as 'tle' | 'ephem' | 'aoe')[0]
+      : null
+    if (!scrEvent) {
+      res.status(404).json(fail(404, '交会事件不存在或已删除'))
+      return
+    }
+    const [scrTles] = await pool.query<RowDataPacket[]>(
+      `SELECT norad_id, object_name, object_type, intl_desig, regime, epoch, incl, ecc,
+              apogee, perigee, period, tle_line1, tle_line2, is_active, updated_at
+         FROM sat_tle WHERE norad_id IN (?, ?)`,
+      [scrEvent.noradA, scrEvent.noradB]
+    )
+    const pickTle = (n: number) => scrTles.find((t) => Number(t.norad_id) === n) ?? null
+    res.json(
+      ok({
+        event: scrEvent,
+        cdms: [],
+        primary: pickTle(scrEvent.noradA),
+        secondary: pickTle(scrEvent.noradB)
+      })
+    )
+    return
+  }
   const m = /^(\d+):(\d+):(\d+)$/.exec(key)
   if (!m) {
     res.status(400).json(fail(400, '事件 key 无效'))
@@ -859,6 +906,34 @@ function parseEventKey(raw: string): { a: number; b: number; tcaMs: number } | n
   return { a, b, tcaMs }
 }
 
+/** 筛查事件 key（scr-{jobId}-{eventId}）→ 双方 NORAD 与 TCA；仅本组织可解析 */
+async function resolveScrKey(
+  req: ScopedRequest,
+  raw: string
+): Promise<{ a: number; b: number; tcaMs: number } | null> {
+  const m = /^scr-(\d+)-(\d+)$/.exec(raw)
+  if (!m) return null
+  const orgId = Number(req.auth?.org?.id ?? req.auth?.user.orgId ?? 0)
+  if (!orgId) return null
+  try {
+    const [rows] = await pool.query<RowDataPacket[]>(
+      `SELECT e.primary_norad, e.secondary_norad, e.tca
+         FROM conjunction_events e
+         INNER JOIN screening_jobs j ON j.id = e.job_id
+        WHERE e.id = ? AND e.job_id = ? AND e.org_id = ? AND j.org_id = ?
+        LIMIT 1`,
+      [Number(m[2]), Number(m[1]), orgId, orgId]
+    )
+    const row = rows[0]
+    if (!row) return null
+    const tcaMs = new Date(row.tca as string).getTime()
+    if (!Number.isFinite(tcaMs)) return null
+    return { a: Number(row.primary_norad), b: Number(row.secondary_norad), tcaMs }
+  } catch {
+    return null
+  }
+}
+
 /** POST /cgi/events/:key/recompute —— 按配置重算（登录组织，计入 recompute_day 配额）。
  * 参数解析顺序：请求体（仅本次）> 组织默认（ca_org_defaults）> 系统缺省；
  * 结果落 conjunction_pc_runs（新 run_id），旧 run 经 GET 同路径可对比。 */
@@ -872,7 +947,8 @@ router.post('/events/:key/recompute', requireAuth, async (req: ScopedRequest, re
     res.status(503).json(fail(503, '数据库不可用'))
     return
   }
-  const parsed = parseEventKey(String(req.params.key ?? ''))
+  const parsed =
+    parseEventKey(String(req.params.key ?? '')) ?? (await resolveScrKey(req, String(req.params.key ?? '')))
   if (!parsed) {
     res.status(400).json(fail(400, '事件 key 无效'))
     return
@@ -1092,7 +1168,8 @@ router.get('/events/:key/recompute', requireAuth, async (req: ScopedRequest, res
     res.status(503).json(fail(503, '数据库不可用'))
     return
   }
-  const parsed = parseEventKey(String(req.params.key ?? ''))
+  const parsed =
+    parseEventKey(String(req.params.key ?? '')) ?? (await resolveScrKey(req, String(req.params.key ?? '')))
   if (!parsed) {
     res.status(400).json(fail(400, '事件 key 无效'))
     return
@@ -1129,8 +1206,9 @@ function safeParse<T = Record<string, unknown>>(s: string | null): T | null {
  *   dR 径向（远离地球为正）、dI 迹向（沿轨道前进为正）、dC 法向（轨道面法向）。
  * 数据来源固定为 TLE/SGP4，前端必须原样标注，不得暗示精密定轨。
  */
-router.get('/events/:key/relative-motion', requireAuth, async (req, res) => {
-  const parsed = parseEventKey(String(req.params.key ?? ''))
+router.get('/events/:key/relative-motion', requireAuth, async (req: ScopedRequest, res) => {
+  const rawKey = String(req.params.key ?? '')
+  const parsed = parseEventKey(rawKey) ?? (await resolveScrKey(req, rawKey))
   if (!parsed) {
     res.status(400).json(fail(400, '事件 key 无效'))
     return
