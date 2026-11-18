@@ -129,6 +129,8 @@ export interface LookupResult {
   catalogProfile?: CatalogProfile | null
   /** 该 NORAD 的授权认领（卫星业主，全局唯一） */
   owner_claim: { id: number; orgId: number; isMine: boolean } | null
+  /** 其它 VIP 单位对该目标的占用（业主已生效/待审核、关注已生效）；存在时不可再发起业主认领 */
+  other_claim?: { claimType: ClaimType; claimStatus: 'pending' | 'claimed' } | null
   /** 本组织对该 NORAD 的认领（normal/owner，最多一条） */
   my_claim: {
     id: number
@@ -191,6 +193,12 @@ export interface CatalogLiteRow {
   object_type: string
   regime: string
   epoch: string | null
+  /** 该目标是否已有生效认领（业主或关注） */
+  claimed?: boolean
+  /** 该目标是否已被业主认领（全局唯一） */
+  owner_claimed?: boolean
+  /** 业主认领是否属于本组织 */
+  owner_mine?: boolean
 }
 
 export function searchCatalogLite(q: string, limit = 50, offset = 0): Promise<{ total: number; items: CatalogLiteRow[] }> {

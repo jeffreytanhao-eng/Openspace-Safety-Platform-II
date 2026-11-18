@@ -220,12 +220,17 @@ const vipClaim = computed(
     (auth.user?.isVip === true || auth.org?.plan === 'vip') &&
     (!auth.org || auth.org.status === 'active')
 )
-/** 该目标已有授权认领、本组织非 VIP、或（已配置）不在业主授权范围时，业主认领不可提交 */
+/** 该目标已有业主认领、被其它 VIP 单位占用、或本组织非 VIP 时，不可提交业主认领 */
 const ownerLocked = computed(() => {
-  if (!vipClaim.value || preview.value?.owner_claim) return true
-  const scope = preview.value?.owner_scope
-  // 未配置范围不拦截：提交后进入平台超管审核
-  return !!scope && scope.configured && !scope.allowed
+  if (!vipClaim.value || preview.value?.owner_claim || preview.value?.other_claim) return true
+  return false
+})
+/** 目标已被其它 VIP 单位占用（业主已生效/待审核、关注已生效）→ 隐藏认领表单 */
+const ownerBlockedByOther = computed(() => {
+  if (claimType.value !== 'owner' || !preview.value) return false
+  const oc = preview.value.owner_claim
+  if (oc && !oc.isMine) return true
+  return !!preview.value.other_claim
 })
 /** R2-27：仅「未认领 / 被驳回 / 已关注且本次走业主认领（同行升级）」可提交 */
 const claimSubmittable = computed(() => {
@@ -1435,7 +1440,14 @@ function lvLabel(v?: string | null): string {
             <div><dt>{{ t('obj.epoch') }}</dt><dd class="mono">{{ preview.sat.epoch || '—' }}</dd></div>
           </div>
           <div v-if="preview.owner_claim" class="hint warn">
-            {{ preview.owner_claim.isMine ? t('obj.ownerMine') : t('obj.ownerTaken') }}
+            {{ preview.owner_claim.isMine ? t('obj.ownerMine') : t('obj.ownerTakenOther') }}
+          </div>
+          <div v-else-if="claimType === 'owner' && preview.other_claim" class="hint warn">
+            {{
+              preview.other_claim.claimType === 'owner'
+                ? t('obj.claimOtherPending')
+                : t('obj.claimOtherClaimed')
+            }}
           </div>
           <div v-if="preview.my_claim" class="hint warn">
             <template v-if="preview.my_claim.claimStatus === 'pending'">
@@ -1453,19 +1465,13 @@ function lvLabel(v?: string | null): string {
               }}
             </template>
           </div>
-          <template v-if="claimSubmittable">
+          <template v-if="claimSubmittable && !ownerBlockedByOther">
             <p v-if="isUpgradeClaim" class="type-hint">{{ t('obj.upgradeHint') }}</p>
             <template v-if="claimType === 'owner'">
               <div v-if="!vipClaim" class="hint">{{ t('obj.ownerVipOnly') }}</div>
               <template v-else>
                 <div v-if="preview.owner_scope && !preview.owner_scope.configured && !preview.owner_claim" class="hint">
                   {{ t('obj.ownerScopeReview') }}
-                </div>
-                <div
-                  v-else-if="preview.owner_scope && preview.owner_scope.configured && !preview.owner_scope.allowed && !preview.owner_claim"
-                  class="hint warn"
-                >
-                  {{ t('obj.ownerScopeOut') }}
                 </div>
               </template>
               <div class="form">
@@ -1512,7 +1518,7 @@ function lvLabel(v?: string | null): string {
               {{ discBusy ? t('obj.saving') : t('obj.discClaim', { n: discPicked.length }) }}
             </button>
           </div>
-          <ul v-if="discRows.length" class="disc-list">
+          <ul v-if="discRows.length" class="disc-list" :class="{ 'disc-list-owner': claimType === 'owner' }">
             <li
               v-for="r in discRows"
               :key="r.norad_id"
@@ -1531,6 +1537,10 @@ function lvLabel(v?: string | null): string {
                 @click.stop="toggleDisc(r.norad_id)"
               />
               <span class="disc-name">{{ r.object_name }}</span>
+              <span
+                v-if="claimType === 'owner' && r.claimed"
+                class="disc-claimed"
+              >{{ t('obj.ownerBadge') }}</span>
               <span class="mono dim">{{ r.norad_id }}</span>
               <span class="dim">{{ r.regime || r.object_type || '' }}</span>
             </li>
@@ -2334,8 +2344,14 @@ th.chk-col input, td.chk-col input { cursor: pointer; }
   cursor: pointer;
 }
 .disc-list li:last-child { border-bottom: 0; }
+/* 业主认领模式没有勾选框，少一列，避免名称被挤进 16px 列 */
+.disc-list-owner li { grid-template-columns: 1fr auto auto; }
 .disc-list li.on { background: var(--bg-panel-2); }
 .disc-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.disc-claimed {
+  padding: 0 6px; border-radius: 3px; border: 1px solid var(--warn);
+  color: var(--warn); font-size: 10px; line-height: 16px; white-space: nowrap;
+}
 .claim-row .num {
   flex: 1; appearance: none; border: 1px solid var(--border); background: var(--bg-deep);
   color: var(--text); border-radius: 4px; padding: 7px 9px; font-size: 13px; font-family: var(--mono); outline: none;

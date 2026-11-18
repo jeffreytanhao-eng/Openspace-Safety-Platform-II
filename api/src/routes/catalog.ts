@@ -173,7 +173,39 @@ router.get('/catalog/tles', requireAuth, async (req, res) => {
     `SELECT COUNT(*) AS c FROM sat_tle WHERE ${where.join(' AND ')}`,
     params.slice(0, -2)
   )
-  res.json(ok({ total: Number(cnt[0]?.c ?? 0), items: rows, ...badge }))
+  // 认领标记：该目标是否已被其他组织业主认领（发现列表展示「已被认领」）
+  const orgId = Number(req.auth?.user.orgId || 0)
+  const ownerByNorad = new Map<number, number>()
+  const claimedNorads = new Set<number>()
+  const norads = rows.map((r) => Number(r.norad_id))
+  if (norads.length) {
+    const [owners] = await pool.query<RowDataPacket[]>(
+      `SELECT norad_id, org_id FROM objects
+        WHERE claim_type = 'owner' AND claim_status = 'claimed' AND norad_id IN (?)`,
+      [norads]
+    )
+    for (const o of owners) {
+      ownerByNorad.set(Number(o.norad_id), Number(o.org_id))
+      claimedNorads.add(Number(o.norad_id))
+    }
+    const [normal] = await pool.query<RowDataPacket[]>(
+      `SELECT DISTINCT norad_id FROM objects
+        WHERE claim_type = 'normal' AND claim_status = 'claimed' AND norad_id IN (?)`,
+      [norads]
+    )
+    for (const n of normal) claimedNorads.add(Number(n.norad_id))
+  }
+  const items = rows.map((r) => {
+    const norad = Number(r.norad_id)
+    const owner = ownerByNorad.get(norad)
+    return {
+      ...r,
+      claimed: claimedNorads.has(norad),
+      owner_claimed: owner !== undefined,
+      owner_mine: owner !== undefined && owner === orgId
+    }
+  })
+  res.json(ok({ total: Number(cnt[0]?.c ?? 0), items, ...badge }))
 })
 
 /** Recent Space-Track public CDMs（R0-1 登录可读；C3：按档限定历史天数窗） */

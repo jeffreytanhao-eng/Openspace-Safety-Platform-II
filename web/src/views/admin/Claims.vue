@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { onMounted, ref } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 import { useI18n } from '@/composables/useI18n'
 import { AuthError } from '@/api/auth'
 import {
@@ -19,7 +19,6 @@ const loading = ref(false)
 const error = ref('')
 const msg = ref('')
 const acting = ref(0)
-const note = ref('')
 
 async function load() {
   loading.value = true
@@ -34,59 +33,79 @@ async function load() {
   }
 }
 
-async function approve(row: AdminObjectClaim) {
-  if (!window.confirm(`通过 NORAD ${row.norad_id} 的业主认领？通过后该目标全局唯一归属 ${row.org_name}。`)) return
-  acting.value = row.id
-  error.value = ''
-  msg.value = ''
-  try {
-    await adminApproveObjectClaim(row.id, note.value)
-    msg.value = `NORAD ${row.norad_id} 认领已通过`
-    note.value = ''
-    await load()
-  } catch (e) {
-    error.value = e instanceof AuthError ? e.message : String((e as Error).message || e)
-  } finally {
-    acting.value = 0
+/**
+ * 审核操作弹层：内置浏览器会屏蔽 window.confirm / window.prompt（直接返回 null），
+ * 导致按钮“点了没反应”，因此改用页面内弹层收集意见。
+ */
+type DialogMode = 'approve' | 'reject' | 'revoke'
+const dialogMode = ref<DialogMode | null>(null)
+const dialogRow = ref<AdminObjectClaim | null>(null)
+const dialogNote = ref('')
+const dialogBusy = ref(false)
+const dialogError = ref('')
+
+const dialogText = computed(() => {
+  const r = dialogRow.value
+  if (!r || !dialogMode.value) return ''
+  const name = r.name ? `${r.name}（NORAD ${r.norad_id}）` : `NORAD ${r.norad_id}`
+  const org = r.org_name || `#${r.org_id}`
+  if (dialogMode.value === 'approve') {
+    return `通过 ${name} 的业主认领？通过后该目标全局唯一归属 ${org}。`
   }
+  if (dialogMode.value === 'reject') {
+    return `驳回 ${name} 的业主认领，可填写原因（将回传给申请方）。`
+  }
+  return `撤销 ${org} 对 ${name} 的业主认领？撤销后该目标恢复为无业主状态，已绑定的星历会解除绑定，档案参数一并删除，操作不可恢复。`
+})
+
+const dialogConfirmText = computed(() => {
+  if (dialogMode.value === 'approve') return '确认通过'
+  if (dialogMode.value === 'reject') return '确认驳回'
+  return '确认撤销'
+})
+
+function openDialog(mode: DialogMode, row: AdminObjectClaim): void {
+  dialogMode.value = mode
+  dialogRow.value = row
+  dialogNote.value = ''
+  dialogError.value = ''
 }
 
-async function reject(row: AdminObjectClaim) {
-  const reason = window.prompt(`驳回 NORAD ${row.norad_id} 的业主认领，请填写原因（将回传给申请方）`, note.value)
-  if (reason === null) return
-  acting.value = row.id
-  error.value = ''
-  msg.value = ''
-  try {
-    await adminRejectObjectClaim(row.id, reason)
-    msg.value = `NORAD ${row.norad_id} 认领已驳回`
-    note.value = ''
-    await load()
-  } catch (e) {
-    error.value = e instanceof AuthError ? e.message : String((e as Error).message || e)
-  } finally {
-    acting.value = 0
-  }
+function closeDialog(): void {
+  if (dialogBusy.value) return
+  dialogMode.value = null
+  dialogRow.value = null
+  dialogNote.value = ''
 }
 
-async function revoke(row: AdminObjectClaim) {
-  const name = row.name ? `${row.name}（NORAD ${row.norad_id}）` : `NORAD ${row.norad_id}`
-  if (
-    !window.confirm(
-      `撤销 ${row.org_name || `#${row.org_id}`} 对 ${name} 的业主认领？\n撤销后该目标恢复为无业主状态，已绑定的星历会解除绑定，档案参数一并删除，操作不可恢复。`
-    )
-  )
-    return
-  acting.value = row.id
+async function confirmDialog(): Promise<void> {
+  const row = dialogRow.value
+  const mode = dialogMode.value
+  if (!row || !mode || dialogBusy.value) return
+  dialogBusy.value = true
+  dialogError.value = ''
   error.value = ''
   msg.value = ''
+  acting.value = row.id
   try {
-    await adminReleaseOwner(row.norad_id)
-    msg.value = `NORAD ${row.norad_id} 业主认领已撤销`
+    if (mode === 'approve') {
+      await adminApproveObjectClaim(row.id, dialogNote.value)
+      msg.value = `NORAD ${row.norad_id} 认领已通过`
+    } else if (mode === 'reject') {
+      await adminRejectObjectClaim(row.id, dialogNote.value)
+      msg.value = `NORAD ${row.norad_id} 认领已驳回`
+    } else {
+      await adminReleaseOwner(row.norad_id)
+      msg.value = `NORAD ${row.norad_id} 业主认领已撤销`
+    }
+    dialogMode.value = null
+    dialogRow.value = null
+    dialogNote.value = ''
     await load()
   } catch (e) {
-    error.value = e instanceof AuthError ? e.message : String((e as Error).message || e)
+    dialogError.value = e instanceof AuthError ? e.message : String((e as Error).message || e)
   } finally {
+    dialogBusy.value = false
     acting.value = 0
   }
 }
@@ -170,15 +189,15 @@ onMounted(load)
             <td class="delta">{{ row.review_note || '—' }}</td>
             <td class="ops">
               <template v-if="row.claim_status === 'pending'">
-                <button type="button" class="btn small primary" :disabled="acting === row.id" @click="approve(row)">通过</button>
-                <button type="button" class="btn small danger" :disabled="acting === row.id" @click="reject(row)">驳回</button>
+                <button type="button" class="btn small primary" :disabled="acting === row.id" @click="openDialog('approve', row)">通过</button>
+                <button type="button" class="btn small danger" :disabled="acting === row.id" @click="openDialog('reject', row)">驳回</button>
               </template>
               <button
                 v-else-if="row.claim_status === 'claimed'"
                 type="button"
                 class="btn small danger"
                 :disabled="acting === row.id"
-                @click="revoke(row)"
+                @click="openDialog('revoke', row)"
               >
                 {{ acting === row.id ? '撤销中…' : '撤销认领' }}
               </button>
@@ -187,6 +206,35 @@ onMounted(load)
           </tr>
         </tbody>
       </table>
+    </div>
+
+    <div v-if="dialogMode" class="mask" @click.self="closeDialog">
+      <div class="dlg">
+        <h3>{{ dialogMode === 'approve' ? '通过认领' : dialogMode === 'reject' ? '驳回认领' : '撤销认领' }}</h3>
+        <p class="dlg-text">{{ dialogText }}</p>
+        <label v-if="dialogMode !== 'revoke'" class="dlg-field">
+          <span>{{ dialogMode === 'reject' ? '驳回原因' : '审核意见' }}</span>
+          <textarea
+            v-model="dialogNote"
+            rows="3"
+            maxlength="255"
+            :placeholder="dialogMode === 'reject' ? '会回传给申请方，可留空' : '可选'"
+          ></textarea>
+        </label>
+        <div v-if="dialogError" class="error">{{ dialogError }}</div>
+        <div class="dlg-ops">
+          <button type="button" class="btn" :disabled="dialogBusy" @click="closeDialog">取消</button>
+          <button
+            type="button"
+            class="btn"
+            :class="dialogMode === 'approve' ? 'primary' : 'danger'"
+            :disabled="dialogBusy"
+            @click="confirmDialog"
+          >
+            {{ dialogBusy ? '处理中…' : dialogConfirmText }}
+          </button>
+        </div>
+      </div>
     </div>
   </div>
 </template>
@@ -239,4 +287,36 @@ onMounted(load)
   border-color: rgba(217, 164, 65, 0.5);
   background: rgba(217, 164, 65, 0.08);
 }
+.mask {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.45);
+}
+.dlg {
+  width: min(440px, calc(100vw - 32px));
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 16px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg-panel);
+}
+.dlg h3 { margin: 0; font-size: 14px; color: var(--text); }
+.dlg-text { margin: 0; font-size: 12px; line-height: 1.6; color: var(--text-muted); }
+.dlg-field { display: flex; flex-direction: column; gap: 6px; font-size: 12px; color: var(--text-dim); }
+.dlg-field textarea {
+  resize: vertical;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text);
+  font-size: 12px;
+  padding: 6px 8px;
+}
+.dlg-ops { display: flex; justify-content: flex-end; gap: 8px; }
 </style>

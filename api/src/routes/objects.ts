@@ -18,6 +18,7 @@ import {
   getObjectOrgName,
   getObjectByOrgNorad,
   getOwnerClaim,
+  getOtherVipClaim,
   createObject,
   resubmitObjectClaim,
   upgradeNormalToOwner,
@@ -317,6 +318,7 @@ router.get('/objects/lookup/:noradId', async (req, res) => {
   const { sat: tle, catalogProfile, dossierMeta } = await catalogFields(norad, tle0, req)
   const orgId = Number(req.auth?.user.orgId || 0)
   const owner = await getOwnerClaim(norad)
+  const otherVip = orgId ? await getOtherVipClaim(norad, orgId) : null
   const mine = orgId ? await getObjectByOrgNorad(orgId, norad) : null
   // C1：VIP 组织预览时回显该目标是否在业主授权范围内（前端据此灰显「业主认领」）
   const isVip =
@@ -329,6 +331,10 @@ router.get('/objects/lookup/:noradId', async (req, res) => {
       dossierMeta,
       owner_claim: owner
         ? { id: owner.id, orgId: owner.org_id, isMine: owner.org_id === orgId }
+        : null,
+      /** 其它 VIP 单位对该目标的占用；存在时本组织不可再发起业主认领 */
+      other_claim: otherVip
+        ? { claimType: otherVip.claim_type, claimStatus: otherVip.claim_status }
         : null,
       my_claim: mine
         ? {
@@ -436,10 +442,14 @@ router.post('/objects', async (req: ScopedRequest, res) => {
       res.status(409).json(fail(409, `NORAD ${norad} 已有业主认领（卫星业主），每个目标仅允许一个业主认领`))
       return
     }
-    // C1 授权范围：配置了范围才拦截；未配置时放行，业主认领统一走「提交 → 平台超管审核」
-    const scope = await checkClaimScope(orgId, norad)
-    if (scope.configured && !scope.allowed) {
-      res.status(403).json(fail(403, `NORAD ${norad} 不在本组织业主授权范围内，如需扩围请联系平台管理员`))
+    // 已被其它 VIP 单位占用（业主待审核 / 关注生效）时同样不可发起业主认领
+    const otherVip = orgId ? await getOtherVipClaim(norad, orgId) : null
+    if (otherVip) {
+      const msg =
+        otherVip.claim_type === 'owner'
+          ? `NORAD ${norad} 已有其他 VIP 用户提交业主认领申请，等待平台审核`
+          : `NORAD ${norad} 已被其他 VIP 用户认领，无法再次发起认领`
+      res.status(409).json(fail(409, msg))
       return
     }
   }

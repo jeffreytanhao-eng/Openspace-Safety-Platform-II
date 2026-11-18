@@ -350,6 +350,35 @@ export async function getOwnerClaim(noradId: number): Promise<ObjectRow | null> 
   return (rows[0] as ObjectRow) ?? null
 }
 
+export interface OtherClaimInfo {
+  id: number
+  org_id: number
+  claim_type: ClaimType
+  claim_status: ClaimStatus
+}
+
+/**
+ * 其它 VIP 单位对该目标的占用：
+ *  - 业主认领已生效 / 业主认领待审核 / 关注已生效；
+ * 存在时本组织不可再发起业主认领（目标已被其它 VIP 单位占用）。
+ */
+export async function getOtherVipClaim(noradId: number, orgId: number): Promise<OtherClaimInfo | null> {
+  const [rows] = await pool.query<RowDataPacket[]>(
+    `SELECT o.id, o.org_id, o.claim_type, o.claim_status
+       FROM objects o
+       JOIN organizations g ON g.id = o.org_id
+       LEFT JOIN users u ON u.id = o.requested_by_user_id
+      WHERE o.norad_id = ?
+        AND o.org_id <> ?
+        AND (g.plan = 'vip' OR u.is_vip = 1)
+        AND (o.claim_status = 'claimed' OR (o.claim_type = 'owner' AND o.claim_status = 'pending'))
+      ORDER BY (o.claim_type = 'owner') DESC, (o.claim_status = 'claimed') DESC, o.id ASC
+      LIMIT 1`,
+    [noradId, orgId]
+  )
+  return (rows[0] as OtherClaimInfo) ?? null
+}
+
 /** 某用户在某 NORAD 上已生效的授权认领（星历上传/参数维护的权限依据） */
 export async function getOwnerClaimByUser(userId: number, noradId: number): Promise<ObjectRow | null> {
   const [rows] = await pool.query<RawObject[]>(
