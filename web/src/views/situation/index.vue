@@ -40,7 +40,18 @@ type PanelKind = 'sat' | 'site' | 'cons'
 const sceneRef = ref<InstanceType<typeof SceneCore>>()
 const { isMobile } = useDevice()
 const route = useRoute()
-const { label: objLabel, load: loadAliases } = useObjectAliases({ autoLoad: true })
+const { byNorad, label: objLabel, load: loadAliases } = useObjectAliases({ autoLoad: true })
+
+/** 本组织目标别名注入三维场景：选中目标的标签优先显示别名 */
+function pushAliases(): void {
+  const m = new Map<number, string>()
+  for (const [norad, it] of byNorad.value) {
+    const a = String(it.alias || '').trim()
+    if (a) m.set(Number(norad), a)
+  }
+  sceneRef.value?.setAliases(m)
+}
+watch(byNorad, pushAliases, { flush: 'post' })
 const { t } = useI18n()
 
 /* ---------------- 左侧列表面板 ---------------- */
@@ -278,6 +289,7 @@ function onLocateMan(
 
 function onViewportReady() {
   // Restore track zoom if an ephem is already active after viewport rebuild
+  pushAliases()
   paintUserEphem(activeEphem.value ? { track: true } : undefined)
   viewportReady.value = true
   void runPendingEventDeepLink()

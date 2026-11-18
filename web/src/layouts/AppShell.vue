@@ -2,6 +2,7 @@
 import { computed, onMounted, onUnmounted, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import logoUrl from '@/assets/logo/openspace-logo.png'
+import EventBell from '@/components/EventBell.vue'
 import { useI18n } from '@/composables/useI18n'
 import type { MessageKey } from '@/i18n/messages'
 import { useAuthStore } from '@/stores/auth'
@@ -203,7 +204,7 @@ onUnmounted(() => {
             <span v-if="item.reserved" class="tag">RES</span>
           </RouterLink>
         </nav>
-        <div class="rail-foot">{{ t('railFoot') }}</div>
+        <div class="rail-foot"><EventBell /></div>
       </aside>
 
       <main class="main">
@@ -460,7 +461,7 @@ onUnmounted(() => {
 }
 
 .rail-foot {
-  padding: 10px 12px;
+  padding: 8px 12px;
   font-size: 10px;
   color: var(--text-dim);
   border-top: 1px solid var(--border);

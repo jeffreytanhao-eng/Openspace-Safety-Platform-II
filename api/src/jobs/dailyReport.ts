@@ -35,6 +35,7 @@ import {
   type DocsViewer
 } from '../db/userDocsDb.js'
 import { writeAudit } from '../db/adminDb.js'
+import { addUserEventsForOrg } from '../db/userEventDb.js'
 
 export type { EventLevel }
 
@@ -431,6 +432,15 @@ export async function deliverReport(
       channels: detail
     }
   })
+  // 站内事件：报告投递结果（成功/失败）通知本组织在职用户
+  if (failed > 0 || delivered > 0) {
+    await addUserEventsForOrg(orgId, failed > 0 ? 'report.failed' : 'report.delivered', {
+      date: payload.date,
+      delivered,
+      failed,
+      skipped
+    })
+  }
   return { delivered, failed, skipped }
 }
 

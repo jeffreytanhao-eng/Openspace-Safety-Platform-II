@@ -5,6 +5,7 @@
  */
 import { pool } from './pool.js'
 import type { RowDataPacket, ResultSetHeader } from 'mysql2'
+import { addUserEvent } from './userEventDb.js'
 
 export type ScreenJobStatus = 'queued' | 'running' | 'done' | 'failed' | 'cancelled'
 
@@ -288,6 +289,23 @@ export async function finishScreenJob(
       id
     ]
   )
+  // 站内事件：任务发起人收到完成/失败提醒（triggered_by 形如 "email (rescreen#12)"）
+  try {
+    const [rows] = await pool.query<RowDataPacket[]>(
+      `SELECT u.id AS user_id
+         FROM screening_jobs j
+         LEFT JOIN users u ON u.email = SUBSTRING_INDEX(TRIM(j.triggered_by), ' ', 1)
+        WHERE j.id = ? LIMIT 1`,
+      [id]
+    )
+    await addUserEvent(Number(rows[0]?.user_id ?? 0), status === 'done' ? 'screen.done' : 'screen.failed', {
+      jobId: id,
+      nEvents: fields.nEvents ?? 0,
+      error: (fields.errorMessage ?? '').slice(0, 120)
+    })
+  } catch {
+    /* 事件写入失败不影响任务状态 */
+  }
 }
 
 /** 服务重启后把僵死的 running 任务标记为失败 */

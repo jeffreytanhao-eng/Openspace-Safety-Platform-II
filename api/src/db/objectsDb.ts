@@ -531,7 +531,12 @@ export async function approveOwnerClaim(
   id: number,
   reviewerEmail: string,
   note = ''
-): Promise<{ ok: boolean; error?: string; row?: ObjectRow }> {
+): Promise<{
+  ok: boolean
+  error?: string
+  row?: ObjectRow
+  rejected?: Array<{ id: number; requested_by_user_id: number | null; norad_id: number; name: string }>
+}> {
   const conn = await pool.getConnection()
   try {
     await conn.beginTransaction()
@@ -565,6 +570,12 @@ export async function approveOwnerClaim(
       `UPDATE objects SET claim_status = 'claimed', reviewed_by = ?, reviewed_at = NOW(3), review_note = ? WHERE id = ?`,
       [reviewerEmail, note.slice(0, 255), id]
     )
+    // 同行其它待审申请会一并驳回：先取出来，供审核路由给申请方发失败事件
+    const [others] = await conn.query<RowDataPacket[]>(
+      `SELECT id, requested_by_user_id, norad_id, name FROM objects
+        WHERE norad_id = ? AND claim_type = 'owner' AND claim_status = 'pending' AND id <> ?`,
+      [r.norad_id, id]
+    )
     await conn.query(
       `UPDATE objects SET claim_status = 'rejected', reviewed_by = ?, reviewed_at = NOW(3),
               review_note = '目标已被其他用户认领'
@@ -572,7 +583,16 @@ export async function approveOwnerClaim(
       [reviewerEmail, r.norad_id, id]
     )
     await conn.commit()
-    return { ok: true, row: (await getObjectById(id)) ?? undefined }
+    return {
+      ok: true,
+      row: (await getObjectById(id)) ?? undefined,
+      rejected: others as unknown as Array<{
+        id: number
+        requested_by_user_id: number | null
+        norad_id: number
+        name: string
+      }>
+    }
   } catch (e) {
     try {
       await conn.rollback()

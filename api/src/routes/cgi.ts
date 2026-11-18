@@ -19,6 +19,7 @@ import cred from './cred.js'
 import notify from './notify.js'
 import maneuvers from './maneuvers.js'
 import documents from './documents.js'
+import userEvents from './userEvents.js'
 import { getDailyFetchStatus } from '../db/fetchDb.js'
 import { isDailyFetchRunning } from '../jobs/dailyFetch.js'
 
@@ -89,6 +90,7 @@ router.use('/sat_tle', satTle)
 router.use('/sat_constellation', satConstellation)
 
 router.use(documents)
+router.use(userEvents)
 router.use(ephemerides)
 
 export default router

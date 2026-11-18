@@ -28,7 +28,8 @@ import {
 import { ensureAdminSchema, writeAudit, listAudit } from '../db/adminDb.js'
 import { ensurePlanSchema, getEffectiveLimits, getOrgQuotaRows, getOrgFlagRows, setOrgQuotaOverride, clearOrgQuotaOverride, setOrgFlagOverride, clearOrgFlagOverride, FEATURE_KEYS, FLAG_CATALOG, TLE_SCOPE, PC_BIT } from '../db/planDb.js'
 import { requireAuth, type AuthContext } from './auth.js'
-import { listClaimScopes, replaceClaimScopes, type ClaimScopeType, ensureObjectsSchema, listOwnerClaims, approveOwnerClaim, rejectOwnerClaim } from '../db/objectsDb.js'
+import { listClaimScopes, replaceClaimScopes, type ClaimScopeType, ensureObjectsSchema, listOwnerClaims, approveOwnerClaim, rejectOwnerClaim, getObjectById } from '../db/objectsDb.js'
+import { addUserEvent } from '../db/userEventDb.js'
 import { QUOTA_EXCEEDED } from '../middleware/plan.js'
 
 const router = Router()
@@ -598,6 +599,18 @@ router.post('/admin/object-claims/:id/approve', requireAuth, requireSuperAdmin, 
     action: 'object_claim.approve',
     after: { claimId: id, norad: r.row?.norad_id ?? null, note }
   })
+  // 站内事件：申请方认领成功；同行其它待审申请一并驳回 → 失败
+  await addUserEvent(r.row?.requested_by_user_id, 'claim.approved', {
+    norad: r.row?.norad_id ?? null,
+    name: r.row?.name || ''
+  })
+  for (const x of r.rejected ?? []) {
+    await addUserEvent(x.requested_by_user_id, 'claim.rejected', {
+      norad: x.norad_id,
+      name: x.name || '',
+      reason: '目标已被其他用户认领'
+    })
+  }
   res.json(ok({ id, status: 'claimed', object: r.row }))
 })
 
@@ -624,6 +637,13 @@ router.post('/admin/object-claims/:id/reject', requireAuth, requireSuperAdmin, a
     orgId: 0,
     action: 'object_claim.reject',
     after: { claimId: id, note }
+  })
+  // 站内事件：申请方认领失败
+  const row = await getObjectById(id)
+  await addUserEvent(row?.requested_by_user_id, 'claim.rejected', {
+    norad: row?.norad_id ?? null,
+    name: row?.name || '',
+    reason: note
   })
   res.json(ok({ id, status: 'rejected' }))
 })

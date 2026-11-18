@@ -355,6 +355,12 @@ function stopCatalogTrack() {
   }
 }
 
+/** 本组织目标别名（NORAD → 别名），由态势页加载后注入；选中标签优先显示别名 */
+let aliasMap: Map<number, string> = new Map()
+function setAliases(m: Map<number, string>): void {
+  aliasMap = new Map(m)
+}
+
 /** 选中编目目标：径向飞入 + delta 跟随 + 呼吸光环 + 名称（与星历选中一致，t201u）。 */
 function startCatalogTrack(item: { object_name?: string | null; norad_id: number }, labelOverride?: string) {
   if (!camera || !item) return
@@ -364,7 +370,8 @@ function startCatalogTrack(item: { object_name?: string | null; norad_id: number
   catFlyPending = false
   trackResync = false
   const nameEl = reticleNameEl.value
-  const label = labelOverride || item.object_name || `NORAD ${item.norad_id}`
+  const label =
+    aliasMap.get(Number(item.norad_id)) || labelOverride || item.object_name || `NORAD ${item.norad_id}`
   if (nameEl) nameEl.textContent = label
   if (getCatalogFocusPos(simMs, _trackPos)) {
     lookAtPt.copy(_trackPos)
@@ -1170,6 +1177,7 @@ function onScenePointerUp(e: PointerEvent) {
 let pickDown: { x: number; y: number } | null = null
 
 defineExpose({
+  setAliases,
   resetCameraHome,
   setSimTime,
   selectCatalogItem,
