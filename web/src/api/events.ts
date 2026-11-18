@@ -36,6 +36,9 @@ export interface ConjunctionEvent {
   dataSource?: 'system_pool' | 'org_credential'
   /** 筛查事件：产出该事件的 screening_jobs.id；详情跳转到 /screens/{jobId} */
   jobId?: number
+  /** 筛查事件：TCA 时刻双方 TEME 位置（km），事件云锚点/交会放大态优先使用 */
+  posA?: [number, number, number]
+  posB?: [number, number, number]
 }
 
 /** 交会列表数据源：CDM 走 sat_cdm；tle/ephem/aoe 走本组织已完成筛查任务 */

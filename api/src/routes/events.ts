@@ -134,6 +134,9 @@ export interface ConjunctionEvent {
   dataSource: 'system_pool' | 'org_credential' // C3：含客户上传成员 → org_credential
   /** 筛查事件：产出该事件的 screening_jobs.id；前端跳 /screens/{jobId} */
   jobId?: number
+  /** 筛查事件：TCA 时刻双方 TEME 位置（km）。AOE/星历主星源与编目 TLE 不一致，锚点必须用实测状态 */
+  posA?: [number, number, number]
+  posB?: [number, number, number]
 }
 
 const GAP_MS = 3 * 3600 * 1000
@@ -326,6 +329,13 @@ function dedupScreenEvents(rows: OrgScreenEventRow[]): OrgScreenEventRow[] {
   return out
 }
 
+/** 筛查行内 TCA 状态向量（km）→ 元组；缺失或非数值则忽略 */
+function posTuple(x: unknown, y: unknown, z: unknown): [number, number, number] | undefined {
+  if (x == null || y == null || z == null) return undefined
+  const v: [number, number, number] = [Number(x), Number(y), Number(z)]
+  return v.every((n) => Number.isFinite(n)) ? v : undefined
+}
+
 function screenRowsToEvents(
   rows: OrgScreenEventRow[],
   primarySource: 'tle' | 'ephem' | 'aoe'
@@ -357,7 +367,9 @@ function screenRowsToEvents(
       relSpeedKmS:
         e.rel_speed_kms != null && Number.isFinite(Number(e.rel_speed_kms)) ? Number(e.rel_speed_kms) : null,
       sources: [`screen-${primarySource}`],
-      dataSource: 'system_pool'
+      dataSource: 'system_pool',
+      posA: posTuple(e.a_x, e.a_y, e.a_z),
+      posB: posTuple(e.b_x, e.b_y, e.b_z)
     })
   }
   events.sort((x, y) => LEVEL_RANK[y.level] - LEVEL_RANK[x.level] || x.tca.localeCompare(y.tca))

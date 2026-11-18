@@ -30,6 +30,9 @@ export interface EventCloudItem {
   missKm: number | null
   relSpeedKmS: number | null
   cdmCount: number
+  /** 筛查事件自带的 TCA 时刻双方 TEME 位置（km），优先于 TLE 复算 */
+  posA?: [number, number, number]
+  posB?: [number, number, number]
   /** R2-15：TCA 交会点大地坐标（由事件锚点 ECI 状态换算，纬度/经度 度、高度 km） */
   latDeg?: number
   lonDeg?: number
@@ -149,6 +152,20 @@ function positionOf(norad: number, tcaMs: number): [number, number, number] | nu
   return propagateByTle(norad, tcaMs) ?? propagateNorad(norad, tcaMs)
 }
 
+/**
+ * 筛查事件自带的 TCA 状态向量（TEME km）校验后直接使用。
+ * AOE / 用户星历主星源的实际轨道与编目 TLE 可能不是同一目标（如匿名 OBJECT A），
+ * 再用 TLE 复算会把锚点打到地球内部；库内 a/b 状态才是事件真实交会位置。
+ */
+function storedPos(v?: [number, number, number]): [number, number, number] | null {
+  if (!v) return null
+  const [x, y, z] = v
+  if (![x, y, z].every((n) => Number.isFinite(n))) return null
+  const r = Math.hypot(x, y, z)
+  // 合理地心距（LEO 最低约 6500 km，深空远小于 100000 km）
+  return r > 6300 && r < 100000 ? [x, y, z] : null
+}
+
 /** 编目元信息（object_type 等）：型号解析与标签类型显示共用，取自左栏同一份编目快照 */
 function catalogMetaOf(norad: number): { objectType: string; name: string } {
   const p = useCatalog().cloudList.value.find((c) => c.norad_id === norad)
@@ -219,8 +236,8 @@ export async function buildEventCloudItems(
   const out: (EventCloudItem & { pos: THREE.Vector3 })[] = []
   let skipped = 0
   for (const ev of raw) {
-    const a = positionOf(ev.noradA, ev.tcaMs)
-    const b = ev.noradB !== ev.noradA ? positionOf(ev.noradB, ev.tcaMs) : null
+    const a = storedPos(ev.posA) ?? positionOf(ev.noradA, ev.tcaMs)
+    const b = ev.noradB !== ev.noradA ? (storedPos(ev.posB) ?? positionOf(ev.noradB, ev.tcaMs)) : null
     let r: [number, number, number] | null = null
     if (a && b) r = [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2, (a[2] + b[2]) / 2]
     else r = a ?? b
@@ -388,8 +405,8 @@ function conjPairPositions(
   outA: THREE.Vector3,
   outB: THREE.Vector3
 ): { a: boolean; b: boolean } {
-  const pa = positionOf(ev.noradA, ev.tcaMs)
-  const pb = ev.noradB !== ev.noradA ? positionOf(ev.noradB, ev.tcaMs) : null
+  const pa = storedPos(ev.posA) ?? positionOf(ev.noradA, ev.tcaMs)
+  const pb = ev.noradB !== ev.noradA ? (storedPos(ev.posB) ?? positionOf(ev.noradB, ev.tcaMs)) : null
   const va = pa ? eciToScene(pa[0], pa[1], pa[2]) : null
   const vb = pb ? eciToScene(pb[0], pb[1], pb[2]) : null
   if (!va && !vb) return { a: false, b: false }

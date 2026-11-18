@@ -68,6 +68,13 @@ export interface ScreenEventRow {
   sec_age_h: number | null
   level: 'red' | 'orange' | 'yellow'
   diluted: number
+  /** TCA 时刻主星/副星 TEME 位置（km），事件云锚点与交会放大态直接使用 */
+  a_x: number | null
+  a_y: number | null
+  a_z: number | null
+  b_x: number | null
+  b_y: number | null
+  b_z: number | null
   cdm_id: string | null
   cdm_pc: number | null
   pc_source: 'core' | 'cdm'

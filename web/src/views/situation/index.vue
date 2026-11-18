@@ -328,7 +328,10 @@ function toCloudItem(e: ConjunctionEvent): EventCloudItem {
     pc: e.pc,
     missKm: e.missKm,
     relSpeedKmS: e.relSpeedKmS,
-    cdmCount: e.cdmCount
+    cdmCount: e.cdmCount,
+    // 筛查事件带 TCA 实测状态向量：AOE/星历主星源与编目 TLE 不同源，不能再用 TLE 复算
+    posA: e.posA,
+    posB: e.posB
   }
 }
 
