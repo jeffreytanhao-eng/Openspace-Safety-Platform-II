@@ -33,6 +33,9 @@ export interface EventCloudItem {
   /** 筛查事件自带的 TCA 时刻双方 TEME 位置（km），优先于 TLE 复算 */
   posA?: [number, number, number]
   posB?: [number, number, number]
+  /** 筛查事件自带的 TCA 时刻双方 TEME 速度（km/s），用于两体推进真实轨道 */
+  velA?: [number, number, number]
+  velB?: [number, number, number]
   /** R2-15：TCA 交会点大地坐标（由事件锚点 ECI 状态换算，纬度/经度 度、高度 km） */
   latDeg?: number
   lonDeg?: number
@@ -164,6 +167,15 @@ function storedPos(v?: [number, number, number]): [number, number, number] | nul
   const r = Math.hypot(x, y, z)
   // 合理地心距（LEO 最低约 6500 km，深空远小于 100000 km）
   return r > 6300 && r < 100000 ? [x, y, z] : null
+}
+
+/** 事件自带速度向量校验（km/s）：老数据 null/0 与异常量级一律视为缺失 */
+function storedVel(v?: [number, number, number]): [number, number, number] | null {
+  if (!v) return null
+  const [x, y, z] = v
+  if (![x, y, z].every((n) => Number.isFinite(n))) return null
+  const s = Math.hypot(x, y, z)
+  return s > 0.05 && s < 20 ? [x, y, z] : null
 }
 
 /** 编目元信息（object_type 等）：型号解析与标签类型显示共用，取自左栏同一份编目快照 */
@@ -396,6 +408,32 @@ function orbitByState(norad: number, tcaMs: number): THREE.Vector3[] | null {
 }
 
 /**
+ * 事件自带 TCA 状态向量 → 一个完整轨道周期的二体采样。
+ * AOE / 星历主星源的真实轨道与编目 TLE 可能不是同一目标（相差可达数千 km），
+ * 必须用库里存的 TCA 位置+速度推进，才能画出与模型锚点重合的真实轨道。
+ */
+function orbitByTcaState(
+  r0: [number, number, number],
+  v0: [number, number, number]
+): THREE.Vector3[] | null {
+  const rmag = Math.hypot(r0[0], r0[1], r0[2])
+  const vmag = Math.hypot(v0[0], v0[1], v0[2])
+  const mu = 398600.4418
+  const a = 1 / (2 / rmag - (vmag * vmag) / mu)
+  // 非椭圆（a ≤ 0 或数值异常）直接放弃，交给 TLE 兜底
+  if (!Number.isFinite(a) || a <= 0) return null
+  const periodSec = 2 * Math.PI * Math.sqrt((a * a * a) / mu)
+  const pts: THREE.Vector3[] = []
+  for (let i = 0; i <= CONJ_ORBIT_SAMPLES; i++) {
+    const dt = -periodSec / 2 + (periodSec * i) / CONJ_ORBIT_SAMPLES
+    const s = twoBodyPropagate(r0, v0, dt)
+    if (!s) return null
+    pts.push(eciToScene(s.r[0], s.r[1], s.r[2]))
+  }
+  return pts
+}
+
+/**
  * 交会双方在 TCA 的真实场景位置。
  * 真实脱靶距离在 1 单位 = 6371 km 尺度下极小（常常只有 0.1–1 km），双方模型会完全重叠；
  * 这里仅对「显示位置」做最小间距分离，真实 miss 仍以事件卡/详情数值为准。
@@ -464,8 +502,19 @@ async function buildFocus(token: number, ev: EventCloudItem & { pos: THREE.Vecto
   }
   if (token !== focusToken) return
 
-  const addOrbit = (norad: number, color: number) => {
-    const pts = orbitByTle(norad, ev.tcaMs) ?? orbitByState(norad, ev.tcaMs)
+  const addOrbit = (
+    norad: number,
+    color: number,
+    pos?: [number, number, number],
+    vel?: [number, number, number]
+  ) => {
+    const r0 = storedPos(pos)
+    const v0 = storedVel(vel)
+    // 事件自带 TCA 状态优先（与模型锚点同源）；缺失或非椭圆再回落 TLE / 快照两体
+    const pts =
+      (r0 && v0 ? orbitByTcaState(r0, v0) : null) ??
+      orbitByTle(norad, ev.tcaMs) ??
+      orbitByState(norad, ev.tcaMs)
     if (!pts || pts.length < 2) return
     const line = new THREE.Line(
       new THREE.BufferGeometry().setFromPoints(pts),
@@ -474,8 +523,8 @@ async function buildFocus(token: number, ev: EventCloudItem & { pos: THREE.Vecto
     line.name = `ospConjOrbit_${norad}`
     g.add(line)
   }
-  addOrbit(ev.noradA, 0x62d0ff)
-  if (ev.noradB !== ev.noradA) addOrbit(ev.noradB, 0xffb066)
+  addOrbit(ev.noradA, 0x62d0ff, ev.posA, ev.velA)
+  if (ev.noradB !== ev.noradA) addOrbit(ev.noradB, 0xffb066, ev.posB, ev.velB)
 
   const posA = new THREE.Vector3()
   const posB = new THREE.Vector3()

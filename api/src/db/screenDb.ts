@@ -75,6 +75,13 @@ export interface ScreenEventRow {
   b_x: number | null
   b_y: number | null
   b_z: number | null
+  /** TCA 时刻主星/副星 TEME 速度（km/s），交会放大态据此两体推进真实轨道 */
+  a_vx: number | null
+  a_vy: number | null
+  a_vz: number | null
+  b_vx: number | null
+  b_vy: number | null
+  b_vz: number | null
   cdm_id: string | null
   cdm_pc: number | null
   pc_source: 'core' | 'cdm'
@@ -146,6 +153,12 @@ CREATE TABLE IF NOT EXISTS \`conjunction_events\` (
   \`b_x\`               double NULL COMMENT '副星 TCA 时刻 TEME 位置 x (km)',
   \`b_y\`               double NULL COMMENT '副星 TCA 时刻 TEME 位置 y (km)',
   \`b_z\`               double NULL COMMENT '副星 TCA 时刻 TEME 位置 z (km)',
+  \`a_vx\`              double NULL COMMENT '主星 TCA 时刻 TEME 速度 x (km/s)',
+  \`a_vy\`              double NULL COMMENT '主星 TCA 时刻 TEME 速度 y (km/s)',
+  \`a_vz\`              double NULL COMMENT '主星 TCA 时刻 TEME 速度 z (km/s)',
+  \`b_vx\`              double NULL COMMENT '副星 TCA 时刻 TEME 速度 x (km/s)',
+  \`b_vy\`              double NULL COMMENT '副星 TCA 时刻 TEME 速度 y (km/s)',
+  \`b_vz\`              double NULL COMMENT '副星 TCA 时刻 TEME 速度 z (km/s)',
   \`cdm_id\`            varchar(64) NULL,
   \`cdm_pc\`            double NULL,
   \`pc_source\`         varchar(10) NOT NULL DEFAULT 'core' COMMENT 'core|cdm',
@@ -184,6 +197,31 @@ async function ensureJobColumns(): Promise<void> {
   }
 }
 
+/**
+ * 老库补列：conjunction_events 的 TCA 状态向量（位置 + 速度）。
+ * 已有生产库只有位置列，速度列靠这里幂等补齐；重复列错误忽略。
+ */
+async function ensureEventColumns(): Promise<void> {
+  const cols = [
+    "ADD COLUMN `a_vx` double NULL COMMENT '主星 TCA 时刻 TEME 速度 x (km/s)'",
+    "ADD COLUMN `a_vy` double NULL COMMENT '主星 TCA 时刻 TEME 速度 y (km/s)'",
+    "ADD COLUMN `a_vz` double NULL COMMENT '主星 TCA 时刻 TEME 速度 z (km/s)'",
+    "ADD COLUMN `b_vx` double NULL COMMENT '副星 TCA 时刻 TEME 速度 x (km/s)'",
+    "ADD COLUMN `b_vy` double NULL COMMENT '副星 TCA 时刻 TEME 速度 y (km/s)'",
+    "ADD COLUMN `b_vz` double NULL COMMENT '副星 TCA 时刻 TEME 速度 z (km/s)'"
+  ]
+  for (const c of cols) {
+    try {
+      await pool.query(`ALTER TABLE \`conjunction_events\` ${c}`)
+    } catch (e) {
+      const code = (e as { code?: string }).code
+      if (code !== 'ER_DUP_FIELDNAME') {
+        console.error('[screen] alter conjunction_events failed:', (e as Error).message)
+      }
+    }
+  }
+}
+
 export function ensureScreenSchema(): Promise<boolean> {
   if (!schemaReady) {
     // mysql2 单次 query 不支持多语句，双表分两条顺序执行
@@ -191,6 +229,7 @@ export function ensureScreenSchema(): Promise<boolean> {
       .query(SCHEMA_JOBS)
       .then(() => ensureJobColumns())
       .then(() => pool.query(SCHEMA_EVENTS))
+      .then(() => ensureEventColumns())
       .then(() => true)
       .catch((e) => {
         console.error('[screen] ensure schema failed:', (e as Error).message)

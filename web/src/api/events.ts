@@ -39,6 +39,9 @@ export interface ConjunctionEvent {
   /** 筛查事件：TCA 时刻双方 TEME 位置（km），事件云锚点/交会放大态优先使用 */
   posA?: [number, number, number]
   posB?: [number, number, number]
+  /** 筛查事件：TCA 时刻双方 TEME 速度（km/s），交会放大态据此两体推进真实轨道 */
+  velA?: [number, number, number]
+  velB?: [number, number, number]
 }
 
 /** 交会列表数据源：CDM 走 sat_cdm；tle/ephem/aoe 走本组织已完成筛查任务 */

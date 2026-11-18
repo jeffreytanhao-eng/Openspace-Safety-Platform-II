@@ -137,6 +137,9 @@ export interface ConjunctionEvent {
   /** 筛查事件：TCA 时刻双方 TEME 位置（km）。AOE/星历主星源与编目 TLE 不一致，锚点必须用实测状态 */
   posA?: [number, number, number]
   posB?: [number, number, number]
+  /** 筛查事件：TCA 时刻双方 TEME 速度（km/s），放大态据此两体推进真实轨道 */
+  velA?: [number, number, number]
+  velB?: [number, number, number]
 }
 
 const GAP_MS = 3 * 3600 * 1000
@@ -336,6 +339,14 @@ function posTuple(x: unknown, y: unknown, z: unknown): [number, number, number] 
   return v.every((n) => Number.isFinite(n)) ? v : undefined
 }
 
+/** 筛查行内 TCA 速度向量（km/s）→ 元组；老数据/占位 0 与异常量级一律忽略 */
+function velTuple(x: unknown, y: unknown, z: unknown): [number, number, number] | undefined {
+  const v = posTuple(x, y, z)
+  if (!v) return undefined
+  const s = Math.hypot(v[0], v[1], v[2])
+  return s > 0.05 && s < 20 ? v : undefined
+}
+
 function screenRowsToEvents(
   rows: OrgScreenEventRow[],
   primarySource: 'tle' | 'ephem' | 'aoe'
@@ -369,7 +380,9 @@ function screenRowsToEvents(
       sources: [`screen-${primarySource}`],
       dataSource: 'system_pool',
       posA: posTuple(e.a_x, e.a_y, e.a_z),
-      posB: posTuple(e.b_x, e.b_y, e.b_z)
+      posB: posTuple(e.b_x, e.b_y, e.b_z),
+      velA: velTuple(e.a_vx, e.a_vy, e.a_vz),
+      velB: velTuple(e.b_vx, e.b_vy, e.b_vz)
     })
   }
   events.sort((x, y) => LEVEL_RANK[y.level] - LEVEL_RANK[x.level] || x.tca.localeCompare(y.tca))

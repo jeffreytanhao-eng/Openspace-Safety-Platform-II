@@ -623,6 +623,13 @@ async function runCdmCompareJob(
       null,
       null,
       null,
+      // 速度列：CDM 复核无 TCA 状态向量，留空（前端回落 TLE 轨道）
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
       r.cdm_id ?? null,
       pc,
       'cdm'
@@ -640,7 +647,8 @@ async function runCdmCompareJob(
            (job_id, org_id, primary_object_id, primary_norad, primary_name, secondary_norad, secondary_name,
             tca, miss_km, miss_r_km, miss_t_km, miss_n_km, rel_speed_kms, pc, pc_max, pc_method, hbr_m,
             sigma_p_src, sigma_p_t_km, sigma_s_src, sigma_s_t_km, sec_epoch, sec_age_h, level, diluted,
-            a_x, a_y, a_z, b_x, b_y, b_z, cdm_id, cdm_pc, pc_source)
+            a_x, a_y, a_z, b_x, b_y, b_z, a_vx, a_vy, a_vz, b_vx, b_vy, b_vz,
+            cdm_id, cdm_pc, pc_source)
            VALUES ?`,
           [values.slice(i, i + 500)]
         )
@@ -924,8 +932,8 @@ async function runJobInner(
     if (!lv) continue
 
     const rtn = missRTN(refined.rP, refined.vP, refined.miss)
-    const aTeme = j2000ToTeme(refined.rP, refined.vP, refined.tcaMs).r
-    const bTeme = j2000ToTeme(refined.rS, refined.vS, refined.tcaMs).r
+    const aTeme = j2000ToTeme(refined.rP, refined.vP, refined.tcaMs)
+    const bTeme = j2000ToTeme(refined.rS, refined.vS, refined.tcaMs)
 
     const objRow = objs.find((o) => Number(o.norad_id) === primary.noradId)
     const ev: EventInsert = {
@@ -955,12 +963,19 @@ async function runJobInner(
         covS.ageHours,
         lv.level,
         lv.diluted ? 1 : 0,
-        aTeme[0],
-        aTeme[1],
-        aTeme[2],
-        bTeme[0],
-        bTeme[1],
-        bTeme[2],
+        aTeme.r[0],
+        aTeme.r[1],
+        aTeme.r[2],
+        bTeme.r[0],
+        bTeme.r[1],
+        bTeme.r[2],
+        // TCA 时刻双方速度（TEME km/s）：交会放大态用位置+速度两体推进真实轨道
+        aTeme.v[0],
+        aTeme.v[1],
+        aTeme.v[2],
+        bTeme.v[0],
+        bTeme.v[1],
+        bTeme.v[2],
         cdm?.cdmId ?? null,
         cdm?.pc ?? null,
         cdm ? 'cdm' : 'core'
@@ -980,7 +995,8 @@ async function runJobInner(
            (job_id, org_id, primary_object_id, primary_norad, primary_name, secondary_norad, secondary_name,
             tca, miss_km, miss_r_km, miss_t_km, miss_n_km, rel_speed_kms, pc, pc_max, pc_method, hbr_m,
             sigma_p_src, sigma_p_t_km, sigma_s_src, sigma_s_t_km, sec_epoch, sec_age_h, level, diluted,
-            a_x, a_y, a_z, b_x, b_y, b_z, cdm_id, cdm_pc, pc_source)
+            a_x, a_y, a_z, b_x, b_y, b_z, a_vx, a_vy, a_vz, b_vx, b_vy, b_vz,
+            cdm_id, cdm_pc, pc_source)
            VALUES ?`,
           [rows.slice(i, i + 500)]
         )

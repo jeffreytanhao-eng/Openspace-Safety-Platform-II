@@ -331,7 +331,10 @@ function toCloudItem(e: ConjunctionEvent): EventCloudItem {
     cdmCount: e.cdmCount,
     // 筛查事件带 TCA 实测状态向量：AOE/星历主星源与编目 TLE 不同源，不能再用 TLE 复算
     posA: e.posA,
-    posB: e.posB
+    posB: e.posB,
+    // 位置 + 速度两体推进，才能画出放大态的真实轨道（TLE 复算会偏出屏幕）
+    velA: e.velA,
+    velB: e.velB
   }
 }
 
