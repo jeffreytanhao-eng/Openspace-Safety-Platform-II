@@ -282,6 +282,61 @@ function buildRows(
   return out
 }
 
+/**
+ * 上游 GCAT 把 2025-197A / 2025-197B 两个目标弄反了：把 KAIYUN-1 挂在 65488（197A），
+ * 把 ZHIXIN-1 挂在 65489（197B）；公开目录（AOE 规范示例、spacemapper）为
+ * KAIYUN-1 = 65489 / 2025-197B。这里只交换描述字段，jcat / norad_id / piece / 发射信息保持不动。
+ * 若上游已修正（名称不再匹配），则跳过，避免二次交换。
+ */
+const KNOWN_SWAPS: Array<{ a: string; b: string; nameA: RegExp; nameB: RegExp; pieceA: string; pieceB: string }> = [
+  { a: 'S65488', b: 'S65489', nameA: /kaiyun/i, nameB: /zhixin/i, pieceA: '2025-197A', pieceB: '2025-197B' }
+]
+
+const SWAP_FIELDS = [
+  'sat_type',
+  'name',
+  'owner',
+  'owner_code',
+  'country',
+  'country_code',
+  'purpose',
+  'purpose_codes',
+  'payload',
+  'manufacturer',
+  'manufacturer_code',
+  'length_m',
+  'diameter_m',
+  'span_m',
+  'catalog_size',
+  'shape',
+  'bus',
+  'catalog_mass_kg'
+] as const
+
+function applyKnownSwaps(rows: CatalogProfileInsert[]): number {
+  let applied = 0
+  for (const rule of KNOWN_SWAPS) {
+    const ra = rows.find((r) => r.jcat === rule.a)
+    const rb = rows.find((r) => r.jcat === rule.b)
+    if (!ra || !rb) continue
+    if (
+      ra.piece !== rule.pieceA || rb.piece !== rule.pieceB ||
+      !rule.nameA.test(ra.name ?? '') || !rule.nameB.test(rb.name ?? '')
+    ) {
+      continue
+    }
+    const xa = ra as unknown as Record<string, unknown>
+    const xb = rb as unknown as Record<string, unknown>
+    for (const f of SWAP_FIELDS) {
+      const tmp = xa[f]
+      xa[f] = xb[f]
+      xb[f] = tmp
+    }
+    applied++
+  }
+  return applied
+}
+
 export interface GcatIngestResult {
   written: number
   total: number
@@ -332,6 +387,8 @@ export async function runGcatIngest(opts: { download?: boolean; dir?: string } =
     ? `${shortUpdated(satA.updated)}; 100k ${shortUpdated(satB.updated)}`
     : shortUpdated(satA.updated || satB.updated)
   const rows = buildRows(satRows, sourceUpdated, psatByJcat, orgs, sites, launches)
+  const swapped = applyKnownSwaps(rows)
+  if (swapped) console.log(`[gcat] applied ${swapped} known catalog correction(s)`)
 
   if (!(await ensureCatalogProfileSchema())) {
     throw new Error('数据库不可用，无法创建 sat_catalog_profile')
