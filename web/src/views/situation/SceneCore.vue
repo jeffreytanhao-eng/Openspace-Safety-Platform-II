@@ -810,6 +810,8 @@ function loop(now: number) {
   updateEventCloud(simMs)
   updateEventCloudFocus(now / 1000)
   updateConjLabels()
+  // 事件锚点在惯性系固定，ECEF 随地球自转：不刷新会让滚轮枢轴越缩越偏
+  if (conjFocusPos) setEventFocusScene(conjFocusPos, simMs)
 
   const flying = updateCameraFly(now)
 
@@ -1143,16 +1145,24 @@ function showEventCloud(items: (EventCloudItem & { pos: THREE.Vector3 })[] | nul
   else clearEventCloud(scene)
 }
 
+/** 选中事件的世界坐标锚点（每帧按仿真时刻刷新 ECEF 枢轴，避免时间推进后滚轮枢轴漂移） */
+let conjFocusPos: THREE.Vector3 | null = null
+
 /** 深链/列表定位：相机飞向事件云锚点并高亮；fly=false 仅高亮（点击场景已可见）；key=null 取消高亮 */
 function focusEventCloud(key: string | null, fly = true): boolean {
   setEventCloudSelected(key)
   if (!key) {
+    conjFocusPos = null
     setEventFocusScene(null, simMs)
     return true
   }
-  if (!getEventCloudAnchor(key, _trackPos)) return false
+  if (!getEventCloudAnchor(key, _trackPos)) {
+    conjFocusPos = null
+    return false
+  }
+  conjFocusPos = _trackPos.clone()
   // 滚轮以事件为固定枢轴：缩放只沿视线推拉，事件不会漂出屏幕正中
-  setEventFocusScene(_trackPos, simMs)
+  setEventFocusScene(conjFocusPos, simMs)
   // R2-7：交会选中近景（双方模型 + 双方轨道 + 白圈）
   if (camera && fly) framePointAtDist(_trackPos, CONJ_CAM_DIST)
   return true

@@ -390,12 +390,36 @@ export async function initCesium(container: HTMLElement, hooks?: CesiumInitHooks
       if (!canvasH || typeof fovy !== 'number') return 0
       // 跟踪模式（绕目标旋转）：画面转动与光标位移 1:1。这里不能用 d/R——
       // 跟星时相机距目标只有约 0.15R，会把每像素转角压到 1/7，拖起来发涩、像拖不动。
-      if (orbitFocusCart) return fovy / canvasH
+      // 交会聚焦同理：相机离事件仅 CONJ_CAM_DIST（约 0.05R），绕地心标定会放大成 2 倍以上并甩动地球。
+      if (orbitFocusCart || eventFocusCart) return fovy / canvasH
       // 绕地心旋转：让光标下的地表跟着光标走，需按「相机到地表距离 / 地球半径」放大
       const earthM = EARTH_RADIUS_KM * 1000
       const d = Cs.Cartesian3.magnitude(cam.positionWC) - earthM
       const ratio = Math.min(6, Math.max(0.06, d / earthM))
       return (fovy / canvasH) * ratio
+    }
+
+    /**
+     * 相机当前「屏幕上方」方向（对视线正交化）；退化时回退当地天顶。
+     * 交会聚焦机位是沿地心径向俯视事件，当地天顶与视线几乎平行，若拿天顶当偏航轴：
+     * 水平拖动无效，俯仰轴（天顶×视线）趋近零向量、数值抖动 → 画面会突然反向。
+     */
+    const screenUpAt = (
+      cam: import('cesium').Camera,
+      focus: import('cesium').Cartesian3,
+      dir: import('cesium').Cartesian3
+    ): import('cesium').Cartesian3 => {
+      const up = Cs.Cartesian3.clone(cam.upWC)
+      const d = Cs.Cartesian3.dot(up, dir)
+      const ortho = Cs.Cartesian3.subtract(
+        up,
+        Cs.Cartesian3.multiplyByScalar(dir, d, new Cs.Cartesian3()),
+        new Cs.Cartesian3()
+      )
+      if (Cs.Cartesian3.magnitudeSquared(ortho) < 1e-8) {
+        return Cs.Ellipsoid.WGS84.geodeticSurfaceNormal(focus, new Cs.Cartesian3())
+      }
+      return Cs.Cartesian3.normalize(ortho, ortho)
     }
 
     /** 按屏幕像素位移旋转相机（拖拽与惯性共用） */
@@ -405,26 +429,44 @@ export async function initCesium(container: HTMLElement, hooks?: CesiumInitHooks
       const k = radPerPx(cam)
       if (!k) return
       // Track/select focus: orbit around target (old OrbitControls.target = sat), keep looking at it.
-      if (orbitFocusCart) {
-        const focus = orbitFocusCart
+      // 交会聚焦同样绕事件点旋转（而不是绕地心）：否则近景一次拖拽就会把地球甩过去/反向。
+      const focusCart = orbitFocusCart ?? eventFocusCart
+      if (focusCart) {
+        const focus = focusCart
         const offset = Cs.Cartesian3.subtract(cam.positionWC, focus, new Cs.Cartesian3())
-        const up = Cs.Ellipsoid.WGS84.geodeticSurfaceNormal(focus, new Cs.Cartesian3())
-        const qYaw = Cs.Quaternion.fromAxisAngle(up, -dx * k)
-        const mYaw = Cs.Matrix3.fromQuaternion(qYaw)
-        let newOffset = Cs.Matrix3.multiplyByVector(mYaw, offset, new Cs.Cartesian3())
-        const right = Cs.Cartesian3.cross(up, newOffset, new Cs.Cartesian3())
-        if (Cs.Cartesian3.magnitudeSquared(right) > 1e-12) {
-          Cs.Cartesian3.normalize(right, right)
-          const qPitch = Cs.Quaternion.fromAxisAngle(right, -dy * k)
-          const mPitch = Cs.Matrix3.fromQuaternion(qPitch)
-          newOffset = Cs.Matrix3.multiplyByVector(mPitch, newOffset, new Cs.Cartesian3())
-        }
+        if (Cs.Cartesian3.magnitudeSquared(offset) < 1e-8) return
+        const dir = Cs.Cartesian3.normalize(
+          Cs.Cartesian3.negate(offset, new Cs.Cartesian3()),
+          new Cs.Cartesian3()
+        )
+        // 用相机自身屏幕上方作偏航轴（而非当地天顶），径向俯视机位也不会退化
+        const up = screenUpAt(cam, focus, dir)
+        const mYaw = Cs.Matrix3.fromQuaternion(Cs.Quaternion.fromAxisAngle(up, -dx * k))
+        const yawed = Cs.Matrix3.multiplyByVector(mYaw, offset, new Cs.Cartesian3())
+        // 偏航后俯仰轴随视线一起转，必须重算，否则轴会漂移导致「越拖越偏」
+        const dir1 = Cs.Cartesian3.normalize(
+          Cs.Cartesian3.negate(yawed, new Cs.Cartesian3()),
+          new Cs.Cartesian3()
+        )
+        const right = Cs.Cartesian3.normalize(
+          Cs.Cartesian3.cross(dir1, up, new Cs.Cartesian3()),
+          new Cs.Cartesian3()
+        )
+        const mPitch = Cs.Matrix3.fromQuaternion(Cs.Quaternion.fromAxisAngle(right, -dy * k))
+        const newOffset = Cs.Matrix3.multiplyByVector(mPitch, yawed, new Cs.Cartesian3())
         const newPos = Cs.Cartesian3.add(focus, newOffset, new Cs.Cartesian3())
-        const dir = Cs.Cartesian3.subtract(focus, newPos, new Cs.Cartesian3())
-        Cs.Cartesian3.normalize(dir, dir)
+        const newDir = Cs.Cartesian3.normalize(
+          Cs.Cartesian3.subtract(focus, newPos, new Cs.Cartesian3()),
+          new Cs.Cartesian3()
+        )
+        // 上向量由俯仰轴与最终视线推出，保持与视线正交，避免 setView 内部再纠正造成翻滚
+        const newUp = Cs.Cartesian3.normalize(
+          Cs.Cartesian3.cross(right, newDir, new Cs.Cartesian3()),
+          new Cs.Cartesian3()
+        )
         cam.setView({
           destination: newPos,
-          orientation: { direction: dir, up }
+          orientation: { direction: newDir, up: newUp }
         })
         return
       }
@@ -582,7 +624,9 @@ export async function initCesium(container: HTMLElement, hooks?: CesiumInitHooks
         Cesium.Cartesian3.subtract(focus, newPos, new Cesium.Cartesian3()),
         new Cesium.Cartesian3()
       )
-      const up = Cesium.Ellipsoid.WGS84.geodeticSurfaceNormal(focus, new Cesium.Cartesian3())
+      // 滚轮只做推拉：沿用相机当前上向量（对视线正交化）。
+      // 若每次都用当地天顶重置 up，拖拽/环绕后的 roll 会在缩放瞬间被拉回，表现为地球「自动转了一个角度」。
+      const up = screenUpAt(cam, focus, dir)
       cam.setView({ destination: newPos, orientation: { direction: dir, up } })
     }
     canvasEl.addEventListener('wheel', onCanvasWheel, { capture: true, passive: false })
