@@ -1,10 +1,13 @@
 # 对外公开 API 开发文档（发射简报 v1）
 
-面向外部调用方的 5 日发射简报接口：中英双语任务信息、预估发射参数、场址几何拟合初始轨道，以及可直接嵌入的 2D 底图仿真图（SVG）。
+面向外部调用方的开放接口，包含两部分数据：
+
+- **5 日发射简报**：中英双语任务信息、预估发射参数、场址几何拟合初始轨道，以及可直接嵌入的 2D 底图仿真图（SVG）；
+- **每日热点资讯**：中英双语标题与摘要、发布日期、媒体名、原文直链。
 
 - 版本：`v1`
 - 路径前缀：`/api/v1/open`
-- 数据形态：滚动窗口 `now → now + N 天`（UTC），默认 5 天、上限 7 天
+- 数据形态：发射为滚动窗口 `now → now + N 天`（UTC）；资讯取最新一期计划的日切快照
 - 传输：HTTP/HTTPS + JSON（UTF-8）；地图为 `image/svg+xml`
 
 ---
@@ -25,6 +28,8 @@ Authorization: Bearer <your-key>
 
 Key 由服务方线下分配。服务端以调用方名称做限流（同名 Key 共享配额）。
 
+> `/api/v1/open/hotspots` 额外启用**来源 IP 白名单**：只有白名单内的服务器可调用（经 nginx 转发，按 `X-Forwarded-For` 最后一跳判定），其余返回 `403`。
+
 ### 1.2 限流
 
 - 默认 **60 次/分钟/调用方**，Redis 固定窗口；
@@ -36,6 +41,7 @@ Key 由服务方线下分配。服务端以调用方名称做限流（同名 Key
 | 状态码 | 含义 | 处理建议 |
 |---|---|---|
 | `401` | 缺少或无效 API Key | 检查请求头，联系服务方确认 Key 状态 |
+| `403` | 来源 IP 不在白名单（仅热点资讯接口） | 由服务方把调用方出口 IP 加入白名单 |
 | `404` | `ll2_id` 不存在，或该条缺少生成仿真图所需的场址/倾角/方位参数 | 先查列表接口确认 id；地图 404 时降级为不展示图片 |
 | `429` | 超过每分钟配额 | 按 `Retry-After` 退避；列表与地图建议本地缓存 |
 | `503` | 对外接口未启用或未配置 Key | 联系服务方 |
@@ -48,6 +54,7 @@ Key 由服务方线下分配。服务端以调用方名称做限流（同名 Key
 | 发射列表 | 60 秒 | 30–60 秒；按 `window_days` 分别缓存 |
 | 单条详情 | 无（数据量小） | 60 秒 |
 | SVG 地图 | 24 小时（参数变化自动失效） | 按 URL 长缓存，图片 URL 稳定可 CDN 化 |
+| 热点资讯 | 60 秒 | 5–15 分钟（日切每日更新两次） |
 
 `map.svg` 响应带 `ETag`，可用 `If-None-Match` 走 `304`。
 
@@ -58,6 +65,7 @@ Key 由服务方线下分配。服务端以调用方名称做限流（同名 Key
 | Base URL | `http://39.96.81.164:8080` |
 | 路径前缀 | `/api/v1/open` |
 | Key 分配 | 线下分配（当前调用方名称 `external`，每 Key 60 次/分钟） |
+| 在线文档 | `http://39.96.81.164:8080/docs`（仅白名单 IP 可访问，其余 403） |
 
 ```bash
 curl -s "http://39.96.81.164:8080/api/v1/open/launches?window_days=5" \
@@ -73,6 +81,7 @@ curl -s "http://39.96.81.164:8080/api/v1/open/launches?window_days=5" \
 | GET | `/api/v1/open/launches` | 窗口内发射列表（默认 5 日） |
 | GET | `/api/v1/open/launches/{ll2_id}` | 单条发射详情（不限窗口） |
 | GET | `/api/v1/open/launches/{ll2_id}/map.svg` | 2D 底图仿真图（SVG） |
+| GET | `/api/v1/open/hotspots` | 每日太空安全热点资讯（双语，IP 白名单） |
 | GET | `/api/v1/open/meta` | 枚举字典、窗口语义、免责声明 |
 
 ---
@@ -251,9 +260,10 @@ X-API-Key: <your-key>
 
 - `Content-Type: image/svg+xml`
 - 尺寸：2048×1024，等距圆柱投影（equirectangular）
-- 图层：海岸线底图、30° 经纬网、推算地面轨迹（跨 ±180° 自动断开）、**单个**发射场点、可选落区多边形
+- 图层：海岸线底图、30° 经纬网、推算地面轨迹（跨 ±180° 自动断开）、**单个**发射场点
+- 不含落区/警告区（NOTAM/NAVAREA）几何与相关数据
 - **不包含**观测站/地面站位置点，也**不包含**其他发射场点
-- 轨迹与 `initial_orbit` 同源（同一组 SGP4 传播点），参数与图天然一致
+- 轨迹自起飞时刻（NET）起笔于发射场，覆盖 6 小时；与 `initial_orbit` 同源（同一组 SGP4/TLE 根数），参数与图天然一致
 - 响应头：`ETag`、`Cache-Control: public, max-age=86400`
 
 ### 使用示例
@@ -277,7 +287,72 @@ X-API-Key: <your-key>
 
 ---
 
-## 6. 元数据接口
+## 6. 每日热点资讯接口
+
+```http
+GET /api/v1/open/hotspots?limit=20
+X-API-Key: <your-key>
+```
+
+- 数据源：本系统**当日最新计划内已展示的热点资讯**（与站内“今日资讯”同源），不另做跨日检索；当日快照尚未生成时返回空列表；
+- 口径：仅返回航天相关资讯，范围限定为军事航天（军用/侦察卫星、导弹预警与防御、太空军）、太空政策（预算/法规/军控）、太空态势感知、太空交通管理、在轨安全（碎片、解体、碰撞/交会、再入、在轨异常）、空间对抗（反卫、干扰/欺骗、网络、电子战）、空间天气、火箭发射（发射任务、结果、事故与残骸）；与航天无关的同名内容（产品发布、体育球队等）一律不下发；
+- 排序：按 `published_at` 倒序；同事件多源报道合并为一条（保留最新）；
+- **旧文剔除**：`published_at` 早于回看窗口的条目直接丢弃；若发布时间被刷新但 URL 内嵌日期（如 `/2025-03-02/`）早于窗口，或比发布时间早 3 天以上（媒体重推旧文），同样丢弃；
+- **原文链接（best-effort）**：只返回文章页直链；对只有搜索页/聚合转跳页的条目会尽力提取原文，取不到则整条不下发（不返回二次链接）；
+- **条数**：等于当日资讯经三重筛选（相关、去重、过期）后的实际条数，可为 0；不补位、不混入无关内容；
+- 每 60 秒服务端缓存，`Cache-Control: max-age=60`。
+
+### 6.1 查询参数
+
+| 参数 | 类型 | 默认 | 说明 |
+|---|---|---|---|
+| `limit` | int | 10 | 返回条数上限，1–20 |
+
+### 6.2 示例
+
+```json
+{
+  "window_days": 7,
+  "plan_date": "2026-11-19",
+  "generated_at": "2026-11-19T07:58:09Z",
+  "count": 1,
+  "items": [
+    {
+      "id": "0f0c1f0a-6b8e-4a63-9a4a-0d4b1f5b0c11",
+      "title": {
+        "en": "ESA Awards OHB €102M Contract for ClearSpace-1 Debris Removal Mission",
+        "zh": "欧空局授予 OHB 1.02 亿欧元合同开展 ClearSpace-1 碎片清除任务"
+      },
+      "published_at": "2026-11-19T06:41:35Z",
+      "published_date": "2026-11-19",
+      "media": {"en": "European Spaceflight", "zh": "European Spaceflight"},
+      "summary": {
+        "en": "The European Space Agency awarded OHB a contract to build and operate the ClearSpace-1 active debris removal mission.",
+        "zh": "欧空局授予 OHB 合同，建造并运营 ClearSpace-1 主动碎片清除任务。"
+      },
+      "url": "https://europeanspaceflight.com/esa-awards-ohb-contract/"
+    }
+  ]
+}
+```
+
+### 6.3 字段口径
+
+| 字段 | 说明 |
+|---|---|
+| `plan_date` | 所取当日计划的日期（按 Asia/Shanghai 切日） |
+| `generated_at` | 该期计划的生成时间（UTC） |
+| `window_days` | 过期判定使用的回看窗口（天） |
+| `title.en/zh` | 标题原文与中文机翻；中文缺失时回退原文 |
+| `published_at` | 原文发布时间（UTC，ISO 8601） |
+| `published_date` | 按 Asia/Shanghai 切日的发布日期，便于直接展示 |
+| `media.en/zh` | 媒体名：英文源保留品牌原名，中文源补英文品牌（如 新浪科技 → Sina Tech） |
+| `summary.en/zh` | 摘要原文与中文机翻；中文缺失时回退原文 |
+| `url` | 原文直链，不含搜索/聚合跳转 |
+
+---
+
+## 7. 元数据接口
 
 ```http
 GET /api/v1/open/meta
@@ -288,9 +363,9 @@ X-API-Key: <your-key>
 
 ---
 
-## 7. 参数与推算说明（重要）
+## 8. 参数与推算说明（重要）
 
-### 7.1 太阳同步轨道（SSO）倾角
+### 8.1 太阳同步轨道（SSO）倾角
 
 SSO 的倾角由轨道高度唯一确定，接口**不采用方位角反推值**，而是按高度档反解：
 
@@ -303,11 +378,11 @@ SSO 的倾角由轨道高度唯一确定，接口**不采用方位角反推值**
 
 此时 `estimate.inclination_basis = "sso_target"`，并在 `notes` 中写明所用高度。
 
-### 7.2 方位角
+### 8.2 方位角
 
 优先级：NOTAM/NAVAREA 警告几何 > 历史先验 > 由倾角与场址纬度反解（`derived_from_inclination`）。
 
-### 7.3 初始轨道
+### 8.3 初始轨道
 
 `initial_orbit.elements` 为历元时刻（默认 NET + 分离时间）的瞬时根数，`assumptions` 明确写出：
 
@@ -318,13 +393,13 @@ SSO 的倾角由轨道高度唯一确定，接口**不采用方位角反推值**
 
 `a_km` 为半长轴（含地球半径），`alt_km/apogee_km/perigee_km` 为相对地表高度。
 
-### 7.4 免责声明
+### 8.4 免责声明
 
 所有时间、方位角、倾角、初始轨道均为**基于公开信息的推算值**，不代表官方数据。响应中的 `disclaimer` 与每条记录的 `confidence` 字段请原样展示或保留。
 
 ---
 
-## 8. 服务端启用步骤（运维）
+## 9. 服务端启用步骤（运维）
 
 1. 在 `.env` 配置：
 
@@ -333,6 +408,9 @@ PUBLIC_API_KEYS=acme:xxxxxxxx,partner:yyyyyyyy
 PUBLIC_API_BASE_URL=https://ssa.example.com
 PUBLIC_API_RATE_LIMIT_PER_MIN=60
 PUBLIC_API_WINDOW_DAYS=5
+# 热点资讯：回看窗口天数（1-14）与来源 IP 白名单（逗号分隔，留空=不限制）
+PUBLIC_NEWS_WINDOW_DAYS=7
+PUBLIC_NEWS_IP_ALLOWLIST=123.57.41.32,127.0.0.1
 ```
 
 2. 重启 API 容器：
@@ -351,7 +429,7 @@ curl -s http://127.0.0.1:8001/api/v1/open/meta -H "X-API-Key: xxxxxxxx"
 
 ---
 
-## 9. 变更与兼容
+## 10. 变更与兼容
 
 - 新增字段视为向后兼容；
 - 字段删除/重命名、枚举值语义变化会升级路径版本（`/api/v2/open/...`）；
