@@ -183,7 +183,7 @@ function rowToDto(row: CatalogProfileRow): CatalogProfileDto {
 }
 
 /** Prefer a standard-catalog payload over attached stages / debris sharing a SATCAT number. */
-function preferenceSql(alias = ''): string {
+export function preferenceSql(alias = ''): string {
   const p = alias ? `${alias}.` : ''
   return ` (CASE WHEN ${p}jcat LIKE 'S%' THEN 1 ELSE 0 END) DESC,
            (CASE WHEN LEFT(IFNULL(${p}sat_type,''), 1) = 'P' THEN 1 ELSE 0 END) DESC,

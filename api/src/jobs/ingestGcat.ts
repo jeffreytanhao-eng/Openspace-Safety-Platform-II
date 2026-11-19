@@ -283,13 +283,24 @@ function buildRows(
 }
 
 /**
- * 上游 GCAT 把 2025-197A / 2025-197B 两个目标弄反了：把 KAIYUN-1 挂在 65488（197A），
- * 把 ZHIXIN-1 挂在 65489（197B）；公开目录（AOE 规范示例、spacemapper）为
- * KAIYUN-1 = 65489 / 2025-197B。这里只交换描述字段，jcat / norad_id / piece / 发射信息保持不动。
- * 若上游已修正（名称不再匹配），则跳过，避免二次交换。
+ * 上游 GCAT 把卫星描述信息挂到了错误的编目槽位。这里只交换描述字段，
+ * jcat / norad_id / piece / 发射信息保持不动（同一发射的日期/场地/火箭本来就相同）。
+ * 每次入库都会重新应用，因此不会被日切/周更覆盖；若上游已修正（名称不再匹配），
+ * 则跳过，避免二次交换。
+ *
+ * 已修正项：
+ *  - 2025-197A / 2025-197B：上游把 KAIYUN-1 挂在 65488（197A），把 ZHIXIN-1 挂在
+ *    65489（197B）；公开目录（AOE 规范示例、spacemapper）为 KAIYUN-1 = 65489 /
+ *    2025-197B。
+ *  - 2026-250C / 2026-250D：上游把 Zhongbei Daxue 1 / Juntian-1 06A 挂反
+ *    （对应 NORAD 101293 / 101294）。
+ *  - 2026-195A / 2026-195F：上游把 Jingan Mengxiang / Muduo 1B 挂反
+ *    （对应 NORAD 100465 / 100470）。
  */
 const KNOWN_SWAPS: Array<{ a: string; b: string; nameA: RegExp; nameB: RegExp; pieceA: string; pieceB: string }> = [
-  { a: 'S65488', b: 'S65489', nameA: /kaiyun/i, nameB: /zhixin/i, pieceA: '2025-197A', pieceB: '2025-197B' }
+  { a: 'S65488', b: 'S65489', nameA: /kaiyun/i, nameB: /zhixin/i, pieceA: '2025-197A', pieceB: '2025-197B' },
+  { a: 'S101293', b: 'S101294', nameA: /zhongbei/i, nameB: /juntian/i, pieceA: '2026-250C', pieceB: '2026-250D' },
+  { a: 'S100465', b: 'S100470', nameA: /jingan/i, nameB: /muduo/i, pieceA: '2026-195A', pieceB: '2026-195F' }
 ]
 
 const SWAP_FIELDS = [

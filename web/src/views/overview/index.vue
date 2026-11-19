@@ -351,6 +351,30 @@ async function saveReport() {
           </div>
         </aside>
 
+        <section class="panel news">
+          <header class="panel-h">
+            <div>
+              <div class="h-title">{{ t('ov.newsTitle') }}</div>
+              <div class="h-sub">{{ t('ov.newsSub') }}</div>
+            </div>
+          </header>
+          <div class="feed-list">
+            <div class="empty">{{ t('ov.newsEmpty') }}</div>
+          </div>
+        </section>
+
+        <section class="panel launch">
+          <header class="panel-h">
+            <div>
+              <div class="h-title">{{ t('ov.launchTitle') }}</div>
+              <div class="h-sub">{{ t('ov.launchSub') }}</div>
+            </div>
+          </header>
+          <div class="feed-list">
+            <div class="empty">{{ t('ov.launchEmpty') }}</div>
+          </div>
+        </section>
+
         <section class="panel safety">
           <header class="panel-h">
             <div>
@@ -443,8 +467,18 @@ async function saveReport() {
   flex: 1;
   min-height: 0;
   display: grid;
-  grid-template-columns: 300px 1fr;
+  /* 右区三等分：资讯 / 发射预报 / 关注事件（关注事件由整行宽度缩至 1/3 并靠右） */
+  grid-template-columns: 300px repeat(3, minmax(0, 1fr));
   gap: 10px;
+}
+.feed-list {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
 }
 .col-left {
   display: flex;

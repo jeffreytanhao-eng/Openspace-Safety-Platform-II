@@ -178,6 +178,15 @@ function storedVel(v?: [number, number, number]): [number, number, number] | nul
   return s > 0.05 && s < 20 ? [x, y, z] : null
 }
 
+/** 无 TLE 时的锚点来源：事件自带 TCA 位置，或编目快照状态向量 */
+function anchorCovered(
+  norad: number,
+  pos: [number, number, number] | undefined,
+  cloudIds: Set<number>
+): boolean {
+  return !!storedPos(pos) || cloudIds.has(norad)
+}
+
 /** 编目元信息（object_type 等）：型号解析与标签类型显示共用，取自左栏同一份编目快照 */
 function catalogMetaOf(norad: number): { objectType: string; name: string } {
   const p = useCatalog().cloudList.value.find((c) => c.norad_id === norad)
@@ -235,9 +244,16 @@ function eciToGeodetic(
 export async function buildEventCloudItems(
   raw: EventCloudItem[]
 ): Promise<{ items: (EventCloudItem & { pos: THREE.Vector3 })[]; skipped: number }> {
-  // R2-10：锚点与放大态模型统一按新鲜 TLE 计算，避免快照龄期导致锚点/模型错位
-  const { tleLineMap, loadTleLines } = useCatalog()
-  if (!tleLineMap.value.size) {
+  // R2-10：锚点与放大态模型统一按新鲜 TLE 计算，避免快照龄期导致锚点/模型错位。
+  // 但 35k 行全量约 5s：仅当有事件既无自带 TCA 位置、又不在编目快照内时才拉取（全量档通常无需）。
+  const { tleLineMap, loadTleLines, cloudList } = useCatalog()
+  const cloudIds = new Set(cloudList.value.map((c) => c.norad_id))
+  const needTle = raw.some(
+    (ev) =>
+      !anchorCovered(ev.noradA, ev.posA, cloudIds) ||
+      (ev.noradB !== ev.noradA && !anchorCovered(ev.noradB, ev.posB, cloudIds))
+  )
+  if (needTle && !tleLineMap.value.size) {
     try {
       await loadTleLines()
     } catch (e) {
@@ -356,13 +372,11 @@ export function updateEventCloudFocus(wallSec: number): void {
 
 /* ---------- 交会放大态：双方轨道 + 双方 3D 模型 ---------- */
 
-/** TLE → 以 TCA 为中心的一个完整轨道周期采样（连续椭圆，首尾闭合） */
-function orbitByTle(norad: number, tcaMs: number): THREE.Vector3[] | null {
-  const line = useCatalog().tleLineMap.value.get(norad)
-  if (!line) return null
+/** 两行 TLE → 以 TCA 为中心的一个完整轨道周期采样（连续椭圆，首尾闭合） */
+function orbitFromLines(l1: string, l2: string, tcaMs: number): THREE.Vector3[] | null {
   let satrec: ReturnType<typeof twoline2satrec>
   try {
-    satrec = twoline2satrec(line[0], line[1])
+    satrec = twoline2satrec(l1, l2)
   } catch {
     return null
   }
@@ -379,6 +393,38 @@ function orbitByTle(norad: number, tcaMs: number): THREE.Vector3[] | null {
     pts.push(eciToScene(p.x, p.y, p.z))
   }
   return pts
+}
+
+/** TLE 在 TCA 时刻的速度（km/s） */
+function velocityFromLines(
+  l1: string,
+  l2: string,
+  tcaMs: number
+): [number, number, number] | null {
+  try {
+    const pv = propagate(twoline2satrec(l1, l2), new Date(tcaMs))
+    const v = pv?.velocity
+    if (!v || !Number.isFinite(v.x) || !Number.isFinite(v.y) || !Number.isFinite(v.z)) return null
+    return [v.x, v.y, v.z]
+  } catch {
+    return null
+  }
+}
+
+/** 编目 TLE 缓存 → 轨道采样 */
+function orbitByTle(norad: number, tcaMs: number): THREE.Vector3[] | null {
+  const line = useCatalog().tleLineMap.value.get(norad)
+  return line ? orbitFromLines(line[0], line[1], tcaMs) : null
+}
+
+/** 单目标 TLE 兜底（旧事件只存了位置、没有速度列，避免为此拉 35k 行全量） */
+async function singleTleLines(norad: number): Promise<[string, string] | null> {
+  try {
+    const row = await useCatalog().fetchTleByNorad(norad)
+    return row?.tle_line1 && row?.tle_line2 ? [row.tle_line1, row.tle_line2] : null
+  } catch {
+    return null
+  }
 }
 
 /** 无 TLE 时由编目快照状态向量做二体椭圆采样（连续轨道兜底） */
@@ -431,6 +477,39 @@ function orbitByTcaState(
     pts.push(eciToScene(s.r[0], s.r[1], s.r[2]))
   }
   return pts
+}
+
+/**
+ * 交会放大态单侧轨道，来源必须与锚点一致才会「穿过」事件点：
+ * 1. 事件自带 TCA 位置+速度 → 直接两体推进（新筛查任务，最准）；
+ * 2. 只有 TCA 位置（旧任务的速度列为后加） → 取编目 TLE 在 TCA 的速度与事件位置成轨，
+ *    保证轨道穿过锚点；若直接用 TLE 位置成轨会与事件点错开，表现为「交会不在轨道上」；
+ * 3. 完全没有自带位置 → 锚点来自编目，轨道走 TLE / 快照，保持同源。
+ */
+async function resolveConjOrbit(
+  norad: number,
+  tcaMs: number,
+  pos?: [number, number, number],
+  vel?: [number, number, number]
+): Promise<THREE.Vector3[] | null> {
+  const r0 = storedPos(pos)
+  const v0 = storedVel(vel)
+  if (r0 && v0) {
+    const pts = orbitByTcaState(r0, v0)
+    if (pts) return pts
+  }
+  if (r0) {
+    const lines = useCatalog().tleLineMap.value.get(norad) ?? (await singleTleLines(norad))
+    if (lines) {
+      const v = velocityFromLines(lines[0], lines[1], tcaMs)
+      const pts = v ? orbitByTcaState(r0, v) : null
+      if (pts) return pts
+      const fallback = orbitFromLines(lines[0], lines[1], tcaMs)
+      if (fallback) return fallback
+    }
+    return orbitByState(norad, tcaMs)
+  }
+  return orbitByTle(norad, tcaMs) ?? orbitByState(norad, tcaMs)
 }
 
 /**
@@ -492,30 +571,15 @@ async function buildFocus(token: number, ev: EventCloudItem & { pos: THREE.Vecto
   const g = new THREE.Group()
   g.name = 'ospConjFocus'
 
-  const { tleLineMap, loadTleLines } = useCatalog()
-  if (!tleLineMap.value.size) {
-    try {
-      await loadTleLines()
-    } catch {
-      /* 无 TLE 时轨道走二体兜底 */
-    }
-  }
-  if (token !== focusToken) return
-
-  const addOrbit = (
+  const addOrbit = async (
     norad: number,
     color: number,
     pos?: [number, number, number],
     vel?: [number, number, number]
   ) => {
-    const r0 = storedPos(pos)
-    const v0 = storedVel(vel)
-    // 事件自带 TCA 状态优先（与模型锚点同源）；缺失或非椭圆再回落 TLE / 快照两体
-    const pts =
-      (r0 && v0 ? orbitByTcaState(r0, v0) : null) ??
-      orbitByTle(norad, ev.tcaMs) ??
-      orbitByState(norad, ev.tcaMs)
-    if (!pts || pts.length < 2) return
+    // 轨道来源与锚点保持一致，保证轨道线穿过事件点（旧事件缺速度时按单目标 TLE 补）
+    const pts = await resolveConjOrbit(norad, ev.tcaMs, pos, vel)
+    if (token !== focusToken || !pts || pts.length < 2) return
     const line = new THREE.Line(
       new THREE.BufferGeometry().setFromPoints(pts),
       new THREE.LineBasicMaterial({ color, transparent: true, opacity: 0.85 })
@@ -523,8 +587,8 @@ async function buildFocus(token: number, ev: EventCloudItem & { pos: THREE.Vecto
     line.name = `ospConjOrbit_${norad}`
     g.add(line)
   }
-  addOrbit(ev.noradA, 0x62d0ff, ev.posA, ev.velA)
-  if (ev.noradB !== ev.noradA) addOrbit(ev.noradB, 0xffb066, ev.posB, ev.velB)
+  void addOrbit(ev.noradA, 0x62d0ff, ev.posA, ev.velA)
+  if (ev.noradB !== ev.noradA) void addOrbit(ev.noradB, 0xffb066, ev.posB, ev.velB)
 
   const posA = new THREE.Vector3()
   const posB = new THREE.Vector3()

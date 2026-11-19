@@ -9,6 +9,7 @@
  *  - 星历绑定挂在 ephemeris.bound_object_id（见 ephemDb.ensureEphemSchema 增列）。
  */
 import { pool } from './pool.js'
+import { normalizeIntlDesig, preferenceSql } from './catalogProfileDb.js'
 import type { RowDataPacket } from 'mysql2'
 
 export type ClaimType = 'normal' | 'owner'
@@ -250,7 +251,14 @@ function toDateOnly(v: unknown): string | null {
   return String(v)
 }
 
-/** 批量取 NORAD 的编目基线，供列表展示只读参考（不写回档案） */
+/**
+ * 批量取 NORAD 的编目基线，供列表展示只读参考（不写回档案）。
+ *
+ * 与详情页 `getCatalogProfile` 保持一致：GCAT 对很多新目标没有 SATCAT 号
+ * （sat_catalog_profile.norad_id = 0），只有国际编号 piece 可用。
+ * 因此这里除了按 NORAD 匹配，还要用 GP 快照的 intl_desig 反查 piece，
+ * 否则详情页有质量/尺寸、列表页却显示「—」。
+ */
 export async function loadObjectCatalogInfo(
   norads: number[]
 ): Promise<Map<number, ObjectCatalogInfo>> {
@@ -258,34 +266,6 @@ export async function loadObjectCatalogInfo(
   const uniq = [...new Set(norads.filter((n) => Number.isFinite(n)))]
   if (!uniq.length) return out
   try {
-    const [prof] = await pool.query<
-      Array<
-        RowDataPacket & {
-          norad_id: number
-          mass_kg: number | null
-          catalog_size: string | null
-          country: string | null
-          country_code: string | null
-          launch_date: string | null
-        }
-      >
-    >(
-      `SELECT norad_id, MAX(catalog_mass_kg) AS mass_kg, MAX(catalog_size) AS catalog_size,
-              MAX(country) AS country, MAX(country_code) AS country_code, MAX(launch_date) AS launch_date
-         FROM sat_catalog_profile WHERE norad_id IN (?) GROUP BY norad_id`,
-      [uniq]
-    )
-    for (const r of prof) {
-      out.set(Number(r.norad_id), {
-        mass_kg: r.mass_kg == null ? null : Number(r.mass_kg),
-        catalog_size: r.catalog_size == null ? null : String(r.catalog_size),
-        country: r.country == null ? null : String(r.country),
-        country_code: r.country_code == null ? null : String(r.country_code),
-        launch_date: toDateOnly(r.launch_date),
-        object_type: null,
-        regime: null
-      })
-    }
     const [gp] = await pool.query<
       Array<
         RowDataPacket & {
@@ -294,36 +274,113 @@ export async function loadObjectCatalogInfo(
           regime: string | null
           owner_code: string | null
           launch_date: string | null
+          intl_desig: string | null
         }
       >
     >(
       `SELECT norad_id, MAX(object_type) AS object_type, MAX(regime) AS regime,
-              MAX(owner_code) AS owner_code, MAX(launch_date) AS launch_date
+              MAX(owner_code) AS owner_code, MAX(launch_date) AS launch_date,
+              MAX(intl_desig) AS intl_desig
          FROM sat_tle WHERE norad_id IN (?) GROUP BY norad_id`,
       [uniq]
     )
+    /** norad → 归一化国际编号（2026-250C） */
+    const desigOf = new Map<number, string>()
     for (const r of gp) {
       const n = Number(r.norad_id)
-      const cur = out.get(n) ?? {
+      out.set(n, {
         mass_kg: null,
         catalog_size: null,
         country: null,
-        country_code: null,
-        launch_date: null,
-        object_type: null,
-        regime: null
+        country_code: r.owner_code == null ? null : String(r.owner_code),
+        launch_date: toDateOnly(r.launch_date),
+        object_type: r.object_type == null ? null : String(r.object_type),
+        regime: r.regime == null ? null : String(r.regime)
+      })
+      const d = normalizeIntlDesig(r.intl_desig)
+      if (d) desigOf.set(n, d)
+    }
+
+    const noradByPiece = new Map<string, number>()
+    for (const [n, d] of desigOf) if (!noradByPiece.has(d)) noradByPiece.set(d, n)
+    const pieces = [...noradByPiece.keys()]
+
+    const params: Array<number[] | string[]> = [uniq]
+    let where = 'norad_id IN (?)'
+    if (pieces.length) {
+      where += ' OR piece IN (?)'
+      params.push(pieces)
+    }
+    // 同一 NORAD 可能挂着载荷 / 火箭末级 / 碎片的多条档案，按偏好在 JS 侧取第一条
+    const [prof] = await pool.query<
+      Array<
+        RowDataPacket & {
+          norad_id: number
+          piece: string | null
+          catalog_mass_kg: number | null
+          catalog_size: string | null
+          length_m: number | null
+          diameter_m: number | null
+          span_m: number | null
+          country: string | null
+          country_code: string | null
+          launch_date: string | null
+        }
+      >
+    >(
+      `SELECT norad_id, piece, catalog_mass_kg, catalog_size, length_m, diameter_m, span_m,
+              country, country_code, launch_date
+         FROM sat_catalog_profile
+        WHERE ${where}
+        ORDER BY ${preferenceSql()}`,
+      params
+    )
+    const applied = new Set<number>()
+    for (const r of prof) {
+      let n = Number(r.norad_id) || 0
+      if (!out.has(n)) {
+        // norad_id 缺失（GCAT 无 SATCAT）：退回按国际编号匹配本批目标
+        const p = normalizeIntlDesig(r.piece)
+        n = p ? noradByPiece.get(p) ?? 0 : 0
       }
-      cur.object_type = r.object_type == null ? null : String(r.object_type)
-      cur.regime = r.regime == null ? null : String(r.regime)
-      // 档案缺失时用 GP 快照兜底：国别代码与发射日期（如新发射目标尚无编目档案）
-      if (!cur.country_code && r.owner_code) cur.country_code = String(r.owner_code)
-      if (!cur.launch_date && r.launch_date) cur.launch_date = toDateOnly(r.launch_date)
-      out.set(n, cur)
+      if (!n || !out.has(n) || applied.has(n)) continue
+      applied.add(n)
+      const cur = out.get(n) as ObjectCatalogInfo
+      cur.mass_kg = r.catalog_mass_kg == null ? null : Number(r.catalog_mass_kg)
+      cur.catalog_size =
+        r.catalog_size != null
+          ? String(r.catalog_size)
+          : formatSizeFromDims(r.length_m, r.diameter_m, r.span_m)
+      cur.country = r.country == null ? null : String(r.country)
+      if (r.country_code) cur.country_code = String(r.country_code)
+      if (r.launch_date) cur.launch_date = toDateOnly(r.launch_date)
     }
   } catch (e) {
     console.error('[objects] catalog enrich failed:', (e as Error).message)
   }
   return out
+}
+
+/** 与 GCAT 入库时的 formatCatalogSize 同格式；catalog_size 为空但有三围时补齐 */
+function formatSizeFromDims(
+  lengthM: number | null,
+  diameterM: number | null,
+  spanM: number | null
+): string | null {
+  const len = lengthM == null ? null : Number(lengthM)
+  const dia = diameterM == null ? null : Number(diameterM)
+  const span = spanM == null ? null : Number(spanM)
+  const fmt = (n: number) => {
+    const r = Math.round(n * 10) / 10
+    return Number.isInteger(r) ? String(r) : r.toFixed(1)
+  }
+  const parts: string[] = []
+  if (len != null && dia != null) parts.push(`${fmt(len)} × ${fmt(dia)} m`)
+  else if (len != null) parts.push(`${fmt(len)} m`)
+  else if (dia != null) parts.push(`${fmt(dia)} m`)
+  const body = Math.max(len || 0, dia || 0)
+  if (span != null && span > body + 0.05) parts.push(`span ${fmt(span)} m`)
+  return parts.length ? parts.join(', ') : null
 }
 
 export async function getObjectById(id: number): Promise<ObjectRow | null> {

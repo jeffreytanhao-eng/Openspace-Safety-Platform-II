@@ -642,12 +642,19 @@
   }
 }
 
-/* ---------------- 左下角复位 ---------------- */
-.constel-reset {
+/* ---------------- 左下角复位 / 保持居中 ---------------- */
+.constel-cam-btns {
   position: absolute;
   left: 14px;
   bottom: 14px;
   z-index: 9;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.constel-reset {
+  position: static;
   display: inline-flex;
   align-items: center;
   gap: 7px;
@@ -678,6 +685,18 @@
 
   &:active {
     transform: scale(0.96);
+  }
+
+  /* 保持居中：active 时与 hover 同色系，提示持续跟随 */
+  &.constel-pin.on {
+    color: #e6edf6;
+    background: rgba(79, 195, 247, 0.16);
+    border-color: rgba(79, 195, 247, 0.65);
+    box-shadow: 0 0 12px rgba(79, 195, 247, 0.28);
+
+    .reset-ico {
+      color: #7fdbff;
+    }
   }
 }
 
@@ -930,7 +949,7 @@ html.is-mobile {
     }
   }
 
-  .constel-reset {
+  .constel-cam-btns {
     left: 10px;
     bottom: calc(96px + env(safe-area-inset-bottom));
   }

@@ -171,6 +171,13 @@ function resetCameraHome() {
   sceneRef.value?.resetCameraHome()
 }
 
+/** 保持居中：开启后目标持续居中跟随，拖拽不释放；关闭仅停止跟随，准星与名称保留 */
+const centerPin = ref(false)
+function toggleCenterPin() {
+  const on = sceneRef.value?.toggleCenterPin()
+  if (typeof on === 'boolean') centerPin.value = on
+}
+
 /* ---------------- 目录选择 → 三维 ---------------- */
 
 function onSatSelect(item: CatalogTle) {
@@ -229,14 +236,16 @@ async function ensureActiveMansFromLocalIndex(): Promise<void> {
 }
 
 /** If the playhead is outside the ephemeris span, clamp it (leave it if already inside).
- *  Also shift the 24 h slider window when the clamped time would fall outside it. */
+ *  Also shift the 24 h slider window when the clamped time would fall outside it.
+ *  注意：落在区间之后（如星历文件已过期）时回退到起点而不是终点，
+ *  否则目标会停在最后一个历元上不再运动（仿真钟照常前进但标记不动）。 */
 function clampSimToEphem(set: { states: { t: number }[] } | null | undefined) {
   if (!set?.states.length) return
   const t0 = set.states[0].t
   const t1 = set.states[set.states.length - 1].t
   const t = simTimeMs.value
   if (t >= t0 && t <= t1) return
-  const next = t < t0 ? t0 : t1
+  const next = t0
   const half = SIM_HALF_SPAN_MS
   if (next < simAnchorMs.value - half || next > simAnchorMs.value + half) {
     simAnchorMs.value = next
@@ -340,20 +349,20 @@ function toCloudItem(e: ConjunctionEvent): EventCloudItem {
 
 async function ensureEventRaw(): Promise<ConjunctionEvent[]> {
   if (eventRaw.value.length) return eventRaw.value
-  const { events } = await listEvents('7d')
-  // 筛查任务事件（TLE/星历/AOE 三种主星源）一并纳入事件云与深链定位
+  // 筛查任务事件（TLE/星历/AOE 三种主星源）一并纳入事件云与深链定位。
+  // 四个请求并行发出：任一筛查源失败只损失该源，CDM 主源失败仍向上抛（触发加载失败提示）。
   const screenSources = ['tle', 'ephem', 'aoe'] as const
-  const extra = await Promise.all(
-    screenSources.map((s) =>
-      listEvents('7d', 'all', s)
-        .then((r) => r.events)
-        .catch(() => [] as ConjunctionEvent[])
+  const [primary, ...extra] = await Promise.all([
+    listEvents('7d'),
+    ...screenSources.map((s) =>
+      listEvents('7d', 'all', s).catch(() => ({ events: [] as ConjunctionEvent[] }))
     )
-  )
+  ])
+  const events = primary.events
   const merged = [...events]
   const seen = new Set(events.map((e) => `${e.noradA}:${e.noradB}:${e.tca}`))
   for (const list of extra) {
-    for (const e of list) {
+    for (const e of list.events) {
       const k = `${e.noradA}:${e.noradB}:${e.tca}`
       if (seen.has(k)) continue
       seen.add(k)
@@ -364,13 +373,37 @@ async function ensureEventRaw(): Promise<ConjunctionEvent[]> {
   return eventRaw.value
 }
 
-/** 数量软上限：红 > 橙 > 黄优先，TCA 早者优先，超出截断 */
-function capEvents(list: ConjunctionEvent[]): ConjunctionEvent[] {
+/**
+ * 数量软上限：红 > 橙 > 黄优先，TCA 早者优先，超出截断。
+ * keep 命中（深链目标交会）的事件即使超出上限也保留，避免误报「未找到该交会事件」。
+ */
+function capEvents(
+  list: ConjunctionEvent[],
+  keep?: (e: ConjunctionEvent) => boolean
+): ConjunctionEvent[] {
   if (list.length <= EVENT_CLOUD_CAP) return list
   const rank = (lv: string) => (lv === 'red' ? 0 : lv === 'orange' ? 1 : 2)
-  return [...list]
-    .sort((a, b) => rank(a.level) - rank(b.level) || a.tca.localeCompare(b.tca))
-    .slice(0, EVENT_CLOUD_CAP)
+  const sorted = [...list].sort(
+    (a, b) => rank(a.level) - rank(b.level) || a.tca.localeCompare(b.tca)
+  )
+  if (!keep) return sorted.slice(0, EVENT_CLOUD_CAP)
+  const kept: ConjunctionEvent[] = []
+  const rest: ConjunctionEvent[] = []
+  for (const e of sorted) (keep(e) ? kept : rest).push(e)
+  if (!kept.length) return sorted.slice(0, EVENT_CLOUD_CAP)
+  return [...kept, ...rest].slice(0, Math.max(EVENT_CLOUD_CAP, kept.length))
+}
+
+/** 深链目标守卫：?conj=A-B（&tca）指向的交会不参与截断（TCA 漂移按 ±6h 同口径匹配） */
+function deepLinkEventGuard(): ((e: ConjunctionEvent) => boolean) | undefined {
+  const conj = String(route.query.conj || '')
+  const [a, b] = conj.split('-').map((n) => Number(n))
+  if (!conj || !Number.isFinite(a) || !Number.isFinite(b)) return undefined
+  const tcaMs = Number(route.query.tca) || 0
+  return (e) => {
+    if (e.noradA !== a || e.noradB !== b) return false
+    return tcaMs ? Math.abs(new Date(e.tca).getTime() - tcaMs) <= 6 * 3600e3 : true
+  }
 }
 
 async function toggleEventCloud(): Promise<boolean> {
@@ -386,8 +419,9 @@ async function toggleEventCloud(): Promise<boolean> {
     // 锚点依赖编目快照状态向量，未就绪先拉一次
     const { cloudList, loadConstellation } = useCatalog()
     if (!cloudList.value.length) await loadConstellation()
-    await loadAliases()
-    const raw = capEvents(await ensureEventRaw())
+    // 别名与事件清单互不依赖，并行拉取
+    const [, raw0] = await Promise.all([loadAliases(), ensureEventRaw()])
+    const raw = capEvents(raw0, deepLinkEventGuard())
     const built = await buildEventCloudItems(raw.map(toCloudItem))
     eventItems.value = built.items
     if (!built.items.length) {
@@ -503,9 +537,20 @@ async function runPendingEventDeepLink() {
 /* 深链 /situation?norad=20580：定位编目目标并画出其轨道（不自动播放时间轴，不拉开左侧面板） */
 let pendingNoradDeepLink: number | null = null
 
+/**
+ * 星历深链 /situation/eph?ephId=...&norad=... 里的 norad 只是星历对象的标识，
+ * 不是「定位编目目标」指令。若照常执行编目定位，会 stopEphemTrack 后由编目跟踪接管，
+ * 而星历激活时同物理目标的编目模型被隐藏 → 光圈居中但卫星模型留在别处。
+ */
+function isEphemDeepLink(): boolean {
+  const t0 = Array.isArray(route.params.type) ? route.params.type[0] : route.params.type
+  return t0 === 'eph' || !!route.query.ephId
+}
+
 watch(
   () => route.query.norad,
   (norad) => {
+    if (isEphemDeepLink()) return
     const raw = Array.isArray(norad) ? norad[0] : norad
     const n = Number(raw)
     if (!Number.isFinite(n) || n <= 0) return
@@ -519,6 +564,7 @@ async function runPendingNoradDeepLink() {
   const n = pendingNoradDeepLink
   if (!n || !viewportReady.value) return
   pendingNoradDeepLink = null
+  if (isEphemDeepLink()) return
   // Keep default 1× playback running (same as a normal situation visit).
   // Maneuver locate / jump-to-t0 must not be changed — only this 打开仿真 deep-link plays.
   simPlaying.value = true
@@ -627,6 +673,8 @@ watch(
         return
       }
       clearManeuver()
+      // 进入即播放：目标沿轨道运动并居中跟随（与 ?norad= 深链一致）
+      simPlaying.value = true
       paintUserEphem({ track: true })
     } catch (e) {
       console.warn('[situation] load ephId failed', e)
@@ -639,10 +687,16 @@ watch(
 <template>
   <div class="constel-page">
     <!-- Embedded 态势: no own logo / title / platform clock (AppShell owns those). -->
-    <SceneCore ref="sceneRef" @viewport-ready="onViewportReady" @event-pick="onEventPick" />
+    <SceneCore
+      ref="sceneRef"
+      @viewport-ready="onViewportReady"
+      @event-pick="onEventPick"
+      @center-pin="(on: boolean) => (centerPin = on)"
+    />
 
     <SatListPanel
       :open="dockMode === 'sat'"
+      :ready="viewportReady"
       @close="closePanel"
       @select="onSatSelect"
       @types="onSatTypes"
@@ -707,14 +761,29 @@ watch(
       </button>
     </div>
 
-    <button class="constel-reset" :title="t('sit.resetTip')" @click="resetCameraHome">
-      <svg class="reset-ico" viewBox="0 0 24 24" width="15" height="15" aria-hidden="true">
-        <circle cx="12" cy="12" r="6.5" fill="none" stroke="currentColor" stroke-width="1.8" />
-        <path d="M12 2.5v4M12 17.5v4M2.5 12h4M17.5 12h4" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" />
-        <circle cx="12" cy="12" r="1.8" fill="currentColor" />
-      </svg>
-      <span class="reset-txt">{{ t('sit.reset') }}</span>
-    </button>
+    <div class="constel-cam-btns">
+      <button class="constel-reset" :title="t('sit.resetTip')" @click="resetCameraHome">
+        <svg class="reset-ico" viewBox="0 0 24 24" width="15" height="15" aria-hidden="true">
+          <circle cx="12" cy="12" r="6.5" fill="none" stroke="currentColor" stroke-width="1.8" />
+          <path d="M12 2.5v4M12 17.5v4M2.5 12h4M17.5 12h4" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" />
+          <circle cx="12" cy="12" r="1.8" fill="currentColor" />
+        </svg>
+        <span class="reset-txt">{{ t('sit.reset') }}</span>
+      </button>
+
+      <button
+        class="constel-reset constel-pin"
+        :class="{ on: centerPin }"
+        :title="t('sit.keepCenterTip')"
+        @click="toggleCenterPin"
+      >
+        <svg class="reset-ico" viewBox="0 0 24 24" width="15" height="15" aria-hidden="true">
+          <circle cx="12" cy="12" r="3.2" fill="none" stroke="currentColor" stroke-width="1.8" />
+          <path d="M12 2.5v5M12 16.5v5M2.5 12h5M16.5 12h5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" />
+        </svg>
+        <span class="reset-txt">{{ t('sit.keepCenter') }}</span>
+      </button>
+    </div>
 
     <button
       v-if="showSatTag"

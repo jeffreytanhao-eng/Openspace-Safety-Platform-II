@@ -7,6 +7,11 @@ import { useI18n } from '@/composables/useI18n'
 import type { MessageKey } from '@/i18n/messages'
 import { useAuthStore } from '@/stores/auth'
 import { applyFontLarge, fontLargeEnabled } from '@/utils/fontScale'
+import {
+  preloadSituationCesium,
+  preloadSituationRoute,
+  preloadSituationScene
+} from '@/views/situation/preload'
 
 const route = useRoute()
 const router = useRouter()
@@ -108,12 +113,28 @@ function setLargeFont(on: boolean) {
   applyFontLarge(on)
 }
 
+type IdleWindow = { requestIdleCallback?: (cb: () => void, opts?: { timeout: number }) => number }
+/** 空闲时执行（不支持 requestIdleCallback 的环境用短延迟兜底） */
+function whenIdle(fn: () => void, timeout: number) {
+  const ric = (window as unknown as IdleWindow).requestIdleCallback
+  if (typeof ric === 'function') ric(fn, { timeout })
+  else window.setTimeout(fn, Math.min(timeout, 1500))
+}
+
+/** 导航悬停/聚焦时立即预热态势页（分包 + Cesium） */
+function warmNav(key: string) {
+  if (key === 'simulation') preloadSituationScene()
+}
+
 onMounted(() => {
   tick()
   clockTimer = window.setInterval(tick, 1000)
   applyFontLarge(largeFont.value)
   // 恢复登录会话（有 token 时拉取 /auth/me；失败自动清空）
   void auth.init()
+  // 态势页预热：路由分包空闲即取；Cesium（约 4.8MB）留到更长空闲期，避免抢占首屏带宽
+  whenIdle(preloadSituationRoute, 2500)
+  whenIdle(preloadSituationCesium, 8000)
 })
 
 onUnmounted(() => {
@@ -206,6 +227,8 @@ onUnmounted(() => {
               role="link"
               tabindex="0"
               @click="navigate"
+              @pointerenter="warmNav(item.key)"
+              @focus="warmNav(item.key)"
               @keydown.enter.prevent="navigate()"
             >
               <span class="nav-label">{{ item.label }}</span>

@@ -78,7 +78,11 @@ import {
   type EventCloudItem
 } from './eventCloudThree'
 
-const emit = defineEmits<{ (e: 'viewport-ready'): void; (e: 'event-pick', key: string | null): void }>()
+const emit = defineEmits<{
+  (e: 'viewport-ready'): void
+  (e: 'event-pick', key: string | null): void
+  (e: 'center-pin', on: boolean): void
+}>()
 const { t } = useI18n()
 import type { EphemSet, EphemState } from './ephem/types'
 import { resolveCatalogNorad } from './ephem/useUserEphemeris'
@@ -151,6 +155,18 @@ const CONJ_CAM_DIST = 0.05
 let trackEphem = false
 /** Catalog selection track (station「位置展示」/ list pick) — same UX as ephem track (t201u). */
 let trackCat = false
+/**
+ * 取消跟随（复位 / 左键拖拽释放居中）后仍然保留的准星焦点：
+ * 呼吸光圈与文字标识继续逐帧投影，只是相机不再跟着目标平移。
+ */
+let retainFocus: 'cat' | 'ephem' | null = null
+/** 「保持居中」开关：开启后目标持续居中跟随，左键拖拽也不释放；复位会关闭 */
+let centerPin = false
+/** 最近一次选中的编目目标，供「保持居中」重新拉近复用 */
+let lastCatPick: {
+  item: { object_name?: string | null; norad_id: number }
+  label: string
+} | null = null
 /** Fly-in pending until the selected entry has a position (async cloud rebuild). */
 let catFlyPending = false
 /**
@@ -251,6 +267,8 @@ function updateReticle() {
   let ok = false
   if (trackEphem) ok = !!getEphemMarkerPosition(_trackPos)
   else if (trackCat) ok = getCatalogFocusPos(simMs, _trackPos)
+  else if (retainFocus === 'ephem') ok = !!getEphemMarkerPosition(_trackPos)
+  else if (retainFocus === 'cat') ok = getCatalogFocusPos(simMs, _trackPos)
   if (!ok) {
     setReticleVisible(false)
     return
@@ -344,14 +362,20 @@ function updateConjLabels() {
   }
 }
 
-function stopCatalogTrack() {
-  if (!trackCat) return
+/**
+ * 停止编目跟踪。
+ * keepFocus=true：仅停止相机跟随（复位 / 拖拽释放居中），呼吸光圈与文字标识保留。
+ */
+function stopCatalogTrack(opts?: { keepFocus?: boolean }) {
+  const keep = !!opts?.keepFocus
+  if (!trackCat && retainFocus === (keep ? 'cat' : null)) return
   trackCat = false
   catFlyPending = false
   trackResync = false
+  retainFocus = keep ? 'cat' : null
   if (!trackEphem) {
     setCameraOrbitFocusScene(null, simMs)
-    setReticleVisible(false)
+    if (!keep) setReticleVisible(false)
   }
 }
 
@@ -366,12 +390,15 @@ function startCatalogTrack(item: { object_name?: string | null; norad_id: number
   if (!camera || !item) return
   stopEphemTrack()
   setEventFocusScene(null, simMs)
+  lastConjKey = null
   trackCat = true
+  retainFocus = 'cat'
   catFlyPending = false
   trackResync = false
   const nameEl = reticleNameEl.value
   const label =
     aliasMap.get(Number(item.norad_id)) || labelOverride || item.object_name || `NORAD ${item.norad_id}`
+  lastCatPick = { item: { object_name: item.object_name, norad_id: item.norad_id }, label }
   if (nameEl) nameEl.textContent = label
   if (getCatalogFocusPos(simMs, _trackPos)) {
     lookAtPt.copy(_trackPos)
@@ -387,19 +414,23 @@ function startCatalogTrack(item: { object_name?: string | null; norad_id: number
   }
 }
 
-function stopEphemTrack() {
+function stopEphemTrack(keepFocus = false) {
   trackEphem = false
   ephemFlyPending = false
   trackResync = false
   camFly.active = false
   setCameraOrbitFocusScene(null, simMs)
-  setReticleVisible(false)
+  retainFocus = keepFocus ? 'ephem' : null
+  if (!keepFocus) setReticleVisible(false)
 }
 
 function startEphemTrack(set: EphemSet) {
   if (!set) return
   stopCatalogTrack()
+  lastCatPick = null
+  retainFocus = 'ephem'
   setEventFocusScene(null, simMs)
+  lastConjKey = null
   // Clamp sim into ephem span so marker is on-orbit
   if (set.states.length) {
     const t0 = set.states[0].t
@@ -626,6 +657,8 @@ async function showStation(norad: number) {
   if (cur === norad) {
     setStationFocus(null)
     stopCatalogTrack()
+    lastCatPick = null
+    clearCenterPin()
     setCloudSelection(null, simMs)
     refreshCloudVisibility(simMs)
     return { on: false }
@@ -659,6 +692,8 @@ function clearHiddenSelection() {
   if (isCloudSelectionVisible(lastFilterTypes)) return
   setCloudSelection(null, simMs)
   stopCatalogTrack()
+  lastCatPick = null
+  clearCenterPin()
 }
 
 /** 星座「星座展示」：独立通道，不改类型芯片、不写搜索框。 */
@@ -700,6 +735,8 @@ async function showConsOrbit(name: string) {
 async function selectCatalogItem(item: CatalogTle | null) {
   if (!item) {
     stopCatalogTrack()
+    lastCatPick = null
+    clearCenterPin()
     setCloudSelection(null, simMs)
     return
   }
@@ -745,8 +782,12 @@ function refreshCatalogItems(_items: CatalogTle[]) {
 
 function applyHomeCamera() {
   if (!camera) return
+  // 复位只回镜头、不取消目标：保留原目标的呼吸光圈与文字标识（仅停止相机跟随）
+  const keep = trackEphem ? 'ephem' : trackCat ? 'cat' : retainFocus
   stopEphemTrack()
   stopCatalogTrack()
+  retainFocus = keep
+  clearCenterPin()
   setEventFocusScene(null, simMs)
   const dir = homeDirection(simMs)
   camera.position.copy(dir).multiplyScalar(HOME_CAM_DIST)
@@ -758,8 +799,45 @@ function applyHomeCamera() {
   }
 }
 
+/** 取消选中时同步熄灭「保持居中」，避免没有目标却仍显示 active */
+function clearCenterPin() {
+  if (!centerPin) return
+  centerPin = false
+  emit('center-pin', false)
+}
+
 function resetCameraHome() {
   applyHomeCamera()
+}
+
+/**
+ * 「保持居中」开关：
+ *  - 开：目标持续居中跟随（与旧跟踪行为一致；左键拖拽也不释放），必要时重新拉近
+ *  - 关：仅停止相机跟随，呼吸光圈与文字标识保留
+ */
+function toggleCenterPin(): boolean {
+  centerPin = !centerPin
+  if (centerPin) {
+    // 星历优先：星历激活时「保持居中」必须跟星历标记，不能被编目 TLE 目标抢焦点
+    if (lastEphemSet) {
+      if (!trackEphem) {
+        // 从机动段定位回到目标跟随：清掉琥珀段选中与标签
+        setEphemManSelected(null)
+        setManLabelVisible(false)
+        startEphemTrack(lastEphemSet)
+      }
+    } else if (lastConjKey) {
+      if (!conjFocusPos) focusEventCloud(lastConjKey, true)
+    } else if (!trackCat && lastCatPick) {
+      startCatalogTrack(lastCatPick.item, lastCatPick.label)
+    }
+  } else if (trackCat) {
+    stopCatalogTrack({ keepFocus: true })
+  } else if (trackEphem) {
+    stopEphemTrack(true)
+  }
+  emit('center-pin', centerPin)
+  return centerPin
 }
 
 function setSimTime(ms: number) {
@@ -1017,6 +1095,8 @@ function showEphemOrbit(set: EphemSet | null, opts?: { track?: boolean }) {
   // Different ephemeris = new id (or first activation). Same-id object replacement is a redraw.
   const setChanged = lastEphemSet?.id !== set?.id
   lastEphemSet = set
+  // 星历激活时编目目标退居幕后：「保持居中」只能跟星历标记，不能被 catalog 焦点抢占
+  if (set) lastCatPick = null
   // Fly/track on a new set unless the caller explicitly opts out (maneuver-card locate).
   // Same-set redraws (impulse overlay, etc.) must not steal the camera once tracking has started.
   // If this set is already highlighted but a fly/halo never completed, still track
@@ -1097,6 +1177,8 @@ function focusEphemManIndex(idx: number | null, labelText?: string): boolean {
   // 机动定位是「相机对准燃烧段」：顺手停掉编目跟随，避免它的位移增量在同帧把机位拽走
   stopEphemTrack()
   stopCatalogTrack()
+  // 定位机动段 = 不再跟踪居中，按钮同步回到 inactive
+  clearCenterPin()
   setEphemManSelected(idx)
   manLabelPos.copy(_trackPos)
   const txtEl = manLabelTextEl.value
@@ -1147,10 +1229,13 @@ function showEventCloud(items: (EventCloudItem & { pos: THREE.Vector3 })[] | nul
 
 /** 选中事件的世界坐标锚点（每帧按仿真时刻刷新 ECEF 枢轴，避免时间推进后滚轮枢轴漂移） */
 let conjFocusPos: THREE.Vector3 | null = null
+/** 最近聚焦的交会事件 key：「保持居中」开启时用于重新拉近 */
+let lastConjKey: string | null = null
 
 /** 深链/列表定位：相机飞向事件云锚点并高亮；fly=false 仅高亮（点击场景已可见）；key=null 取消高亮 */
 function focusEventCloud(key: string | null, fly = true): boolean {
   setEventCloudSelected(key)
+  lastConjKey = key
   if (!key) {
     conjFocusPos = null
     setEventFocusScene(null, simMs)
@@ -1171,6 +1256,21 @@ function focusEventCloud(key: string | null, fly = true): boolean {
 /** 事件云点击拾取：把 Cesium 交互 canvas 上的「点击」（非拖拽）转为 NDC raycast */
 function onScenePointerDown(e: PointerEvent) {
   pickDown = { x: e.clientX, y: e.clientY }
+  // 左键按下即视为开始拖拽：释放居中跟随，但呼吸光圈与文字标识保留；
+  // 「保持居中」开启时维持旧行为（拖拽绕目标旋转，目标始终居中）。
+  if (e.button !== 0 || centerPin || camFly.active) return
+  if (trackEphem) {
+    stopEphemTrack(true)
+    interacting = true
+  } else if (trackCat) {
+    stopCatalogTrack({ keepFocus: true })
+    interacting = true
+  } else if (conjFocusPos) {
+    // 交会事件放大态：拖拽释放居中（白圈与 A/B 标签保留，仅相机不再绕事件旋转）
+    conjFocusPos = null
+    setEventFocusScene(null, simMs)
+    interacting = true
+  }
 }
 function onScenePointerUp(e: PointerEvent) {
   const down = pickDown
@@ -1189,6 +1289,7 @@ let pickDown: { x: number; y: number } | null = null
 defineExpose({
   setAliases,
   resetCameraHome,
+  toggleCenterPin,
   setSimTime,
   selectCatalogItem,
   filterCatalogTypes,

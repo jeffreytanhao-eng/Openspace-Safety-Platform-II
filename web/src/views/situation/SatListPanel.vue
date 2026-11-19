@@ -43,7 +43,8 @@ const poolTag = computed<PoolKey | null>(() => {
 /** CSS 类名用连字符（pool-full），i18n 键用点号（pool.full），两者分开绑定 */
 const poolCss = computed(() => (poolTag.value ? poolTag.value.replace('.', '-') : ''))
 
-defineProps<{ open: boolean }>()
+/** ready：三维视口是否就绪（编目快照预热让位首屏 Cesium 资源，就绪后再拉） */
+const props = withDefaults(defineProps<{ open: boolean; ready?: boolean }>(), { ready: true })
 const emit = defineEmits<{
   (e: 'close'): void
   (e: 'select', item: CatalogTle): void
@@ -199,10 +200,39 @@ async function refreshList() {
       })
     }
     if (seq !== refreshSeq) return
+    // 检索命中唯一目标时直接定位 + 放大跟踪，无需再点卡片
+    if (q) tryAutoLocate(q)
   } catch (e) {
     if (seq !== refreshSeq) return
     console.warn('[SatListPanel] refreshList', e)
   }
+}
+
+/** 上一次自动定位的检索键：同一查询下重复渲染不反复拉近镜头 */
+let lastAutoKey = ''
+
+/**
+ * 检索可唯一定位到某目标时，直接走与点击卡片相同的「定位 + 放大跟踪」。
+ * 判定优先级：NORAD 精确 → 名称/别名精确 → 结果唯一。
+ */
+function tryAutoLocate(q: string) {
+  const qUp = q.toUpperCase()
+  const pool = tles.value
+  const exactNorad = pool.find((x) => String(x.norad_id) === q)
+  const exactName = pool.find(
+    (x) =>
+      (x.object_name || '').toUpperCase() === qUp ||
+      objLabel(x.norad_id, x.object_name).toUpperCase() === qUp
+  )
+  const target = exactNorad || exactName || (pool.length === 1 ? pool[0] : null)
+  if (!target) {
+    lastAutoKey = ''
+    return
+  }
+  const key = `${target.norad_id}:${qUp}`
+  if (key === lastAutoKey) return
+  lastAutoKey = key
+  pick(target)
 }
 
 /** 类型芯片：只 emit types → SceneCore.filterCatalogTypes；不碰星座/空间站本地态以外的搜索框。 */
@@ -272,6 +302,8 @@ function toggleOrbit(name: string) {
 }
 
 watch(keyword, () => {
+  // 清空检索后允许再次定位同一目标（重复输入时会重新拉近跟踪）
+  if (!keyword.value.trim()) lastAutoKey = ''
   clearTimeout(debounce)
   debounce = setTimeout(() => { void refreshList() }, 450)
 })
@@ -281,11 +313,20 @@ watch(activeTypes, () => {
   typeDebounce = setTimeout(() => { void refreshList() }, 120)
 }, { deep: true })
 
-onMounted(() => {
+/** 编目快照预热（一次）：等三维视口就绪，避免与 Cesium 资源抢占首屏带宽 */
+let warmStarted = false
+function warmConstellation() {
+  if (warmStarted) return
+  warmStarted = true
   const warm = () => { void loadConstellation().catch(() => { /* chip-on retries */ }) }
   const ric = (window as unknown as { requestIdleCallback?: (cb: () => void, opts?: { timeout: number }) => void }).requestIdleCallback
   if (typeof ric === 'function') ric(warm, { timeout: 2500 })
   else window.setTimeout(warm, 800)
+}
+
+watch(() => props.ready, (ready) => { if (ready) warmConstellation() }, { immediate: true })
+
+onMounted(() => {
   void refreshList()
 })
 </script>
