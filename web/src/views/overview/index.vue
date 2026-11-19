@@ -755,6 +755,8 @@ async function saveReport() {
 .news-card:hover { border-color: var(--border-strong); border-left-color: #ff8a3d; }
 .news-card:focus-visible { outline: 1px solid var(--accent); outline-offset: 1px; }
 .nc-name {
+  min-width: 0;
+  width: 100%;
   font-size: 12px;
   font-weight: 600;
   line-height: 16px;
@@ -775,6 +777,8 @@ async function saveReport() {
 .nc-time { flex: 0 0 auto; font-variant-numeric: tabular-nums; }
 .nc-media { min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
 .nc-summary {
+  min-width: 0;
+  width: 100%;
   font-size: 10px;
   line-height: 15px;
   color: var(--text-dim);
