@@ -585,7 +585,8 @@ async function saveReport() {
 .launch-card:hover { border-color: var(--border-strong); border-left-color: #3d8bfd; }
 .launch-card:focus-visible { outline: 1px solid var(--accent); outline-offset: 1px; }
 .lc-top { display: flex; align-items: flex-start; gap: 6px; min-width: 0; }
-.lc-top :deep(.flag) { margin-top: 1px; }
+/* 旗高 12px、标题首行 line-height 16px → 上偏移 2px 与首行文字垂直居中 */
+.lc-top :deep(.flag) { margin-top: 2px; }
 .lc-name {
   min-width: 0;
   font-size: 12px;

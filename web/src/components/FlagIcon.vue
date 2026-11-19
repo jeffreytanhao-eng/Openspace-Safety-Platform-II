@@ -8,9 +8,45 @@ import { computed } from 'vue'
 
 const props = defineProps<{ code?: string | null }>()
 
+/** 五角星多边形点位：r 为外接圆半径，rot 为旋转角（度），默认尖角朝上 */
+function star(cx: number, cy: number, r: number, rot = 0): string {
+  const pts: string[] = []
+  for (let i = 0; i < 10; i++) {
+    const rr = i % 2 === 0 ? r : r * 0.382
+    const a = ((-90 + rot + i * 36) * Math.PI) / 180
+    pts.push(`${(cx + rr * Math.cos(a)).toFixed(2)},${(cy + rr * Math.sin(a)).toFixed(2)}`)
+  }
+  return pts.join(' ')
+}
+
+/** 小星让一个尖角指向大星中心（标准五星红旗取角规则） */
+function aimAt(cx: number, cy: number, tx: number, ty: number): number {
+  return (Math.atan2(ty - cy, tx - cx) * 180) / Math.PI + 90
+}
+
+/** 五星红旗：30×20 网格按 0.7 缩放到 21×14 视框（大星半径 3→2.1，小星 1→0.7） */
+const CN_FLAG = (() => {
+  const bx = 3.5
+  const by = 3.5
+  const small: Array<[number, number]> = [
+    [7, 1.4],
+    [8.4, 2.8],
+    [8.4, 4.9],
+    [7, 6.3]
+  ]
+  const parts = [
+    '<rect width="21" height="14" fill="#de2910"/>',
+    `<polygon fill="#ffde00" points="${star(bx, by, 2.1)}"/>`
+  ]
+  for (const [x, y] of small) {
+    parts.push(`<polygon fill="#ffde00" points="${star(x, y, 0.7, aimAt(x, y, bx, by))}"/>`)
+  }
+  return parts.join('')
+})()
+
 const FLAGS: Record<string, string> = {
   us: '<rect width="21" height="14" fill="#fff"/><g fill="#b22234"><rect width="21" height="1.08"/><rect width="21" height="1.08" y="2.15"/><rect width="21" height="1.08" y="4.31"/><rect width="21" height="1.08" y="6.46"/><rect width="21" height="1.08" y="8.62"/><rect width="21" height="1.08" y="10.77"/><rect width="21" height="1.08" y="12.92"/></g><rect width="8.6" height="7.5" fill="#3c3b6e"/>',
-  cn: '<rect width="21" height="14" fill="#de2910"/><path fill="#ffde00" d="M4.4 2.1l.85 2.55h2.6l-2.1 1.55.8 2.5-2.15-1.55-2.1 1.55.8-2.5L1.05 4.65h2.6z"/>',
+  cn: CN_FLAG,
   ru: '<rect width="21" height="14" fill="#fff"/><rect width="21" height="4.66" y="4.67" fill="#0039a6"/><rect width="21" height="4.67" y="9.33" fill="#d52b1e"/>',
   jp: '<rect width="21" height="14" fill="#fff"/><circle cx="10.5" cy="7" r="3.6" fill="#bc002d"/>',
   in: '<rect width="21" height="14" fill="#fff"/><rect width="21" height="4.67" fill="#ff9933"/><rect width="21" height="4.67" y="9.33" fill="#138808"/><circle cx="10.5" cy="7" r="1.85" fill="none" stroke="#000080" stroke-width="0.7"/>',
