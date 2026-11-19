@@ -178,13 +178,22 @@ function storedVel(v?: [number, number, number]): [number, number, number] | nul
   return s > 0.05 && s < 20 ? [x, y, z] : null
 }
 
-/** 无 TLE 时的锚点来源：事件自带 TCA 位置，或编目快照状态向量 */
+/** 编目快照锚点有效期：快照是「构建时刻」的状态向量，两体外推到 TCA 的误差随 |Δt| 快速增长
+ *  （实测 LEO 目标跨 23h 可差 1500+ km，两目标重构间距膨胀到数千 km）。
+ *  超出该窗视为无锚点，强制用 sat_tle 的 SGP4 在 TCA 重算，保证锚点/模型/轨道同源。 */
+const SNAP_ANCHOR_MAX_MS = 3 * 3600 * 1000
+
+/** 无 TLE 时的锚点来源：事件自带 TCA 位置，或「时刻接近 TCA」的编目快照状态向量 */
 function anchorCovered(
   norad: number,
   pos: [number, number, number] | undefined,
-  cloudIds: Set<number>
+  cloudIds: Set<number>,
+  tcaMs: number,
+  snapMs: number
 ): boolean {
-  return !!storedPos(pos) || cloudIds.has(norad)
+  if (storedPos(pos)) return true
+  if (!cloudIds.has(norad)) return false
+  return snapMs > 0 && Math.abs(tcaMs - snapMs) <= SNAP_ANCHOR_MAX_MS
 }
 
 /** 编目元信息（object_type 等）：型号解析与标签类型显示共用，取自左栏同一份编目快照 */
@@ -238,20 +247,21 @@ function eciToGeodetic(
 
 /**
  * 组装带锚点的事件集：双方位置几何中心（缺一用另一方，全缺丢弃）。
- * 编目快照（约 450 目标）之外的事件用 sat_tle 全量 TLE 兜底锚点，
- * 保证深链/任意交会事件都能落进场景。
+ * 真实 CDM 事件不落 TCA 状态向量，锚点只能重建：快照只在 TCA 附近有效，
+ * 历史 TCA（窗口默认 7d）一律用 sat_tle 的 SGP4 在 TCA 重算。
  */
 export async function buildEventCloudItems(
   raw: EventCloudItem[]
 ): Promise<{ items: (EventCloudItem & { pos: THREE.Vector3 })[]; skipped: number }> {
   // R2-10：锚点与放大态模型统一按新鲜 TLE 计算，避免快照龄期导致锚点/模型错位。
-  // 但 35k 行全量约 5s：仅当有事件既无自带 TCA 位置、又不在编目快照内时才拉取（全量档通常无需）。
-  const { tleLineMap, loadTleLines, cloudList } = useCatalog()
+  // 全量 35k 行约 5s：仅当存在「无自带 TCA 位置且快照离 TCA 太远」的事件时拉取（会话内只拉一次）。
+  const { tleLineMap, loadTleLines, cloudList, cloudSnapT } = useCatalog()
   const cloudIds = new Set(cloudList.value.map((c) => c.norad_id))
+  const snapMs = cloudSnapT.value
   const needTle = raw.some(
     (ev) =>
-      !anchorCovered(ev.noradA, ev.posA, cloudIds) ||
-      (ev.noradB !== ev.noradA && !anchorCovered(ev.noradB, ev.posB, cloudIds))
+      !anchorCovered(ev.noradA, ev.posA, cloudIds, ev.tcaMs, snapMs) ||
+      (ev.noradB !== ev.noradA && !anchorCovered(ev.noradB, ev.posB, cloudIds, ev.tcaMs, snapMs))
   )
   if (needTle && !tleLineMap.value.size) {
     try {

@@ -7,7 +7,7 @@ import { listObjects, type ManagedObject } from '@/api/objects'
 import { listEvents } from '@/api/events'
 import { AuthError } from '@/api/auth'
 import { saveReportDocument } from '@/api/documents'
-import { useObjectAliases } from '@/composables/useObjectAliases'
+import { useObjectAliases, displayName } from '@/composables/useObjectAliases'
 import { useAuthStore } from '@/stores/auth'
 
 const router = useRouter()
@@ -77,8 +77,9 @@ const kpis = computed(() => {
 
 /* ------------------------------ 资产清单视图 ------------------------------ */
 
+/** 名称口径与「目标」页一致：有本组织别名时别名为主显示名，原名作为副标题 */
 function assetName(a: ManagedObject): string {
-  return a.name?.trim() || `NORAD ${a.norad_id}`
+  return displayName(a.alias, a.name, a.norad_id)
 }
 function assetBound(a: ManagedObject): number {
   return a.bound_ephemerides ?? 0
@@ -286,7 +287,10 @@ async function saveReport() {
               <div v-if="!assets.length" class="empty">{{ t('ov.noAssets') }}</div>
               <div v-for="a in assets" :key="a.id" class="asset">
                 <div class="asset-top">
-                  <div class="asset-name">{{ assetName(a) }}</div>
+                  <div class="asset-title">
+                    <div class="asset-name">{{ assetName(a) }}</div>
+                    <div v-if="a.alias" class="asset-official">{{ a.name }}</div>
+                  </div>
                   <span class="status" :class="assetBound(a) > 0 ? 'ok' : 'stale'">
                     {{ assetBound(a) > 0 ? t('ov.ephBound') : t('ov.ephNone') }}
                   </span>
@@ -579,9 +583,19 @@ async function saveReport() {
   padding: 8px 10px;
 }
 .asset-top { display: flex; justify-content: space-between; gap: 6px; }
+.asset-title { display: flex; align-items: baseline; gap: 4px; min-width: 0; }
 .asset-name {
+  min-width: 0;
   font-size: 12px;
   font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.asset-official {
+  min-width: 0;
+  font-size: 10px;
+  color: var(--text-dim);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
