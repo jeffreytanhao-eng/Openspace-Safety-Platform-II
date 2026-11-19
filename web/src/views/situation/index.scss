@@ -687,15 +687,15 @@
     transform: scale(0.96);
   }
 
-  /* 保持居中：active 时与 hover 同色系，提示持续跟随 */
+  /* 保持居中：active 时加深底色并加亮边框，与未激活态形成明显反差 */
   &.constel-pin.on {
-    color: #e6edf6;
-    background: rgba(79, 195, 247, 0.16);
-    border-color: rgba(79, 195, 247, 0.65);
-    box-shadow: 0 0 12px rgba(79, 195, 247, 0.28);
+    color: #ffffff;
+    background: linear-gradient(180deg, #10527a 0%, #0a3550 100%);
+    border-color: #8fe3ff;
+    box-shadow: 0 0 0 1px rgba(143, 227, 255, 0.28), 0 0 16px rgba(79, 195, 247, 0.5);
 
     .reset-ico {
-      color: #7fdbff;
+      color: #a6ecff;
     }
   }
 }
