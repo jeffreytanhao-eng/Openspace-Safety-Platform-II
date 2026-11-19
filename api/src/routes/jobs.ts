@@ -22,6 +22,12 @@ import {
 import { runStarlinkPull, isStarlinkPullRunning } from '../services/pullStarlink.js'
 import { getGcatStatus, isGcatIngestRunning, startGcatIngest } from '../jobs/gcatRefresh.js'
 import { writeUserAudit } from '../db/adminDb.js'
+import {
+  getLaunchTranslateConfig,
+  saveLaunchTranslateConfig,
+  maskApiKey,
+  testLaunchTranslate
+} from '../services/launchTranslate.js'
 
 const router = Router()
 
@@ -121,6 +127,53 @@ router.post('/jobs/starlink-pull/run', requireAuth, requireSuperAdmin, async (re
     console.error('[jobs/starlink-pull] run failed:', (e as Error).message)
   })
   res.json(ok({ started: true, triggered_by: triggeredBy, count: cfg.count, format: cfg.format }))
+})
+
+/* ------------------------- 发射简报 LLM 翻译 ------------------------- */
+
+function translateAdminView(c: { enabled: boolean; base_url: string; model: string; api_key: string }) {
+  return {
+    enabled: c.enabled,
+    base_url: c.base_url,
+    model: c.model,
+    has_key: !!c.api_key,
+    api_key_masked: maskApiKey(c.api_key)
+  }
+}
+
+router.get('/jobs/launch-translate', requireAuth, requireSuperAdmin, async (_req, res) => {
+  res.json(ok(translateAdminView(await getLaunchTranslateConfig())))
+})
+
+router.put('/jobs/launch-translate', requireAuth, requireSuperAdmin, async (req, res) => {
+  const body = (req.body || {}) as { enabled?: unknown; base_url?: unknown; model?: unknown; api_key?: unknown }
+  const baseUrl = String(body.base_url || '').trim()
+  const model = String(body.model || '').trim()
+  if (!/^https?:\/\/\S+$/.test(baseUrl)) {
+    res.status(400).json(fail(400, '接口地址需以 http(s):// 开头'))
+    return
+  }
+  if (!model) {
+    res.status(400).json(fail(400, '接入点 / 模型不能为空'))
+    return
+  }
+  const apiKey = typeof body.api_key === 'string' && body.api_key.trim() ? body.api_key.trim() : undefined
+  try {
+    await saveLaunchTranslateConfig({ enabled: body.enabled === true, base_url: baseUrl, model, api_key: apiKey })
+    res.json(ok(translateAdminView(await getLaunchTranslateConfig())))
+  } catch (e) {
+    console.error('[jobs/launch-translate] save failed:', (e as Error).message)
+    res.status(500).json(fail(500, '保存失败'))
+  }
+})
+
+router.post('/jobs/launch-translate/test', requireAuth, requireSuperAdmin, async (_req, res) => {
+  try {
+    const zh = await testLaunchTranslate()
+    res.json(ok({ sample: 'Falcon 9 Block 5 | USSF-317', zh }))
+  } catch (e) {
+    res.status(502).json(fail(502, (e as Error).message || '翻译测试失败'))
+  }
 })
 
 /* ------------------------- 公开目录（GCAT）每周更新 ------------------------- */

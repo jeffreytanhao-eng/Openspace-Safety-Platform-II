@@ -62,7 +62,7 @@ const nav = computed(() => {
 
 const activeKey = computed(() => {
   const name = String(route.name || '')
-  if (name === 'overview' || route.path === '/') return 'overview'
+  if (name === 'overview' || name === 'launch-detail' || route.path === '/') return 'overview'
   if (name === 'situation') return 'simulation'
   if (name === 'conjunction-detail' || route.path.startsWith('/conjunctions')) return 'conjunctions'
   return name || 'overview'

@@ -13,6 +13,8 @@ import { startStarlinkPullScheduler } from './services/pullStarlink.js'
 import { startGcatWeeklyScheduler } from './jobs/gcatRefresh.js'
 import { startDailyReportScheduler } from './jobs/dailyReport.js'
 import { ensureUserDocsSchema } from './db/userDocsDb.js'
+import { ensureLaunchSchema } from './db/launchDb.js'
+import { startLaunchRefreshScheduler, refreshLaunchesIfStale } from './jobs/launchRefresh.js'
 
 const app = createApp()
 
@@ -33,6 +35,15 @@ app.listen(config.port, config.listenHost, () => {
     // 日更批次/版本化快照表（Epic C1）+ 每日调度器
     if (await ensureFetchSchema()) startDailyFetchScheduler()
     else console.warn('[fetch] schema not ready, daily-fetch scheduler not started')
+    // 发射预报日切（UTC 00:00）：本地库为空或超过 20 小时未更新时启动补抓
+    if (await ensureLaunchSchema()) {
+      startLaunchRefreshScheduler()
+      void refreshLaunchesIfStale().catch((e) => {
+        console.error('[launch-refresh] startup run failed:', (e as Error).message)
+      })
+    } else {
+      console.warn('[launch-refresh] schema not ready, launch refresh scheduler not started')
+    }
     // StarLink 星历拉取调度器（UTC 00:00，配置开启时才执行）
     startStarlinkPullScheduler()
     // 公开目录（GCAT）每周一 00:00 北京时间自动下载并入库，不并入系统日更

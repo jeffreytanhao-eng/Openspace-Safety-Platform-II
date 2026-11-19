@@ -9,10 +9,12 @@ import { AuthError } from '@/api/auth'
 import { saveReportDocument } from '@/api/documents'
 import { useObjectAliases, displayName } from '@/composables/useObjectAliases'
 import { useAuthStore } from '@/stores/auth'
+import { getLaunches, type LaunchItem, type LaunchText } from '@/api/launches'
+import FlagIcon from '@/components/FlagIcon.vue'
 
 const router = useRouter()
 const { label: objLabel } = useObjectAliases()
-const { t } = useI18n()
+const { t, locale } = useI18n()
 const auth = useAuthStore()
 const isSuperAdmin = computed(() => auth.user?.role === 'platform_super_admin')
 
@@ -26,6 +28,7 @@ async function load() {
   loading.value = true
   needAuth.value = false
   loadError.value = ''
+  void loadLaunches()
   try {
     summary.value = await getOverviewSummary()
     // 平台账号（无组织）不查目标，避免 403 拖垮整个总览；KPI 显示「系统池」口径
@@ -38,6 +41,51 @@ async function load() {
   }
 }
 onMounted(load)
+
+/* ------------------------------ 火箭发射预报 ------------------------------ */
+
+/** 5 日窗口发射列表（外部接口经后端代理，失败只影响本面板） */
+const launches = ref<LaunchItem[]>([])
+const launchLoading = ref(true)
+const launchError = ref('')
+
+async function loadLaunches() {
+  launchLoading.value = true
+  launchError.value = ''
+  try {
+    const res = await getLaunches(5)
+    launches.value = res.items ?? []
+  } catch (e) {
+    launchError.value = e instanceof Error ? e.message : String(e)
+    launches.value = []
+  } finally {
+    launchLoading.value = false
+  }
+}
+
+/** 中英双语字段按当前语言取值，缺失回退另一语言 */
+function pickText(v?: LaunchText | null): string {
+  if (!v) return ''
+  return locale.value === 'zh' ? v.zh || v.en : v.en || v.zh || ''
+}
+
+/** 国旗识别线索：接口 country.code 实为「发射场, 国家」全名，拼上中英文国名兜底 */
+function countryHint(l: LaunchItem): string {
+  const c = l.site?.country
+  return [c?.code, c?.name?.en, c?.name?.zh].filter(Boolean).join(' ')
+}
+
+/** 发射时间统一按 UTC 展示（与全站 TCA / 时钟口径一致） */
+function fmtNet(v: string): string {
+  const d = new Date(v)
+  if (Number.isNaN(d.getTime())) return v
+  const p = (n: number) => String(n).padStart(2, '0')
+  return `${p(d.getUTCMonth() + 1)}-${p(d.getUTCDate())} ${p(d.getUTCHours())}:${p(d.getUTCMinutes())} UTC`
+}
+
+function openLaunch(id: string) {
+  router.push({ name: 'launch-detail', params: { id } })
+}
 
 /* ---------------------------------- KPI ---------------------------------- */
 
@@ -83,6 +131,10 @@ function assetName(a: ManagedObject): string {
 }
 function assetBound(a: ManagedObject): number {
   return a.bound_ephemerides ?? 0
+}
+/** 进入「目标」页并自动打开该目标的详情抽屉 */
+function openAsset(a: ManagedObject): void {
+  router.push({ path: '/objects', query: { norad: String(a.norad_id) } })
 }
 
 /* ------------------------------ 关注事件视图 ------------------------------ */
@@ -285,7 +337,8 @@ async function saveReport() {
             </header>
             <div class="asset-list">
               <div v-if="!assets.length" class="empty">{{ t('ov.noAssets') }}</div>
-              <div v-for="a in assets" :key="a.id" class="asset">
+              <div v-for="a in assets" :key="a.id" class="asset" role="button" tabindex="0"
+                   @click="openAsset(a)" @keydown.enter="openAsset(a)" @keydown.space.prevent="openAsset(a)">
                 <div class="asset-top">
                   <div class="asset-title">
                     <div class="asset-name">{{ assetName(a) }}</div>
@@ -375,7 +428,28 @@ async function saveReport() {
             </div>
           </header>
           <div class="feed-list">
-            <div class="empty">{{ t('ov.launchEmpty') }}</div>
+            <div v-if="launchLoading" class="empty">{{ t('ov.launchLoading') }}</div>
+            <div v-else-if="launchError" class="empty">
+              {{ t('ov.launchFail') }}
+              <button type="button" class="ghost retry" @click="loadLaunches">{{ t('ov.retry') }}</button>
+            </div>
+            <div v-else-if="!launches.length" class="empty">{{ t('ov.launchEmpty') }}</div>
+            <template v-else>
+              <button
+                v-for="l in launches"
+                :key="l.id"
+                type="button"
+                class="launch-card"
+                @click="openLaunch(l.id)"
+              >
+                <div class="lc-top">
+                  <FlagIcon :code="countryHint(l)" />
+                  <span class="lc-name">{{ pickText(l.name) }}</span>
+                </div>
+                <div class="lc-time">{{ fmtNet(l.net) }}</div>
+                <div class="lc-summary">{{ pickText(l.summary) }}</div>
+              </button>
+            </template>
           </div>
         </section>
 
@@ -490,6 +564,55 @@ async function saveReport() {
   gap: 10px;
   min-height: 0;
 }
+
+/* 发射预报卡片 */
+.launch-card {
+  appearance: none;
+  width: 100%;
+  text-align: left;
+  cursor: pointer;
+  color: var(--text);
+  background: var(--bg-panel-2);
+  border: 1px solid var(--border);
+  border-left: 2px solid #3d8bfd;
+  border-radius: 6px;
+  padding: 8px 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-height: 92px;
+}
+.launch-card:hover { border-color: var(--border-strong); border-left-color: #3d8bfd; }
+.launch-card:focus-visible { outline: 1px solid var(--accent); outline-offset: 1px; }
+.lc-top { display: flex; align-items: flex-start; gap: 6px; min-width: 0; }
+.lc-top :deep(.flag) { margin-top: 1px; }
+.lc-name {
+  min-width: 0;
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 16px;
+  height: 32px;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.lc-time {
+  font-size: 10px;
+  color: var(--text-dim);
+  font-variant-numeric: tabular-nums;
+}
+.lc-summary {
+  font-size: 10px;
+  line-height: 15px;
+  height: 30px;
+  color: var(--text-dim);
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.retry { margin-left: 8px; }
 .assets { flex: 1; }
 .sources { flex: 0 0 auto; }
 .report { flex: 0 0 auto; }
@@ -581,6 +704,13 @@ async function saveReport() {
   border: 1px solid var(--border);
   border-radius: 6px;
   padding: 8px 10px;
+  cursor: pointer;
+}
+.asset:hover,
+.asset:focus-visible {
+  border-color: var(--border-strong);
+  background: var(--bg-hover);
+  outline: none;
 }
 .asset-top { display: flex; justify-content: space-between; gap: 6px; }
 .asset-title { display: flex; align-items: baseline; gap: 4px; min-width: 0; }

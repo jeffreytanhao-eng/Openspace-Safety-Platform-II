@@ -38,6 +38,11 @@ export const config = {
     token: process.env.AOE_TOKEN || '',
     baseUrl: process.env.AOE_BASE_URL || 'https://spacemapper.cn'
   },
+  /** 外部发射简报 API（docs/public-api.md）；Key 仅存服务端，浏览器走 /cgi/launches 代理 */
+  launchApi: {
+    key: process.env.LAUNCH_API_KEY || '',
+    baseUrl: process.env.LAUNCH_API_BASE_URL || 'http://39.96.81.164:8080'
+  },
   /** 每日日更时刻（UTC，'M H * * *' 形式），默认每日 06:00 */
   dailyFetchCron: process.env.DAILY_FETCH_CRON || '0 6 * * *',
   /** 日报生成/投递时刻（UTC，'M H * * *' 形式），默认每日 06:30（在日更之后） */

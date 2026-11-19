@@ -20,6 +20,7 @@ import notify from './notify.js'
 import maneuvers from './maneuvers.js'
 import documents from './documents.js'
 import userEvents from './userEvents.js'
+import launches from './launches.js'
 import { getDailyFetchStatus } from '../db/fetchDb.js'
 import { isDailyFetchRunning } from '../jobs/dailyFetch.js'
 
@@ -84,6 +85,9 @@ router.use(maneuvers)
 
 // New catalog helpers (stats / paginated tles / cdms)
 router.use(catalog)
+
+// 外部发射简报代理（docs/public-api.md；服务端注入 Key，前端只读同源接口）
+router.use('/launches', launches)
 
 // Old-platform compatible public sat routes (reconstructed from jsc + frontend contracts)
 router.use('/sat_tle', satTle)

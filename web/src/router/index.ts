@@ -9,6 +9,7 @@ const router = createRouter({
       component: () => import('@/layouts/AppShell.vue'),
       children: [
         { path: '', name: 'overview', component: () => import('@/views/overview/index.vue'), meta: { title: 'Overview', requiresAuth: true } },
+        { path: 'launches/:id', name: 'launch-detail', component: () => import('@/views/launch/Detail.vue'), meta: { title: 'Launch Detail', requiresAuth: true } },
         { path: 'objects', name: 'objects', component: () => import('@/views/objects/index.vue'), meta: { title: 'Objects', requiresAuth: true } },
         { path: 'trajectories', name: 'trajectories', component: () => import('@/views/trajectories/index.vue'), meta: { title: 'Trajectories' } },
         { path: 'conjunctions', name: 'conjunctions', component: () => import('@/views/conjunctions/index.vue'), meta: { title: 'Conjunctions' } },

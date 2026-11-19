@@ -367,6 +367,33 @@ export function adminStarlinkPullRun(): Promise<{
   return cgiCall({ method: 'POST', url: '/jobs/starlink-pull/run', headers: headers() })
 }
 
+/* ------------------------- 发射简报 LLM 翻译 ------------------------- */
+
+export interface LaunchTranslateConfig {
+  enabled: boolean
+  base_url: string
+  model: string
+  has_key: boolean
+  api_key_masked: string
+}
+
+export function adminLaunchTranslateGet(): Promise<LaunchTranslateConfig> {
+  return cgiCall({ method: 'GET', url: '/jobs/launch-translate', headers: headers() })
+}
+
+export function adminLaunchTranslateSave(payload: {
+  enabled: boolean
+  base_url: string
+  model: string
+  api_key?: string
+}): Promise<LaunchTranslateConfig> {
+  return cgiCall({ method: 'PUT', url: '/jobs/launch-translate', headers: headers(), data: payload })
+}
+
+export function adminLaunchTranslateTest(): Promise<{ sample: string; zh: string }> {
+  return cgiCall({ method: 'POST', url: '/jobs/launch-translate/test', headers: headers() })
+}
+
 /* ------------------------- 公开目录（GCAT）每周更新 ------------------------- */
 
 export interface GcatLastRun {

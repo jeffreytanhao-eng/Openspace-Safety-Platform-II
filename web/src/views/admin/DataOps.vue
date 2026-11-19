@@ -6,6 +6,10 @@ import {
   adminStarlinkPullGet,
   adminStarlinkPullSave,
   adminStarlinkPullRun,
+  adminLaunchTranslateGet,
+  adminLaunchTranslateSave,
+  adminLaunchTranslateTest,
+  type LaunchTranslateConfig,
   adminGcatStatus,
   adminGcatIngest,
   type DailyFetchSourceResult,
@@ -372,6 +376,78 @@ async function runStarlink() {
   }
 }
 
+/* ------------------------- 发射简报 LLM 翻译 ------------------------- */
+
+const ltEnabled = ref(true)
+const ltBaseUrl = ref('')
+const ltModel = ref('')
+const ltKey = ref('')
+const ltHasKey = ref(false)
+const ltMasked = ref('')
+const ltSaving = ref(false)
+const ltTesting = ref(false)
+const ltMsg = ref('')
+const ltErr = ref('')
+
+const ltBusy = computed(() => ltSaving.value || ltTesting.value)
+
+function applyLaunchTranslate(c: LaunchTranslateConfig) {
+  ltEnabled.value = c.enabled
+  ltBaseUrl.value = c.base_url
+  ltModel.value = c.model
+  ltHasKey.value = c.has_key
+  ltMasked.value = c.api_key_masked
+}
+
+async function loadLaunchTranslate() {
+  ltErr.value = ''
+  try {
+    applyLaunchTranslate(await adminLaunchTranslateGet())
+  } catch (e) {
+    ltErr.value = e instanceof AuthError ? e.message : String((e as Error).message || e)
+  }
+}
+
+async function saveLaunchTranslate(): Promise<boolean> {
+  ltSaving.value = true
+  ltErr.value = ''
+  ltMsg.value = ''
+  try {
+    const payload: { enabled: boolean; base_url: string; model: string; api_key?: string } = {
+      enabled: ltEnabled.value,
+      base_url: ltBaseUrl.value.trim(),
+      model: ltModel.value.trim()
+    }
+    if (ltKey.value.trim()) payload.api_key = ltKey.value.trim()
+    const c = await adminLaunchTranslateSave(payload)
+    applyLaunchTranslate(c)
+    ltKey.value = ''
+    ltMsg.value = '翻译配置已保存'
+    return true
+  } catch (e) {
+    ltErr.value = e instanceof AuthError ? e.message : String((e as Error).message || e)
+    return false
+  } finally {
+    ltSaving.value = false
+  }
+}
+
+async function testLaunchTranslate() {
+  if (ltBusy.value) return
+  if (!(await saveLaunchTranslate())) return
+  ltTesting.value = true
+  ltErr.value = ''
+  ltMsg.value = ''
+  try {
+    const r = await adminLaunchTranslateTest()
+    ltMsg.value = `测试通过：${r.sample} → ${r.zh}`
+  } catch (e) {
+    ltErr.value = e instanceof AuthError ? e.message : String((e as Error).message || e)
+  } finally {
+    ltTesting.value = false
+  }
+}
+
 onBeforeUnmount(() => {
   if (slTimer) clearTimeout(slTimer)
   if (gcatTimer) clearTimeout(gcatTimer)
@@ -380,6 +456,7 @@ onBeforeUnmount(() => {
 onMounted(() => {
   void load()
   void loadStarlink()
+  void loadLaunchTranslate()
   void loadGcat()
 })
 </script>
@@ -556,6 +633,54 @@ onMounted(() => {
       </div>
     </section>
 
+    <section class="upload-zone lt-zone">
+      <div class="uz-row">
+        <div class="uz-text">
+          <div class="uz-title">发射简报翻译 · LLM</div>
+          <div class="uz-perm">
+            每次拉取外部发射简报后，自动把缺失的中文名称、简介与场站信息翻译为简体中文（火山方舟 Ark，OpenAI 兼容接口）。翻译失败时保留原文，不影响发射数据展示。
+          </div>
+        </div>
+        <div class="uz-actions">
+          <label class="uz-vis">
+            <span>自动翻译</span>
+            <select v-model="ltEnabled" :disabled="ltBusy">
+              <option :value="true">开启</option>
+              <option :value="false">关闭</option>
+            </select>
+          </label>
+          <button type="button" class="btn" :disabled="ltBusy" @click="saveLaunchTranslate">
+            {{ ltSaving ? '保存中…' : '保存配置' }}
+          </button>
+          <button type="button" class="btn primary" :disabled="ltBusy" @click="testLaunchTranslate">
+            {{ ltTesting ? '测试中…' : '测试连接' }}
+          </button>
+        </div>
+      </div>
+      <div class="lt-grid">
+        <label>
+          <span>接口地址</span>
+          <input v-model="ltBaseUrl" type="text" placeholder="https://ark.cn-beijing.volces.com/api/v3" :disabled="ltBusy" />
+        </label>
+        <label>
+          <span>接入点 / 模型</span>
+          <input v-model="ltModel" type="text" placeholder="ep-xxxxxxxx" :disabled="ltBusy" />
+        </label>
+        <label>
+          <span>API Key</span>
+          <input
+            v-model="ltKey"
+            type="password"
+            autocomplete="new-password"
+            :placeholder="ltHasKey ? `已配置 ${ltMasked}，留空保持不变` : '尚未配置'"
+            :disabled="ltBusy"
+          />
+        </label>
+      </div>
+      <p v-if="ltErr" class="error inline">{{ ltErr }}</p>
+      <p v-if="ltMsg" class="uz-msg">{{ ltMsg }}</p>
+    </section>
+
     <section class="upload-zone">
       <div class="uz-row">
         <div class="uz-text">
@@ -695,6 +820,18 @@ onMounted(() => {
   font-size: 11px;
 }
 .sl-zone { border-style: solid; }
+.lt-zone { border-style: solid; }
+.lt-grid {
+  display: grid;
+  grid-template-columns: 1.2fr 0.9fr 1.1fr;
+  gap: 10px;
+  margin-top: 10px;
+}
+.lt-grid input {
+  background: var(--bg-panel);
+  font-size: 11px;
+  padding: 6px 8px;
+}
 .sl-last {
   margin: 8px 0 0;
   font-size: 11px;

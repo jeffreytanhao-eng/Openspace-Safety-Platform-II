@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, ref, watch } from 'vue'
+import { useRoute } from 'vue-router'
 import { useI18n } from '@/composables/useI18n'
 import {
   catalogOrgLabel,
@@ -59,6 +60,7 @@ import PcTcaChart from '@/components/PcTcaChart.vue'
 import CompactPager from '@/components/CompactPager.vue'
 
 const { t, isZh } = useI18n()
+const route = useRoute()
 
 const q = ref('')
 const loading = ref(false)
@@ -200,9 +202,15 @@ async function load() {
     loading.value = false
   }
 }
-onMounted(() => {
-  void load()
+onMounted(async () => {
+  await load()
   void loadQuota()
+  // 从总览「资产清单」跳入时（/objects?norad=xxx）自动打开该目标详情抽屉
+  const norad = Number(route.query.norad)
+  if (Number.isFinite(norad) && norad > 0) {
+    const hit = objects.value.find((o) => Number(o.norad_id) === norad)
+    if (hit) void openDetail(hit)
+  }
 })
 
 /* ---- 认领对话框 ---- */
