@@ -15,6 +15,8 @@ import { startDailyReportScheduler } from './jobs/dailyReport.js'
 import { ensureUserDocsSchema } from './db/userDocsDb.js'
 import { ensureLaunchSchema } from './db/launchDb.js'
 import { startLaunchRefreshScheduler, refreshLaunchesIfStale } from './jobs/launchRefresh.js'
+import { ensureNewsSchema } from './db/newsDb.js'
+import { startNewsRefreshScheduler, refreshNewsIfStale } from './jobs/newsRefresh.js'
 
 const app = createApp()
 
@@ -43,6 +45,15 @@ app.listen(config.port, config.listenHost, () => {
       })
     } else {
       console.warn('[launch-refresh] schema not ready, launch refresh scheduler not started')
+    }
+    // 资讯日切（UTC 00:00）：与发射预报同口径，最多保留 8 条
+    if (await ensureNewsSchema()) {
+      startNewsRefreshScheduler()
+      void refreshNewsIfStale().catch((e) => {
+        console.error('[news-refresh] startup run failed:', (e as Error).message)
+      })
+    } else {
+      console.warn('[news-refresh] schema not ready, news refresh scheduler not started')
     }
     // StarLink 星历拉取调度器（UTC 00:00，配置开启时才执行）
     startStarlinkPullScheduler()

@@ -199,8 +199,8 @@ async function requestTranslations(cfg: LaunchTranslateConfig, texts: string[]):
   return out
 }
 
-/** 批量翻译（含缓存），返回 原文 → 译文 */
-async function translateTexts(texts: string[]): Promise<Map<string, string>> {
+/** 批量翻译（含缓存），返回 原文 → 译文；资讯日切复用同一模型与缓存 */
+export async function translateTexts(texts: string[]): Promise<Map<string, string>> {
   const out = new Map<string, string>()
   const unique = Array.from(new Set(texts.filter((s) => !!s && !!s.trim())))
   if (!unique.length) return out

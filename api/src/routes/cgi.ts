@@ -21,6 +21,7 @@ import maneuvers from './maneuvers.js'
 import documents from './documents.js'
 import userEvents from './userEvents.js'
 import launches from './launches.js'
+import news from './news.js'
 import { getDailyFetchStatus } from '../db/fetchDb.js'
 import { isDailyFetchRunning } from '../jobs/dailyFetch.js'
 
@@ -88,6 +89,9 @@ router.use(catalog)
 
 // 外部发射简报代理（docs/public-api.md；服务端注入 Key，前端只读同源接口）
 router.use('/launches', launches)
+
+// 每日热点资讯（同源外部接口，UTC 00:00 日切落库后只读）
+router.use('/news', news)
 
 // Old-platform compatible public sat routes (reconstructed from jsc + frontend contracts)
 router.use('/sat_tle', satTle)

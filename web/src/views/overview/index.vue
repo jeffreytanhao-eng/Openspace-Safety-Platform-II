@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { useI18n } from '@/composables/useI18n'
 import { getOverviewSummary, type OverviewSummary, type OwnedCdmItem } from '@/api/overview'
@@ -10,7 +10,9 @@ import { saveReportDocument } from '@/api/documents'
 import { useObjectAliases, displayName } from '@/composables/useObjectAliases'
 import { useAuthStore } from '@/stores/auth'
 import { getLaunches, type LaunchItem, type LaunchText } from '@/api/launches'
+import { getNews, getNewsItem, NEWS_LIMIT, type NewsItem } from '@/api/news'
 import FlagIcon from '@/components/FlagIcon.vue'
+import CompactPager from '@/components/CompactPager.vue'
 
 const router = useRouter()
 const { label: objLabel } = useObjectAliases()
@@ -29,6 +31,7 @@ async function load() {
   needAuth.value = false
   loadError.value = ''
   void loadLaunches()
+  void loadNews()
   try {
     summary.value = await getOverviewSummary()
     // 平台账号（无组织）不查目标，避免 403 拖垮整个总览；KPI 显示「系统池」口径
@@ -41,6 +44,20 @@ async function load() {
   }
 }
 onMounted(load)
+
+/* ------------------------------ 资产清单分页 ------------------------------ */
+
+const ASSET_PAGE_SIZE = 12
+const assetPage = ref(1)
+const assetTotalPages = computed(() => Math.max(1, Math.ceil(assets.value.length / ASSET_PAGE_SIZE)))
+const pagedAssets = computed(() => {
+  const p = Math.min(Math.max(1, assetPage.value), assetTotalPages.value)
+  const start = (p - 1) * ASSET_PAGE_SIZE
+  return assets.value.slice(start, start + ASSET_PAGE_SIZE)
+})
+watch(assetTotalPages, (n) => {
+  if (assetPage.value > n) assetPage.value = n
+})
 
 /* ------------------------------ 火箭发射预报 ------------------------------ */
 
@@ -64,9 +81,9 @@ async function loadLaunches() {
 }
 
 /** 中英双语字段按当前语言取值，缺失回退另一语言 */
-function pickText(v?: LaunchText | null): string {
+function pickText(v?: LaunchText | { en?: string; zh?: string } | null): string {
   if (!v) return ''
-  return locale.value === 'zh' ? v.zh || v.en : v.en || v.zh || ''
+  return locale.value === 'zh' ? v.zh || v.en || '' : v.en || v.zh || ''
 }
 
 /** 国旗识别线索：接口 country.code 实为「发射场, 国家」全名，拼上中英文国名兜底 */
@@ -86,6 +103,59 @@ function fmtNet(v: string): string {
 function openLaunch(id: string) {
   router.push({ name: 'launch-detail', params: { id } })
 }
+
+/* ------------------------------ 全球太空安全资讯 ------------------------------ */
+
+/** 日切结果（UTC 00:00 更新），最多展示 8 条，失败只影响本面板 */
+const newsList = ref<NewsItem[]>([])
+const newsLoading = ref(true)
+const newsError = ref('')
+
+async function loadNews() {
+  newsLoading.value = true
+  newsError.value = ''
+  try {
+    const res = await getNews(NEWS_LIMIT)
+    newsList.value = (res.items ?? []).slice(0, NEWS_LIMIT)
+  } catch (e) {
+    newsError.value = e instanceof Error ? e.message : String(e)
+    newsList.value = []
+  } finally {
+    newsLoading.value = false
+  }
+}
+
+/** 详情弹窗：先展示列表已有字段，影响分析缺失时按 id 回源补取 */
+const activeNews = ref<NewsItem | null>(null)
+const newsDetailLoading = ref(false)
+const newsDetailError = ref('')
+
+async function openNews(n: NewsItem) {
+  activeNews.value = n
+  newsDetailError.value = ''
+  if (n.impact_zh) return
+  newsDetailLoading.value = true
+  try {
+    const full = await getNewsItem(n.id)
+    if (activeNews.value?.id === n.id) activeNews.value = { ...n, ...full }
+  } catch (e) {
+    if (activeNews.value?.id === n.id) newsDetailError.value = e instanceof Error ? e.message : String(e)
+  } finally {
+    newsDetailLoading.value = false
+  }
+}
+
+function closeNews() {
+  activeNews.value = null
+  newsDetailLoading.value = false
+  newsDetailError.value = ''
+}
+
+function onKeydown(e: KeyboardEvent) {
+  if (e.key === 'Escape' && activeNews.value) closeNews()
+}
+onMounted(() => window.addEventListener('keydown', onKeydown))
+onUnmounted(() => window.removeEventListener('keydown', onKeydown))
 
 /* ---------------------------------- KPI ---------------------------------- */
 
@@ -337,7 +407,7 @@ async function saveReport() {
             </header>
             <div class="asset-list">
               <div v-if="!assets.length" class="empty">{{ t('ov.noAssets') }}</div>
-              <div v-for="a in assets" :key="a.id" class="asset" role="button" tabindex="0"
+              <div v-for="a in pagedAssets" :key="a.id" class="asset" role="button" tabindex="0"
                    @click="openAsset(a)" @keydown.enter="openAsset(a)" @keydown.space.prevent="openAsset(a)">
                 <div class="asset-top">
                   <div class="asset-title">
@@ -354,6 +424,9 @@ async function saveReport() {
                   <span>{{ fmtWhen(a.updated_at) }}</span>
                 </div>
               </div>
+            </div>
+            <div v-if="assets.length" class="asset-pager">
+              <CompactPager v-model:page="assetPage" :total-pages="assetTotalPages" :disabled="loading" />
             </div>
           </div>
 
@@ -416,7 +489,28 @@ async function saveReport() {
             </div>
           </header>
           <div class="feed-list">
-            <div class="empty">{{ t('ov.newsEmpty') }}</div>
+            <div v-if="newsLoading" class="empty">{{ t('ov.newsLoading') }}</div>
+            <div v-else-if="newsError" class="empty">
+              {{ t('ov.newsFail') }}
+              <button type="button" class="ghost retry" @click="loadNews">{{ t('ov.retry') }}</button>
+            </div>
+            <div v-else-if="!newsList.length" class="empty">{{ t('ov.newsEmpty') }}</div>
+            <template v-else>
+              <button
+                v-for="n in newsList"
+                :key="n.id"
+                type="button"
+                class="news-card"
+                @click="openNews(n)"
+              >
+                <div class="nc-name">{{ pickText(n.title) }}</div>
+                <div class="nc-meta">
+                  <span class="nc-time">{{ fmtNet(n.published_at) }}</span>
+                  <span class="nc-media">{{ pickText(n.media) }}</span>
+                </div>
+                <div class="nc-summary">{{ pickText(n.summary) }}</div>
+              </button>
+            </template>
           </div>
         </section>
 
@@ -492,6 +586,33 @@ async function saveReport() {
         </section>
       </section>
     </template>
+
+    <!-- 资讯详情：点卡片弹出（Esc / 点遮罩关闭） -->
+    <Teleport to="body">
+      <div v-if="activeNews" class="news-mask" @click.self="closeNews">
+        <div class="news-modal" role="dialog" aria-modal="true" :aria-label="t('ov.newsTitle')">
+          <header class="nm-head">
+            <div class="nm-title">{{ pickText(activeNews.title) }}</div>
+            <button type="button" class="nm-close" :aria-label="t('ov.newsClose')" @click="closeNews">×</button>
+          </header>
+          <div class="nm-meta">
+            <span class="nm-time">{{ t('ov.newsTime') }} {{ fmtNet(activeNews.published_at) }}</span>
+            <span class="nm-sep">·</span>
+            <span class="nm-media">{{ t('ov.newsMedia') }} {{ pickText(activeNews.media) }}</span>
+          </div>
+          <p class="nm-summary">{{ pickText(activeNews.summary) }}</p>
+          <a class="nm-link" :href="activeNews.url" target="_blank" rel="noopener noreferrer">
+            {{ t('ov.newsLink') }} ↗
+          </a>
+          <section class="nm-impact">
+            <div class="nm-impact-title">{{ t('ov.newsImpact') }}</div>
+            <div v-if="newsDetailLoading" class="nm-impact-body loading">{{ t('ov.newsImpactLoading') }}</div>
+            <div v-else-if="activeNews.impact_zh" class="nm-impact-body">{{ activeNews.impact_zh }}</div>
+            <div v-else class="nm-impact-body dim">{{ newsDetailError || t('ov.newsImpactEmpty') }}</div>
+          </section>
+        </div>
+      </div>
+    </Teleport>
   </div>
 </template>
 
@@ -613,6 +734,125 @@ async function saveReport() {
   -webkit-box-orient: vertical;
   overflow: hidden;
 }
+
+/* 资讯卡片：尺寸与发射卡片一致，左侧橙色装饰线区分 */
+.news-card {
+  appearance: none;
+  width: 100%;
+  text-align: left;
+  cursor: pointer;
+  color: var(--text);
+  background: var(--bg-panel-2);
+  border: 1px solid var(--border);
+  border-left: 2px solid #ff8a3d;
+  border-radius: 6px;
+  padding: 8px 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-height: 92px;
+}
+.news-card:hover { border-color: var(--border-strong); border-left-color: #ff8a3d; }
+.news-card:focus-visible { outline: 1px solid var(--accent); outline-offset: 1px; }
+.nc-name {
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 16px;
+  height: 32px;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.nc-meta {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  font-size: 10px;
+  color: var(--text-dim);
+}
+.nc-time { flex: 0 0 auto; font-variant-numeric: tabular-nums; }
+.nc-media { min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.nc-summary {
+  font-size: 10px;
+  line-height: 15px;
+  color: var(--text-dim);
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+/* 资讯详情弹窗 */
+.news-mask {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  background: rgba(0, 0, 0, 0.58);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+}
+.news-modal {
+  width: min(680px, 94vw);
+  max-height: 82vh;
+  overflow: auto;
+  background: var(--bg-panel);
+  border: 1px solid var(--border-strong);
+  border-left: 3px solid #ff8a3d;
+  border-radius: 10px;
+  padding: 16px 18px 18px;
+  box-shadow: 0 18px 48px rgba(0, 0, 0, 0.5);
+}
+.nm-head { display: flex; align-items: flex-start; gap: 12px; }
+.nm-title { flex: 1; font-size: 16px; font-weight: 650; line-height: 24px; color: var(--text); }
+.nm-close {
+  flex: 0 0 auto;
+  appearance: none;
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--text-muted);
+  border-radius: 4px;
+  width: 26px;
+  height: 26px;
+  font-size: 16px;
+  line-height: 1;
+  cursor: pointer;
+}
+.nm-close:hover { color: var(--accent-strong); border-color: var(--accent); }
+.nm-meta {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 8px;
+  font-size: 11px;
+  color: var(--text-dim);
+}
+.nm-time { font-variant-numeric: tabular-nums; }
+.nm-summary {
+  margin: 12px 0 0;
+  font-size: 12px;
+  line-height: 20px;
+  color: var(--text-muted);
+}
+.nm-link {
+  display: inline-block;
+  margin-top: 10px;
+  font-size: 11px;
+  color: var(--accent-strong);
+  text-decoration: none;
+}
+.nm-link:hover { text-decoration: underline; }
+.nm-impact {
+  margin-top: 14px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border);
+}
+.nm-impact-title { font-size: 12px; font-weight: 650; color: #ff8a3d; margin-bottom: 6px; }
+.nm-impact-body { font-size: 12px; line-height: 20px; color: var(--text); }
+.nm-impact-body.loading,
+.nm-impact-body.dim { color: var(--text-dim); }
 .retry { margin-left: 8px; }
 .assets { flex: 1; }
 .sources { flex: 0 0 auto; }
@@ -700,6 +940,7 @@ async function saveReport() {
 }
 
 .asset-list { flex: 1; min-height: 0; padding: 8px; overflow: auto; display: flex; flex-direction: column; gap: 6px; }
+.asset-pager { flex: none; min-width: 0; border-top: 1px solid var(--border); padding: 6px 10px; }
 .asset {
   background: var(--bg-panel-2);
   border: 1px solid var(--border);
