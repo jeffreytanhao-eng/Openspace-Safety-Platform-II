@@ -16,6 +16,7 @@ export function julianDate(utcMs: number): number {
 const ARCSEC_RAD = Math.PI / (180 * 3600)
 
 type Mat3 = [Vec3, Vec3, Vec3]
+export type { Mat3 }
 
 function mulMat(m: Mat3, v: Vec3): Vec3 {
   return [
@@ -119,6 +120,19 @@ function j2000ToTod(utcMs: number): Mat3 {
 /** TEME → J2000（速度用同一旋转矩阵，忽略旋转率项） */
 export function temeToJ2000(r: Vec3, v: Vec3, utcMs: number): { r: Vec3; v: Vec3 } {
   const m = j2000ToTod(utcMs)
+  return { r: mulMatT(m, r), v: mulMatT(m, v) }
+}
+
+/**
+ * 取 TEME → J2000 旋转矩阵：同一时刻只需构造一次，
+ * 批量旋转（例如同一时间步的全部副星）复用同一矩阵，避免逐星重建岁差/章动。
+ */
+export function temeToJ2000Mat(utcMs: number): Mat3 {
+  return j2000ToTod(utcMs)
+}
+
+/** 用已构造的矩阵把 TEME 位置/速度旋转到 J2000 */
+export function rotateTemeToJ2000(m: Mat3, r: Vec3, v: Vec3): { r: Vec3; v: Vec3 } {
   return { r: mulMatT(m, r), v: mulMatT(m, v) }
 }
 
