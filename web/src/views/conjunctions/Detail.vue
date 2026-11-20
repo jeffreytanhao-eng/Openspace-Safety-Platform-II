@@ -17,7 +17,8 @@ import {
   type PcAgreement,
   type PcMethod,
   type RelMotionSample,
-  type RelMotionResult
+  type RelMotionResult,
+  type ScreenEventMeta
 } from '@/api/events'
 import {
   getCaDefaults,
@@ -45,6 +46,22 @@ const event = ref<ConjunctionEvent | null>(null)
 const cdms = ref<CdmMember[]>([])
 const primary = ref<TleProfile | null>(null)
 const secondary = ref<TleProfile | null>(null)
+const screen = ref<ScreenEventMeta | null>(null)
+
+/** 筛查任务产出的交会：返回入口指回筛查页，KPI / 时间线改用筛查口径 */
+const fromScreens = computed(() => key.value.startsWith('scr-'))
+const screenJobId = computed<number | null>(() => {
+  if (screen.value?.jobId) return screen.value.jobId
+  if (event.value?.jobId) return event.value.jobId
+  const m = /^scr-(\d+)-\d+$/.exec(key.value)
+  return m ? Number(m[1]) : null
+})
+const backTarget = computed(() =>
+  fromScreens.value && screenJobId.value ? `/screens/${screenJobId.value}` : '/conjunctions'
+)
+function goBack(): void {
+  void router.push(backTarget.value)
+}
 
 async function load(): Promise<void> {
   loading.value = true
@@ -55,6 +72,7 @@ async function load(): Promise<void> {
     cdms.value = resp.cdms ?? []
     primary.value = resp.primary
     secondary.value = resp.secondary
+    screen.value = resp.screen ?? null
     void runCompare() // 详情就绪后自动比对（onMounted 时 event 尚为 null，不能挂在那里）
     void loadCaContext() // F1：预填组织默认参数 + 拉 run 历史（未登录回落系统缺省）
     void loadCaProfiles() // 第 4 项：个人 2 组参数可用性
@@ -251,6 +269,16 @@ const riskOption = computed<EChartsCoreOption>(() => {
   }
   localPc.sort((a, b) => a[0] - b[0])
 
+  // 筛查快照：无 CDM 报文与重算 run 时，至少给出本次筛查时刻的 Pc 点
+  const screenPc: Array<[number, number]> = []
+  if (fromScreens.value && event.value) {
+    const t = Date.parse(screen.value?.createdAt || event.value.tca)
+    if (Number.isFinite(t)) {
+      const pc = pct(event.value.pc)
+      if (pc) screenPc.push([t, pc])
+    }
+  }
+
   return {
     backgroundColor: 'transparent',
     grid: { left: 62, right: 58, top: 34, bottom: 38 },
@@ -285,14 +313,16 @@ const riskOption = computed<EChartsCoreOption>(() => {
         symbolSize: 7,
         data: cdmPc,
         lineStyle: { width: 1.6, color: '#f59e0b' },
-        itemStyle: { color: '#f59e0b' }
+        itemStyle: { color: '#f59e0b' },
+        showInLegend: !fromScreens.value
       },
       {
         name: t('rk.localPc'),
         type: 'scatter',
         symbolSize: 9,
         data: localPc,
-        itemStyle: { color: '#38bdf8' }
+        itemStyle: { color: '#38bdf8' },
+        showInLegend: !fromScreens.value
       },
       {
         name: t('rk.cdmMiss'),
@@ -301,11 +331,30 @@ const riskOption = computed<EChartsCoreOption>(() => {
         symbolSize: 5,
         data: cdmMiss,
         lineStyle: { width: 1.2, type: 'dashed', color: '#94a3b8' },
-        itemStyle: { color: '#94a3b8' }
+        itemStyle: { color: '#94a3b8' },
+        showInLegend: !fromScreens.value
+      },
+      {
+        name: t('rk.screenPc'),
+        type: 'scatter',
+        symbol: 'diamond',
+        symbolSize: 11,
+        data: screenPc,
+        itemStyle: { color: '#fb923c' },
+        // 仅筛查事件出现图例，CDM 事件不展示空序列
+        showInLegend: fromScreens.value
       }
     ]
   }
 })
+
+/** 风险演变是否有可画的数据：CDM 报文 / 平台重算 run / 筛查快照 */
+const hasRiskSnapshot = computed(
+  () =>
+    cdms.value.length > 0 ||
+    rcRuns.value.length > 0 ||
+    (fromScreens.value && !!event.value && (event.value.pc !== null || event.value.missKm !== null))
+)
 
 /** Pc 多算法比对（E3）：同源输入由服务端统一 TLE 传播，官方 Pc 仅作对照行 */
 type I18nKey = Parameters<ReturnType<typeof useI18n>['t']>[0]
@@ -326,14 +375,31 @@ const agreeKeys: Record<PcAgreement, I18nKey> = {
 function fmtMs(ms: number): string {
   return ms > 0 && ms < 0.01 ? '<0.01' : ms.toFixed(2)
 }
+/** 筛查事件没有官方 CDM：对照行改称「筛查结果」，协方差来源标为筛查模型 */
+function methodLabel(m: PcMethod): string {
+  if (fromScreens.value && m === 'official') return t('pc.cmp.m.screen')
+  return t(methodKeys[m])
+}
+function covLabel(c: string): string {
+  if (c === 'tle-age') return t('pc.cmp.cov.tleAge')
+  if (c === 'cdm') return fromScreens.value ? t('pc.cmp.cov.screen') : t('pc.cmp.cov.cdm')
+  return '—'
+}
+/** 非官方方法全部因几何退化被禁用（共轨/对接目标相对速度接近 0） */
+const cmpAllDisabled = computed(
+  () => !!cmp.value && cmp.value.rows.filter((r) => r.method !== 'official').every((r) => r.disabled)
+)
 async function runCompare(): Promise<void> {
   if (!event.value) return
   cmpLoading.value = true
   cmpError.value = ''
   try {
-    // HBR 取成员 CDM 最新提供的值（缺省由服务端按 15m 兜底）；
+    // HBR 取成员 CDM 最新提供的值；筛查事件取筛查任务写入的 HBR（缺省由服务端按 15m 兜底）；
     // 官方 Pc / miss / relSpeed 用事件聚合口径作对照行
-    const hbr = [...cdms.value].reverse().find((c) => c.hard_body_radius_m !== null)?.hard_body_radius_m ?? undefined
+    const hbr =
+      [...cdms.value].reverse().find((c) => c.hard_body_radius_m !== null)?.hard_body_radius_m ??
+      screen.value?.hbrM ??
+      undefined
     cmp.value = await pcCompare({
       noradA: event.value.noradA,
       noradB: event.value.noradB,
@@ -361,7 +427,12 @@ function levelLabel(lv: EventLevel): string {
   return t(levelKeys[lv])
 }
 function srcLabel(s: string): string {
-  return s === 'customer' ? t('conj.src.customer') : t('conj.src.system')
+  if (s === 'customer') return t('conj.src.customer')
+  if (s === 'screen-tle') return t('conj.src.screenTle')
+  if (s === 'screen-ephem') return t('conj.src.screenEphem')
+  if (s === 'screen-aoe') return t('conj.src.screenAoe')
+  if (s === 'screen') return t('conj.src.screen')
+  return t('conj.src.system')
 }
 function fmtPc(pc: number | null): string {
   if (pc === null) return '—'
@@ -374,6 +445,126 @@ function fmtTca(iso: string): string {
 function num(v: number | null, digits = 2, suffix = ''): string {
   return v === null ? '—' : `${v.toFixed(digits)}${suffix}`
 }
+
+/** 距离自适应单位：筛查交会常为 cm 级，固定 3 位小数会全部显示 0.000 km */
+function fmtDist(km: number | null): string {
+  if (km === null || !Number.isFinite(km)) return '—'
+  const a = Math.abs(km)
+  if (a >= 0.1) return `${km.toFixed(3)} km`
+  if (a >= 0.001) return `${(km * 1000).toFixed(2)} m`
+  if (a >= 1e-6) return `${(km * 1e5).toFixed(2)} cm`
+  return `${(km * 1e6).toFixed(1)} mm`
+}
+
+/** 相对速度自适应单位：共轨交会常见 cm/s 量级 */
+function fmtSpeed(kms: number | null): string {
+  if (kms === null || !Number.isFinite(kms)) return '—'
+  const a = Math.abs(kms)
+  if (a >= 0.1) return `${kms.toFixed(2)} km/s`
+  if (a >= 0.001) return `${(kms * 1000).toFixed(2)} m/s`
+  return `${(kms * 1e6).toFixed(1)} mm/s`
+}
+
+/* 近/远地点：sat_tle 多为 NULL，按周期 + 偏心率反推半长轴后补算（km 高度） */
+const MU_KM3_S2 = 398600.4418
+const EARTH_R_KM = 6378.137
+function semiMajorKm(periodMin: number | null): number | null {
+  if (periodMin === null || !Number.isFinite(periodMin) || periodMin <= 0) return null
+  const n = (2 * Math.PI) / (periodMin * 60)
+  return Math.cbrt(MU_KM3_S2 / (n * n))
+}
+function perigeeKm(p: TleProfile | null): number | null {
+  if (!p) return null
+  if (p.perigee !== null && Number.isFinite(p.perigee)) return p.perigee
+  const a = semiMajorKm(p.period)
+  if (a === null) return null
+  const e = p.ecc !== null && Number.isFinite(p.ecc) ? p.ecc : 0
+  return a * (1 - e) - EARTH_R_KM
+}
+function apogeeKm(p: TleProfile | null): number | null {
+  if (!p) return null
+  if (p.apogee !== null && Number.isFinite(p.apogee)) return p.apogee
+  const a = semiMajorKm(p.period)
+  if (a === null) return null
+  const e = p.ecc !== null && Number.isFinite(p.ecc) ? p.ecc : 0
+  return a * (1 + e) - EARTH_R_KM
+}
+function derivedGeo(p: TleProfile | null): boolean {
+  return !!p && (p.perigee === null || p.apogee === null) && semiMajorKm(p.period) !== null
+}
+
+/** 时间线行：CDM 事件用成员列表；筛查事件没有 CDM，合成一行筛查记录展示真实口径 */
+interface TimelineRow {
+  id: number
+  tca: string
+  pc: number | null
+  missKm: number | null
+  relSpeed: number | null
+  hbrM: number | null
+  originator: string
+  created: string
+  source: string
+  rawId: number | null
+}
+const timelineRows = computed<TimelineRow[]>(() => {
+  if (cdms.value.length) {
+    return cdms.value.map((c) => ({
+      id: c.id,
+      tca: c.tca,
+      pc: c.collision_probability,
+      missKm: c.miss_distance_km,
+      relSpeed: c.rel_speed_km_per_s,
+      hbrM: c.hard_body_radius_m,
+      originator: c.originator || '—',
+      created: c.creation_date ? fmtTca(c.creation_date) : '—',
+      source: c.source,
+      rawId: c.id
+    }))
+  }
+  if (fromScreens.value && event.value) {
+    return [
+      {
+        id: -1,
+        tca: event.value.tca,
+        pc: event.value.pc,
+        missKm: event.value.missKm,
+        relSpeed: event.value.relSpeedKmS,
+        hbrM: screen.value?.hbrM ?? null,
+        originator: t('conj.screenEngine'),
+        created: screen.value?.createdAt ? fmtTca(screen.value.createdAt) : '—',
+        source: event.value.pcSource || 'screen',
+        rawId: null
+      }
+    ]
+  }
+  return []
+})
+
+/** 筛查口径摘要：Pc 方法 / PcMax / 协方差 σ / 次星历元 / 官方 CDM 匹配 */
+const screenMetaText = computed<string>(() => {
+  const s = screen.value
+  if (!s) return ''
+  const parts: string[] = []
+  if (s.pcMethod) parts.push(`${t('conj.pcMethod')} ${s.pcMethod}`)
+  if (s.pcMax !== null) parts.push(`${t('conj.pcMax')} ${fmtPc(s.pcMax)}`)
+  const sigma = (label: string, km: number | null, src: string | null): void => {
+    if (km === null || !Number.isFinite(km)) return
+    parts.push(`${label} ${km.toFixed(1)} km${src ? ` (${src.toUpperCase()})` : ''}`)
+  }
+  sigma(t('conj.sigmaPT'), s.sigmaPtKm, s.sigmaPSrc)
+  sigma(t('conj.sigmaST'), s.sigmaStKm, s.sigmaSSrc)
+  if (s.secEpoch) {
+    const age = s.secAgeH !== null ? `，${t('conj.secAge')} ${s.secAgeH.toFixed(1)} h` : ''
+    parts.push(`${t('conj.secEpoch')} ${fmtTca(s.secEpoch)}${age}`)
+  }
+  parts.push(
+    s.cdmId
+      ? `${t('conj.matchCdm')} ${s.cdmId}${s.cdmPc !== null ? ` (Pc ${fmtPc(s.cdmPc)})` : ''}`
+      : `${t('conj.matchCdm')} ${t('conj.none')}`
+  )
+  if (s.diluted) parts.push(t('conj.diluted'))
+  return parts.join(' · ')
+})
 
 /** 深链：把交会对与 TCA 时刻带给态势页（E4 消费定位与高亮） */
 const situationLink = computed(() => {
@@ -406,6 +597,13 @@ async function showRaw(c: CdmMember): Promise<void> {
   } finally {
     rawLoading.value = false
   }
+}
+
+/** 时间线行 → 原文弹层（筛查合成行无 CDM 原文，按钮不渲染） */
+function showRawById(c: TimelineRow): void {
+  if (c.rawId === null) return
+  const member = cdms.value.find((x) => x.id === c.rawId)
+  if (member) void showRaw(member)
 }
 
 /* ------------------- 碰撞参数与重算（F1）：仅本次编辑 + run 对比 ------------------- */
@@ -678,12 +876,16 @@ async function doExport(kind: 'md' | 'html' | 'csv'): Promise<void> {
   <div v-if="loading" class="page"><section class="state">{{ t('obj.loading') }}</section></div>
   <div v-else-if="!event" class="page">
     <p class="state error">{{ error || t('conj.notFound') }}</p>
-    <button type="button" class="btn" @click="router.push('/conjunctions')">{{ t('conj.backList') }}</button>
+    <button type="button" class="btn" @click="goBack">
+      {{ fromScreens ? t('conj.backScreens') : t('conj.backList') }}
+    </button>
   </div>
   <div v-else class="page">
     <header class="head">
       <div>
-        <button type="button" class="link" @click="router.push('/conjunctions')">{{ t('conj.back') }}</button>
+        <button type="button" class="link" @click="goBack">
+          {{ fromScreens ? t('conj.backScreens') : t('conj.back') }}
+        </button>
         <h1>
           <span
             class="pill"
@@ -693,7 +895,9 @@ async function doExport(kind: 'md' | 'html' | 'csv'): Promise<void> {
           {{ objLabel(event.noradA, event.nameA) }} × {{ objLabel(event.noradB, event.nameB) }}
         </h1>
         <p>
-          TCA {{ fmtTca(event.tca) }} UTC · {{ t('conj.col.cdm') }} {{ event.cdmCount }}
+          TCA {{ fmtTca(event.tca) }} UTC ·
+          <template v-if="fromScreens">{{ t('conj.screenJob') }} #{{ screenJobId ?? '—' }}</template>
+          <template v-else>{{ t('conj.col.cdm') }} {{ event.cdmCount }}</template>
           <template v-if="event.tcaSpanH > 0"> · {{ t('conj.span') }} {{ event.tcaSpanH }}h</template>
           · {{ event.sources.map(srcLabel).join(' + ') }}
         </p>
@@ -725,10 +929,10 @@ async function doExport(kind: 'md' | 'html' | 'csv'): Promise<void> {
         <div class="v mono">{{ fmtPc(event.pc) }}</div>
         <div class="sub">{{ event.pcSource ? srcLabel(event.pcSource) : '—' }}</div>
       </div>
-      <div class="card"><div class="k">{{ t('conj.missDist') }}</div><div class="v mono">{{ num(event.missKm, 3) }} km</div></div>
+      <div class="card"><div class="k">{{ t('conj.missDist') }}</div><div class="v mono">{{ fmtDist(event.missKm) }}</div></div>
       <div class="card">
         <div class="k">{{ t('conj.relVel') }}</div>
-        <div v-if="event.relSpeedKmS != null" class="v mono">{{ num(event.relSpeedKmS, 2) }} km/s</div>
+        <div v-if="event.relSpeedKmS != null" class="v mono">{{ fmtSpeed(event.relSpeedKmS) }}</div>
         <div v-else class="v sm">{{ t('conj.relVelNa') }}</div>
       </div>
       <div class="card"><div class="k">TCA</div><div class="v mono sm">{{ fmtTca(event.tca) }}</div></div>
@@ -745,8 +949,8 @@ async function doExport(kind: 'md' | 'html' | 'csv'): Promise<void> {
           <div><dt>{{ t('obj.regime') }}</dt><dd>{{ primary.regime }}</dd></div>
           <div><dt>{{ t('obj.epoch') }}</dt><dd class="mono">{{ primary.epoch ? fmtTca(String(primary.epoch)) : '—' }}</dd></div>
           <div><dt>{{ t('obj.incl') }}</dt><dd class="mono">{{ num(primary.incl, 2, '°') }}</dd></div>
-          <div><dt>{{ t('conj.perigee') }}</dt><dd class="mono">{{ num(primary.perigee, 0) }}</dd></div>
-          <div><dt>{{ t('conj.apogee') }}</dt><dd class="mono">{{ num(primary.apogee, 0) }}</dd></div>
+          <div><dt>{{ t('conj.perigee') }}</dt><dd class="mono">{{ num(perigeeKm(primary), 0) }}<span v-if="derivedGeo(primary)" class="dim-tag">{{ t('conj.derived') }}</span></dd></div>
+          <div><dt>{{ t('conj.apogee') }}</dt><dd class="mono">{{ num(apogeeKm(primary), 0) }}<span v-if="derivedGeo(primary)" class="dim-tag">{{ t('conj.derived') }}</span></dd></div>
           <div><dt>{{ t('conj.period') }}</dt><dd class="mono">{{ num(primary.period, 1) }}</dd></div>
         </dl>
         <p v-else class="dim">{{ t('conj.notFound') }}</p>
@@ -763,8 +967,8 @@ async function doExport(kind: 'md' | 'html' | 'csv'): Promise<void> {
           <div><dt>{{ t('obj.regime') }}</dt><dd>{{ secondary.regime }}</dd></div>
           <div><dt>{{ t('obj.epoch') }}</dt><dd class="mono">{{ secondary.epoch ? fmtTca(String(secondary.epoch)) : '—' }}</dd></div>
           <div><dt>{{ t('obj.incl') }}</dt><dd class="mono">{{ num(secondary.incl, 2, '°') }}</dd></div>
-          <div><dt>{{ t('conj.perigee') }}</dt><dd class="mono">{{ num(secondary.perigee, 0) }}</dd></div>
-          <div><dt>{{ t('conj.apogee') }}</dt><dd class="mono">{{ num(secondary.apogee, 0) }}</dd></div>
+          <div><dt>{{ t('conj.perigee') }}</dt><dd class="mono">{{ num(perigeeKm(secondary), 0) }}<span v-if="derivedGeo(secondary)" class="dim-tag">{{ t('conj.derived') }}</span></dd></div>
+          <div><dt>{{ t('conj.apogee') }}</dt><dd class="mono">{{ num(apogeeKm(secondary), 0) }}<span v-if="derivedGeo(secondary)" class="dim-tag">{{ t('conj.derived') }}</span></dd></div>
           <div><dt>{{ t('conj.period') }}</dt><dd class="mono">{{ num(secondary.period, 1) }}</dd></div>
         </dl>
         <p v-else class="dim">{{ t('conj.notFound') }}</p>
@@ -772,14 +976,14 @@ async function doExport(kind: 'md' | 'html' | 'csv'): Promise<void> {
       </aside>
 
       <section class="panel wide">
-        <div class="ph">{{ t('conj.timeline') }}</div>
+        <div class="ph">{{ fromScreens ? t('conj.timelineScreen') : t('conj.timeline') }}</div>
         <div class="tl">
           <table>
             <thead>
               <tr>
                 <th>{{ t('conj.col.tca') }}</th>
                 <th>{{ t('conj.col.pc') }}</th>
-                <th>{{ t('conj.col.miss') }}</th>
+                <th>{{ t('conj.col.missAny') }}</th>
                 <th>{{ t('conj.relVel') }}</th>
                 <th>{{ t('conj.hbr') }}</th>
                 <th>{{ t('conj.originator') }}</th>
@@ -789,20 +993,25 @@ async function doExport(kind: 'md' | 'html' | 'csv'): Promise<void> {
               </tr>
             </thead>
             <tbody>
-              <tr v-for="c in cdms" :key="c.id">
+              <tr v-for="c in timelineRows" :key="c.id">
                 <td class="mono">{{ fmtTca(c.tca) }}</td>
-                <td class="mono">{{ fmtPc(c.collision_probability) }}</td>
-                <td class="mono">{{ num(c.miss_distance_km, 2) }}</td>
-                <td class="mono">{{ num(c.rel_speed_km_per_s, 2) }}</td>
-                <td class="mono">{{ num(c.hard_body_radius_m, 2) }}</td>
-                <td>{{ c.originator || '—' }}</td>
-                <td class="mono">{{ c.creation_date ? fmtTca(c.creation_date) : '—' }}</td>
+                <td class="mono">{{ fmtPc(c.pc) }}</td>
+                <td class="mono">{{ fmtDist(c.missKm) }}</td>
+                <td class="mono">{{ fmtSpeed(c.relSpeed) }}</td>
+                <td class="mono">{{ num(c.hbrM, 1, ' m') }}</td>
+                <td>{{ c.originator }}</td>
+                <td class="mono">{{ c.created }}</td>
                 <td><span class="pill" :class="c.source === 'customer' ? 'yellow' : 'low'">{{ srcLabel(c.source) }}</span></td>
-                <td><button type="button" class="btn sm" @click="showRaw(c)">{{ t('conj.raw') }}</button></td>
+                <td>
+                  <button v-if="c.rawId !== null" type="button" class="btn sm" @click="showRawById(c)">{{ t('conj.raw') }}</button>
+                </td>
               </tr>
             </tbody>
           </table>
         </div>
+        <p v-if="fromScreens && screenMetaText" class="note screen-meta">
+          {{ t('conj.screenMeta') }}：{{ screenMetaText }}
+        </p>
         <p class="note">{{ t('conj.note') }}</p>
       </section>
 
@@ -816,7 +1025,7 @@ async function doExport(kind: 'md' | 'html' | 'csv'): Promise<void> {
             {{ t('pc.cmp.run') }}
           </button>
         </div>
-        <p class="note">{{ t('pc.cmp.desc') }}</p>
+        <p class="note">{{ fromScreens ? t('pc.cmp.descScreen') : t('pc.cmp.desc') }}</p>
         <p v-if="cmpError" class="state error inline">{{ cmpError }}</p>
         <div v-else-if="cmpLoading" class="dim">{{ t('obj.loading') }}</div>
         <div v-else-if="cmp" class="tl">
@@ -835,22 +1044,23 @@ async function doExport(kind: 'md' | 'html' | 'csv'): Promise<void> {
             <tbody>
               <tr v-for="r in cmp.rows" :key="r.method" :class="{ off: r.disabled }">
                 <td>
-                  {{ t(methodKeys[r.method]) }}
+                  {{ methodLabel(r.method) }}
                   <span v-if="r.disabled" class="dim">— {{ r.note }}</span>
                 </td>
                 <td class="mono strong">{{ fmtPc(r.pc) }}</td>
-                <td class="mono">{{ num(r.missKm, 3) }}</td>
+                <td class="mono">{{ fmtDist(r.missKm) }}</td>
                 <td class="mono">{{ fmtTca(r.tca) }}</td>
                 <td class="mono">{{ num(r.hbrM, 1) }}</td>
-                <td>{{ r.covSource === 'tle-age' ? t('pc.cmp.cov.tleAge') : r.covSource === 'cdm' ? t('pc.cmp.cov.cdm') : '—' }}</td>
+                <td>{{ covLabel(r.covSource) }}</td>
                 <td class="mono">{{ r.method === 'official' ? '—' : fmtMs(r.ms) }}</td>
               </tr>
             </tbody>
           </table>
+          <p v-if="cmpAllDisabled" class="note warn">{{ t('pc.cmp.degenerate') }}</p>
           <p class="note">
             <template v-if="cmp.plane">
-              {{ t('pc.cmp.inPlane') }} {{ cmp.plane.inPlaneKm.toFixed(3) }} km ·
-              {{ t('conj.relVel') }} {{ cmp.plane.relSpeedKms.toFixed(2) }} km/s
+              {{ t('pc.cmp.inPlane') }} {{ fmtDist(cmp.plane.inPlaneKm) }} ·
+              {{ t('conj.relVel') }} {{ fmtSpeed(cmp.plane.relSpeedKms) }}
             </template>
             <template v-if="cmp.cov">
               · {{ t('pc.cmp.sigmaT') }} {{ cmp.cov.sigmaT.map((x) => x.toFixed(1)).join(' / ') }} km ·
@@ -863,10 +1073,10 @@ async function doExport(kind: 'md' | 'html' | 'csv'): Promise<void> {
       <section class="panel wide">
         <div class="ph">
           <span>{{ t('rk.title') }}</span>
-          <span class="dim-tag">{{ t('rk.sources') }}</span>
+          <span class="dim-tag">{{ fromScreens ? t('rk.sourcesScreen') : t('rk.sources') }}</span>
         </div>
-        <p class="note">{{ t('rk.desc') }}</p>
-        <EChart v-if="cdms.length || rcRuns.length" :option="riskOption" :height="260" />
+        <p class="note">{{ fromScreens ? t('rk.descScreen') : t('rk.desc') }}</p>
+        <EChart v-if="hasRiskSnapshot" :option="riskOption" :height="260" />
         <p v-else class="dim">{{ t('rk.empty') }}</p>
       </section>
       <!-- R2-16：相对运动（TCA 附近距离—时间 + R–I / C–I 平面） -->
@@ -1247,6 +1457,9 @@ h1 {
 .state.inline { margin: 8px 0 0; padding: 8px 10px; display: block; }
 .note { margin: 10px 0 0; font-size: 10px; color: var(--text-dim); }
 .note.warn { color: var(--warn); }
+/* 筛查事件口径摘要 */
+.screen-meta { margin-top: 8px; line-height: 1.65; }
+.kv dd .dim-tag { margin-left: 4px; font-weight: 400; }
 
 /* R2-16 相对运动 */
 .rm-title { margin: 12px 0 4px; font-size: 12px; color: var(--text-dim); }

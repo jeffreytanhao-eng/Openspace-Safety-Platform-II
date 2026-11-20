@@ -417,8 +417,15 @@ function fmtWhen(v: string | null): string {
 }
 const fmtPc = (p: number | null) =>
   p === null || !Number.isFinite(p) ? '—' : p.toExponential(2)
-const fmtMiss = (m: number | null) =>
-  m === null || !Number.isFinite(m) ? '—' : m.toFixed(2)
+/** 距离自适应单位（km→m→cm→mm）：筛查远距离交会常为 cm 级，固定 2 位小数会显示 0.00 km */
+const fmtMiss = (m: number | null): string => {
+  if (m === null || !Number.isFinite(m)) return '—'
+  const a = Math.abs(m)
+  if (a >= 0.1) return `${m.toFixed(3)} km`
+  if (a >= 0.001) return `${(m * 1000).toFixed(2)} m`
+  if (a >= 1e-6) return `${(m * 1e5).toFixed(2)} cm`
+  return `${(m * 1e6).toFixed(1)} mm`
+}
 
 function objectLabel(o: ManagedObject): string {
   return displayName(o.alias, o.name, o.norad_id)
@@ -734,7 +741,7 @@ function openEvent(e: ScreenEvent): void {
               </div>
               <div class="ev-right">
                 <div class="pc">Pc {{ fmtPc(e.pc) }}</div>
-                <div class="miss">{{ fmtMiss(e.miss_km) }} km · {{ pcSourceLabel(e) }}</div>
+                <div class="miss">{{ fmtMiss(e.miss_km) }} · {{ pcSourceLabel(e) }}</div>
               </div>
             </div>
           </div>

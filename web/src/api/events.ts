@@ -100,6 +100,30 @@ export interface TleProfile {
   updated_at: string | null
 }
 
+/** 筛查事件的计算口径（conjunction_events 行内字段，仅 scr-* 事件返回） */
+export interface ScreenEventMeta {
+  jobId: number
+  eventId: number
+  /** 主星状态源：tle | ephem | aoe */
+  primarySource: string
+  hbrM: number | null
+  pcMax: number | null
+  pcMethod: string
+  pcSource: string
+  diluted: boolean
+  sigmaPSrc: string | null
+  sigmaPtKm: number | null
+  sigmaSSrc: string | null
+  sigmaStKm: number | null
+  /** 次星 TLE 历元（协方差龄期基准） */
+  secEpoch: string | null
+  secAgeH: number | null
+  /** 命中的官方 CDM（无则 null） */
+  cdmId: string | null
+  cdmPc: number | null
+  createdAt: string
+}
+
 /** scope=all 全部交会；mine 仅本组织关注/认领目标参与的星对 */
 export function listEvents(
   window: '24h' | '3d' | '7d' | 'all',
@@ -118,6 +142,8 @@ export function getEvent(key: string): Promise<{
   cdms: CdmMember[]
   primary: TleProfile | null
   secondary: TleProfile | null
+  /** 仅 scr-* 事件返回 */
+  screen?: ScreenEventMeta | null
 }> {
   return cgiCall({ method: 'GET', url: `/events/${encodeURIComponent(key)}`, headers: authHeaders() })
 }

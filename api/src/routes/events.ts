@@ -611,7 +611,27 @@ router.get('/events/:key', requireAuth, async (req: ScopedRequest, res) => {
         event: scrEvent,
         cdms: [],
         primary: pickTle(scrEvent.noradA),
-        secondary: pickTle(scrEvent.noradB)
+        secondary: pickTle(scrEvent.noradB),
+        // 筛查事件自带的计算口径（无 CDM 报文，详情页据此展示 Pc 方法 / 协方差 / 匹配情况）
+        screen: {
+          jobId,
+          eventId,
+          primarySource: String(scrRow.primary_source || 'tle'),
+          hbrM: scrRow.hbr_m,
+          pcMax: scrRow.pc_max,
+          pcMethod: scrRow.pc_method,
+          pcSource: scrRow.pc_source,
+          diluted: !!scrRow.diluted,
+          sigmaPSrc: scrRow.sigma_p_src,
+          sigmaPtKm: scrRow.sigma_p_t_km,
+          sigmaSSrc: scrRow.sigma_s_src,
+          sigmaStKm: scrRow.sigma_s_t_km,
+          secEpoch: scrRow.sec_epoch ? toIso(scrRow.sec_epoch as unknown as Date | string) : null,
+          secAgeH: scrRow.sec_age_h,
+          cdmId: scrRow.cdm_id,
+          cdmPc: scrRow.cdm_pc,
+          createdAt: toIso(scrRow.created_at as unknown as Date | string)
+        }
       })
     )
     return
