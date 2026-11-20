@@ -1,9 +1,9 @@
 /**
  * 太空安全资讯日切任务（UTC 00:00，与发射预报同口径）：
- *  - 每天从外部接口 /api/v1/open/hotspots 拉取当日热点资讯一次；
- *  - 按发布时间倒序保留最新 8 条，超出部分与上游已下线条目一并删除；
+ *  - 每天从外部接口 /api/v1/open/hotspots 拉取当日热点资讯，增量并入本地库；
+ *  - 新资讯按发布时间排在上层，历史资讯保留并顺延，始终只保留最新 8 条；
  *  - 无中文的标题/摘要/媒体用与发射相同的 LLM 翻译；
- *  - 新条目用 LLM 生成「对中国的影响分析」并落库，页面只读库。
+ *  - 新条目用 LLM 生成 100-150 字摘要与约 100 字影响分析并落库，页面只读库。
  */
 import crypto from 'node:crypto'
 import { config } from '../config.js'
@@ -14,13 +14,13 @@ import {
   getNewsHashes,
   getNewsListMeta,
   upsertNews,
-  deleteNewsNotIn,
+  pruneNews,
   saveNewsListMeta
 } from '../db/newsDb.js'
 
 /** 上游取数上限（去重/过期过滤由上游完成） */
 const FETCH_LIMIT = 20
-/** 总览卡片最多展示 8 条，库内也只保留 8 条（最旧的被替换） */
+/** 总览卡片最多展示 8 条，库内也只保留最新 8 条（更早的顺延淘汰） */
 const KEEP_LIMIT = 8
 const TIMEOUT_MS = 20_000
 /** 缺数据时启动补抓的时效阈值（避免每次重启都重复抓） */
@@ -69,8 +69,12 @@ export interface NewsRefreshResult {
   added: number
   updated: number
   unchanged: number
+  /** 超出 8 条而被淘汰的旧资讯数 */
   removed: number
-  total: number
+  /** 本次上游返回条数 */
+  fetched: number
+  /** 库内保留上限 */
+  kept: number
 }
 
 function normIsoUtc(v: unknown): string {
@@ -155,7 +159,7 @@ export async function runNewsRefresh(triggeredBy = 'cron'): Promise<NewsRefreshR
       .map(normalize)
       .filter((x): x is NormalizedNews => !!x)
       .sort((a, b) => b.ts - a.ts)
-      .slice(0, KEEP_LIMIT)
+      .slice(0, FETCH_LIMIT)
 
     const prev = await getNewsHashes()
     const pending: Array<{ item: NormalizedNews; hash: string }> = []
@@ -224,13 +228,14 @@ export async function runNewsRefresh(triggeredBy = 'cron'): Promise<NewsRefreshR
       })
     }
 
-    const removed = await deleteNewsNotIn(items.map((n) => n.id))
+    // 增量合并：历史资讯保留，仅淘汰排序后第 8 条以外的旧条目
+    const removed = await pruneNews(KEEP_LIMIT)
     await saveNewsListMeta({
       generated_at: new Date().toISOString(),
       plan_date: typeof data.plan_date === 'string' ? data.plan_date : '',
       window_days: Number(data.window_days) || 0
     })
-    const result = { added, updated, unchanged, removed, total: items.length }
+    const result = { added, updated, unchanged, removed, fetched: items.length, kept: KEEP_LIMIT }
     console.log(`[news-refresh] ${triggeredBy} done:`, JSON.stringify(result))
     return result
   } finally {

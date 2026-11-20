@@ -120,14 +120,15 @@ export async function updateNewsInsight(id: string, data: string, impactZh: stri
   ])
 }
 
-/** 删除本次日切未保留的记录（超出 8 条的最旧资讯、上游已下线条目） */
-export async function deleteNewsNotIn(ids: string[]): Promise<number> {
-  if (!ids.length) {
-    const [res] = await pool.query<ResultSetHeader>('DELETE FROM news')
-    return res.affectedRows
-  }
-  const marks = ids.map(() => '?').join(',')
-  const [res] = await pool.query<ResultSetHeader>(`DELETE FROM news WHERE id NOT IN (${marks})`, ids)
+/** 增量合并后只保留最新 limit 条，更旧的资讯顺延淘汰 */
+export async function pruneNews(limit: number): Promise<number> {
+  const n = Math.min(Math.max(Math.trunc(limit) || 8, 1), 100)
+  const [res] = await pool.query<ResultSetHeader>(
+    `DELETE FROM news
+      WHERE id NOT IN (
+        SELECT id FROM (SELECT id FROM news ORDER BY published_at DESC LIMIT ${n}) t
+      )`
+  )
   return res.affectedRows
 }
 
