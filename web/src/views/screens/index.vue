@@ -417,14 +417,34 @@ function fmtWhen(v: string | null): string {
 }
 const fmtPc = (p: number | null) =>
   p === null || !Number.isFinite(p) ? '—' : p.toExponential(2)
-/** 距离自适应单位（km→m→cm→mm）：筛查远距离交会常为 cm 级，固定 2 位小数会显示 0.00 km */
+/** 距离：卫星尺度用 km / m；低于 1 m 用 km 科学计数（不用 cm/mm，避免虚假精度） */
+const SUP_DIGITS: Record<string, string> = {
+  '-': '⁻',
+  '0': '⁰',
+  '1': '¹',
+  '2': '²',
+  '3': '³',
+  '4': '⁴',
+  '5': '⁵',
+  '6': '⁶',
+  '7': '⁷',
+  '8': '⁸',
+  '9': '⁹'
+}
+function sciKm(v: number): string {
+  const [m, e] = v.toExponential(1).split('e')
+  const exp = String(Number(e))
+    .split('')
+    .map((ch) => SUP_DIGITS[ch] ?? ch)
+    .join('')
+  return `${m}×10${exp} km`
+}
 const fmtMiss = (m: number | null): string => {
   if (m === null || !Number.isFinite(m)) return '—'
   const a = Math.abs(m)
-  if (a >= 0.1) return `${m.toFixed(3)} km`
-  if (a >= 0.001) return `${(m * 1000).toFixed(2)} m`
-  if (a >= 1e-6) return `${(m * 1e5).toFixed(2)} cm`
-  return `${(m * 1e6).toFixed(1)} mm`
+  if (a >= 1) return `${m.toFixed(3)} km`
+  if (a >= 0.001) return `${(m * 1000).toFixed(1)} m`
+  return sciKm(m)
 }
 
 function objectLabel(o: ManagedObject): string {

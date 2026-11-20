@@ -446,24 +446,51 @@ function num(v: number | null, digits = 2, suffix = ''): string {
   return v === null ? '—' : `${v.toFixed(digits)}${suffix}`
 }
 
-/** 距离自适应单位：筛查交会常为 cm 级，固定 3 位小数会全部显示 0.000 km */
+/** 科学计数（×10ⁿ），卫星尺度下不使用 cm/mm 这类会造成虚假精度的单位 */
+const SUP_DIGITS: Record<string, string> = {
+  '-': '⁻',
+  '0': '⁰',
+  '1': '¹',
+  '2': '²',
+  '3': '³',
+  '4': '⁴',
+  '5': '⁵',
+  '6': '⁶',
+  '7': '⁷',
+  '8': '⁸',
+  '9': '⁹'
+}
+function sci(v: number, digits = 1): string {
+  const [m, e] = v.toExponential(digits).split('e')
+  const exp = String(Number(e))
+    .split('')
+    .map((ch) => SUP_DIGITS[ch] ?? ch)
+    .join('')
+  return `${m}×10${exp}`
+}
+
+/** 距离：卫星尺度统一用 km / m；低于 1 m 用 km 科学计数并提示亚米级 */
 function fmtDist(km: number | null): string {
   if (km === null || !Number.isFinite(km)) return '—'
   const a = Math.abs(km)
-  if (a >= 0.1) return `${km.toFixed(3)} km`
-  if (a >= 0.001) return `${(km * 1000).toFixed(2)} m`
-  if (a >= 1e-6) return `${(km * 1e5).toFixed(2)} cm`
-  return `${(km * 1e6).toFixed(1)} mm`
+  if (a >= 1) return `${km.toFixed(3)} km`
+  if (a >= 0.001) return `${(km * 1000).toFixed(1)} m`
+  return `${sci(km)} km`
 }
 
-/** 相对速度自适应单位：共轨交会常见 cm/s 量级 */
+/** 相对速度：km/s → m/s；低于 1 m/s 用 km/s 科学计数 */
 function fmtSpeed(kms: number | null): string {
   if (kms === null || !Number.isFinite(kms)) return '—'
   const a = Math.abs(kms)
-  if (a >= 0.1) return `${kms.toFixed(2)} km/s`
-  if (a >= 0.001) return `${(kms * 1000).toFixed(2)} m/s`
-  return `${(kms * 1e6).toFixed(1)} mm/s`
+  if (a >= 1) return `${kms.toFixed(2)} km/s`
+  if (a >= 0.001) return `${(kms * 1000).toFixed(1)} m/s`
+  return `${sci(kms)} km/s`
 }
+
+/** 亚米级脱靶：低于 TLE 编目精度，通常是共轨/对接组合体的数值退化 */
+const subMeter = computed(
+  () => event.value?.missKm != null && Math.abs(event.value.missKm) < 0.001
+)
 
 /* 近/远地点：sat_tle 多为 NULL，按周期 + 偏心率反推半长轴后补算（km 高度） */
 const MU_KM3_S2 = 398600.4418
@@ -937,6 +964,7 @@ async function doExport(kind: 'md' | 'html' | 'csv'): Promise<void> {
       </div>
       <div class="card"><div class="k">TCA</div><div class="v mono sm">{{ fmtTca(event.tca) }}</div></div>
     </section>
+    <p v-if="subMeter" class="kpi-note">{{ t('conj.subMeter') }}</p>
 
     <section class="grid">
       <aside class="panel">
@@ -1399,6 +1427,17 @@ h1 {
 .pill.low { color: var(--text-dim); }
 
 .kpi { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; }
+/* 亚米级脱靶提示：低于编目精度，避免被当作真实接近距离 */
+.kpi-note {
+  margin: 8px 0 0;
+  padding: 6px 10px;
+  font-size: 10px;
+  line-height: 1.6;
+  color: var(--warn);
+  background: rgba(245, 158, 11, 0.08);
+  border: 1px solid rgba(245, 158, 11, 0.28);
+  border-radius: 8px;
+}
 .card {
   background: var(--bg-panel); border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px;
 }
