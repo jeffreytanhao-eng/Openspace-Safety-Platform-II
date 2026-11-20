@@ -977,7 +977,40 @@ function assignModelKeys(): void {
   }
 }
 
-/** 丢弃当前实例批次（geometry/material 归共享缓存，不 dispose），Points 恢复兜底显示 */
+/** 点云兜底：型号批次长时间未就绪或构建彻底失败时，才显示 Points（首屏不出现圆点过渡） */
+let pointsFallbackTimer: ReturnType<typeof setTimeout> | undefined
+const POINTS_FALLBACK_MS = 3000
+
+function clearPointsFallback(): void {
+  if (pointsFallbackTimer) {
+    clearTimeout(pointsFallbackTimer)
+    pointsFallbackTimer = undefined
+  }
+}
+
+function showPointsFallback(): void {
+  clearPointsFallback()
+  if (!points) return
+  points.visible = true
+  // 隐藏期间 touchGeometry 跳过了 GPU 上传，恢复显示时补传一次
+  if (bufDirty) {
+    const geo = points.geometry as THREE.BufferGeometry
+    geo.attributes.position.needsUpdate = true
+    geo.attributes.color.needsUpdate = true
+    bufDirty = false
+  }
+}
+
+/** 批次构建期间挂兜底计时器：超时仍未就绪则显示点云，避免长时间空白地球 */
+function armPointsFallback(): void {
+  clearPointsFallback()
+  pointsFallbackTimer = setTimeout(() => {
+    pointsFallbackTimer = undefined
+    if (!modelsActive) showPointsFallback()
+  }, POINTS_FALLBACK_MS)
+}
+
+/** 丢弃当前实例批次（geometry/material 归共享缓存，不 dispose）；点云保持隐藏，等新批次就绪 */
 function resetModelBatches(): void {
   for (const old of Object.values(modelMeshes)) {
     if (modelRoot) modelRoot.remove(old)
@@ -989,7 +1022,7 @@ function resetModelBatches(): void {
   modelBuildQueued = false
   modelBuildQueuedLod = null
   matrixDrift = MATRIX_SKIP_SCENE
-  if (points) points.visible = true
+  if (points) points.visible = false
 }
 
 function clearModelRetry(): void {
@@ -1044,9 +1077,13 @@ async function buildModelInstances(lod: ModelLod = modelLod): Promise<void> {
     const okAny = Object.keys(modelMeshes).length > 0
     if (okAny) {
       modelsActive = true
+      clearPointsFallback()
       if (points) points.visible = false
       paintModelColors()
       rewriteModelMatrices()
+    } else {
+      // 全部型号加载失败：回退点云，避免地球上空无一物
+      showPointsFallback()
     }
     lodWarmupUntil = performance.now() + LOD_WARMUP_MS
     console.info('[situation] model instances', { lod, batches: Object.keys(modelMeshes).length, failed })
@@ -1584,7 +1621,11 @@ function allocatePoints(n: number): void {
   points = new THREE.Points(geo, mat)
   points.frustumCulled = false
   points.renderOrder = 2
+  // 型号批次就绪前先不显示点云：避免「先绿/红圆点、再变 3D 模型」的过渡；
+  // 仅当构建彻底失败或长时间未就绪时才回退显示点云。
+  points.visible = false
   group.add(points)
+  armPointsFallback()
 }
 
 /** Scene-clock mirror for the progressive orbit builder (set by updateCatalogCloud). */
@@ -1624,6 +1665,7 @@ export function initCatalogCloudFromSnapshot(
   focusRef = null
 
   if (!cloudGate() || !cloud.length) {
+    clearPointsFallback()
     resetModelBatches()
     if (points && group) {
       group.remove(points)
