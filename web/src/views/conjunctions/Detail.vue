@@ -969,8 +969,10 @@ async function doExport(kind: 'md' | 'html' | 'csv'): Promise<void> {
     <section class="grid">
       <aside class="panel">
         <div class="ph">{{ t('conj.primaryObj') }}</div>
-        <div class="obj-name">{{ objLabel(event.noradA, primary?.object_name || event.nameA) }}</div>
-        <div v-if="aliasOf(event.noradA)" class="obj-official">{{ primary?.object_name || event.nameA }}</div>
+        <div class="obj-head">
+          <div class="obj-name">{{ objLabel(event.noradA, primary?.object_name || event.nameA) }}</div>
+          <div v-if="aliasOf(event.noradA)" class="obj-official">{{ primary?.object_name || event.nameA }}</div>
+        </div>
         <dl v-if="primary" class="kv">
           <div><dt>NORAD</dt><dd class="mono">{{ primary.norad_id }}</dd></div>
           <div><dt>{{ t('obj.type') }}</dt><dd>{{ primary.object_type }}</dd></div>
@@ -987,8 +989,10 @@ async function doExport(kind: 'md' | 'html' | 'csv'): Promise<void> {
 
       <aside class="panel">
         <div class="ph">{{ t('conj.secondaryObj') }}</div>
-        <div class="obj-name">{{ objLabel(event.noradB, secondary?.object_name || event.nameB) }}</div>
-        <div v-if="aliasOf(event.noradB)" class="obj-official">{{ secondary?.object_name || event.nameB }}</div>
+        <div class="obj-head">
+          <div class="obj-name">{{ objLabel(event.noradB, secondary?.object_name || event.nameB) }}</div>
+          <div v-if="aliasOf(event.noradB)" class="obj-official">{{ secondary?.object_name || event.nameB }}</div>
+        </div>
         <dl v-if="secondary" class="kv">
           <div><dt>NORAD</dt><dd class="mono">{{ secondary.norad_id }}</dd></div>
           <div><dt>{{ t('obj.type') }}</dt><dd>{{ secondary.object_type }}</dd></div>
@@ -1407,7 +1411,10 @@ h1 {
 }
 .exp-status.ok { color: var(--ok, #5a9a78); }
 .exp-status .link { margin-left: 8px; }
-.obj-official { margin-top: 2px; font-size: 11px; font-weight: 400; color: var(--text-dim); }
+/* 别名 + 官方名同一行：官方名紧跟别名右侧，不另起一行 */
+.obj-head { display: flex; align-items: baseline; gap: 8px; margin-bottom: 10px; min-width: 0; }
+.obj-head .obj-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.obj-official { min-width: 0; overflow: hidden; text-overflow: ellipsis; font-size: 11px; font-weight: 400; color: var(--text-dim); white-space: nowrap; }
 .btn:disabled { opacity: 0.55; cursor: default; }
 .btn {
   appearance: none; border: 1px solid var(--border-strong); background: var(--bg-panel);
@@ -1453,7 +1460,7 @@ h1 {
 }
 .panel.wide { grid-column: 1 / -1; }
 .ph { font-size: 10px; color: var(--text-dim); text-transform: uppercase; letter-spacing: 0.04em; margin-bottom: 6px; }
-.obj-name { font-size: 14px; font-weight: 650; margin-bottom: 10px; }
+.obj-name { font-size: 14px; font-weight: 650; }
 .kv { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin: 0 0 12px; }
 .kv div {
   background: var(--bg-panel-2); border: 1px solid var(--border); border-radius: 6px; padding: 8px 10px;
