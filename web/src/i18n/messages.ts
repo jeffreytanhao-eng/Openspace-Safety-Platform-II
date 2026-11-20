@@ -150,6 +150,7 @@ export const messages = {
 
     "ov.ownedTitle": '资产清单',
     "ov.ownedSub": '本组织目标',
+    "ov.dragHint": '按住 0.1 秒后拖动可调整顺序',
     "ov.manage": '管理',
     "ov.open3d": '3D',
     "ov.safetyTitle": '关注事件',
@@ -1611,6 +1612,7 @@ export const messages = {
 
     "ov.ownedTitle": 'Assets',
     "ov.ownedSub": 'Managed objects of your org',
+    "ov.dragHint": 'Hold for 0.1s, then drag to reorder',
     "ov.manage": 'Manage',
     "ov.open3d": '3D',
     "ov.safetyTitle": 'Watch Events',

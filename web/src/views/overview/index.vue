@@ -3,11 +3,12 @@ import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { useI18n } from '@/composables/useI18n'
 import { getOverviewSummary, type OverviewSummary, type OwnedCdmItem } from '@/api/overview'
-import { listObjects, type ManagedObject } from '@/api/objects'
+import { listObjects, saveObjectOrder, type ManagedObject } from '@/api/objects'
 import { listEvents } from '@/api/events'
 import { AuthError } from '@/api/auth'
 import { saveReportDocument } from '@/api/documents'
 import { useObjectAliases, displayName } from '@/composables/useObjectAliases'
+import { useDragSort } from '@/composables/useDragSort'
 import { useAuthStore } from '@/stores/auth'
 import { getLaunches, type LaunchItem, type LaunchText } from '@/api/launches'
 import { getNews, getNewsItem, NEWS_LIMIT, type NewsItem } from '@/api/news'
@@ -57,6 +58,35 @@ const pagedAssets = computed(() => {
 })
 watch(assetTotalPages, (n) => {
   if (assetPage.value > n) assetPage.value = n
+})
+
+/* ---------------------------- 资产清单拖动排序 ---------------------------- */
+
+/** 拖动中是否发生过位置变化（未变化不提交，避免多余请求） */
+let assetOrderChanged = false
+
+const { dragId: assetDragId, onPointerDown: onAssetPointerDown } = useDragSort({
+  itemSelector: '.asset',
+  disabled: () => loading.value || !summary.value?.org,
+  onMove: (fromId, toId) => {
+    const list = assets.value
+    const from = list.findIndex((a) => String(a.norad_id) === fromId)
+    const to = list.findIndex((a) => String(a.norad_id) === toId)
+    if (from < 0 || to < 0 || from === to) return
+    const [moved] = list.splice(from, 1)
+    list.splice(to, 0, moved)
+    assetOrderChanged = true
+  },
+  onDrop: async () => {
+    if (!assetOrderChanged) return
+    assetOrderChanged = false
+    try {
+      await saveObjectOrder(assets.value.map((a) => a.norad_id))
+    } catch {
+      // 保存失败时回读服务端顺序，避免界面顺序与库不一致
+      await load()
+    }
+  }
 })
 
 /* ------------------------------ 火箭发射预报 ------------------------------ */
@@ -405,9 +435,11 @@ async function saveReport() {
               </div>
               <button type="button" class="ghost" @click="router.push('/objects')">{{ t('ov.manage') }}</button>
             </header>
-            <div class="asset-list">
+            <div class="asset-list" @pointerdown="onAssetPointerDown">
               <div v-if="!assets.length" class="empty">{{ t('ov.noAssets') }}</div>
               <div v-for="a in pagedAssets" :key="a.id" class="asset" role="button" tabindex="0"
+                   :data-drag-id="String(a.norad_id)" :title="t('ov.dragHint')"
+                   :class="{ dragging: assetDragId === String(a.norad_id) }"
                    @click="openAsset(a)" @keydown.enter="openAsset(a)" @keydown.space.prevent="openAsset(a)">
                 <div class="asset-top">
                   <div class="asset-title">
@@ -957,6 +989,12 @@ async function saveReport() {
   border-color: var(--border-strong);
   background: var(--bg-hover);
   outline: none;
+}
+/* 长按拖动中：源卡片半透明并高亮，提示正在排序 */
+.asset.dragging {
+  opacity: 0.55;
+  border-color: var(--accent, #4fc3f7);
+  box-shadow: 0 0 0 1px var(--accent, #4fc3f7);
 }
 .asset-top { display: flex; justify-content: space-between; gap: 6px; }
 .asset-title { display: flex; align-items: baseline; gap: 4px; min-width: 0; }

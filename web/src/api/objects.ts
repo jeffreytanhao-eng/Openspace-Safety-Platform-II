@@ -152,6 +152,16 @@ export function listObjects(): Promise<ManagedObject[]> {
   return cgiCall<ManagedObject[]>({ method: 'GET', url: '/objects', headers: headers() })
 }
 
+/** 保存组织内目标顺序（总览资产清单与目标页共用） */
+export function saveObjectOrder(norads: number[]): Promise<{ updated: number }> {
+  return cgiCall<{ updated: number }>({
+    method: 'PUT',
+    url: '/objects/order',
+    headers: headers(),
+    data: { norads }
+  })
+}
+
 /** R2-2：批量认领结果（冲突/配额逐条裁剪） */
 export interface BatchClaimResult {
   created: Array<{ id: number; norad_id: number; name: string }>

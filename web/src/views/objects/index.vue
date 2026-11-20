@@ -12,8 +12,10 @@ import {
   catalogSizeFallback
 } from '@/i18n/catalogLabels'
 import { useAuthStore } from '@/stores/auth'
+import { useDragSort } from '@/composables/useDragSort'
 import {
   listObjects,
+  saveObjectOrder,
   lookupObject,
   claimObject,
   batchClaimObjects,
@@ -222,6 +224,36 @@ const preview = ref<LookupResult | null>(null)
 const auth = useAuthStore()
 /** 平台账号（platform_*）：全平台只读视图（不再用「无组织」判断，普通注册用户也无组织） */
 const isPlatform = computed(() => !!auth.user?.role?.startsWith('platform_'))
+
+/* ---------------------------- 目标列表拖动排序 ---------------------------- */
+
+/** 拖动中是否发生过位置变化（未变化不提交） */
+let objectOrderChanged = false
+
+const { dragId: dragRowId, onPointerDown: onRowPointerDown } = useDragSort({
+  itemSelector: 'tr[data-drag-id]',
+  // 搜索过滤或平台只读视图下顺序语义不清，禁用拖动
+  disabled: () => isPlatform.value || loading.value || !!q.value.trim(),
+  onMove: (fromId, toId) => {
+    const list = objects.value
+    const from = list.findIndex((o) => String(o.norad_id) === fromId)
+    const to = list.findIndex((o) => String(o.norad_id) === toId)
+    if (from < 0 || to < 0 || from === to) return
+    const [moved] = list.splice(from, 1)
+    list.splice(to, 0, moved)
+    objectOrderChanged = true
+  },
+  onDrop: async () => {
+    if (!objectOrderChanged) return
+    objectOrderChanged = false
+    try {
+      await saveObjectOrder(objects.value.map((o) => o.norad_id))
+    } catch {
+      // 保存失败时回读服务端顺序
+      await load()
+    }
+  }
+})
 /** C0：业主认领仅 VIP（组织 plan=vip 或用户级 VIP，且组织状态正常） */
 const vipClaim = computed(
   () =>
@@ -1338,11 +1370,16 @@ function lvLabel(v?: string | null): string {
             <th>{{ t('obj.col.updated') }}</th>
           </tr>
         </thead>
-        <tbody>
+        <tbody @pointerdown="onRowPointerDown">
           <tr
             v-for="o in paged"
             :key="o.id"
-            :class="{ picked: pickedWatchIds.includes(o.id) }"
+            :data-drag-id="String(o.norad_id)"
+            :title="t('ov.dragHint')"
+            :class="{
+              picked: pickedWatchIds.includes(o.id),
+              dragging: dragRowId === String(o.norad_id)
+            }"
             @click="openDetail(o)"
           >
             <td v-if="!isPlatform" class="chk-col" @click.stop>
@@ -2115,6 +2152,9 @@ td { padding: 9px 12px; border-bottom: 1px solid var(--border); color: var(--tex
 tbody tr { cursor: pointer; }
 tbody tr:hover { background: var(--bg-hover); }
 tbody tr.picked { background: rgba(90, 154, 120, 0.08); }
+/* 长按拖动中：源行半透明并高亮 */
+tbody tr.dragging { opacity: 0.55; background: rgba(79, 195, 247, 0.12); }
+tbody tr.dragging td { border-top-color: var(--accent, #4fc3f7); border-bottom-color: var(--accent, #4fc3f7); }
 th.chk-col, td.chk-col {
   width: 36px; padding-left: 12px; padding-right: 0;
   vertical-align: middle;

@@ -14,6 +14,7 @@ import {
   ensureObjectsSchema,
   listObjectsByOrg,
   listAllObjects,
+  saveObjectOrder,
   getObjectById,
   getObjectOrgName,
   getObjectByOrgNorad,
@@ -386,6 +387,35 @@ router.get('/objects', async (req: ScopedRequest, res) => {
       }))
     )
   )
+})
+
+/**
+ * 组织内目标手工排序：前端长按拖动后提交完整 NORAD 顺序，
+ * 总览「资产清单」与「目标」页共用同一顺序。
+ */
+router.put('/objects/order', requireOrg, async (req: ScopedRequest, res) => {
+  const orgId = Number(req.auth!.user.orgId)
+  const body = req.body as { norads?: unknown }
+  const norads = (Array.isArray(body.norads) ? body.norads : []).map((v) => Number(v))
+  const valid =
+    norads.length > 0 &&
+    norads.length <= 500 &&
+    norads.every((n) => Number.isInteger(n) && n > 0) &&
+    new Set(norads).size === norads.length
+  if (!valid) {
+    res.status(400).json(fail(400, '排序列表无效'))
+    return
+  }
+  const [rows] = await pool.query<RowDataPacket[]>(
+    'SELECT norad_id FROM objects WHERE org_id = ? AND norad_id IN (?)',
+    [orgId, norads]
+  )
+  if (rows.length !== norads.length) {
+    res.status(400).json(fail(400, '排序列表包含不属于本组织的目标'))
+    return
+  }
+  const updated = await saveObjectOrder(orgId, norads)
+  res.json(ok({ updated }))
 })
 
 /**

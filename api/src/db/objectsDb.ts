@@ -189,6 +189,13 @@ async function migrateObjectsSchema(): Promise<void> {
     )
     colNames.add('alias')
   }
+  // 组织内手动排序：越小越靠前；NULL 表示未手动排序，默认排在已排序项之后
+  if (!colNames.has('sort_order')) {
+    await pool.query(
+      `ALTER TABLE objects ADD COLUMN sort_order int NULL
+        COMMENT '组织内手动排序（越小越靠前）；NULL=未手动排序，排在已排序项之后' AFTER alias`
+    )
+  }
   if (!idxNames.has('idx_org_alias')) {
     await pool.query('ALTER TABLE objects ADD KEY idx_org_alias (org_id, alias)')
   }
@@ -201,10 +208,36 @@ const COLS = 'id, org_id, norad_id, name, alias, mass_kg, cross_section_m2, prop
 export async function listObjectsByOrg(orgId: number, opts?: { includePending?: boolean }): Promise<ObjectRow[]> {
   const statusFilter = opts?.includePending ? "claim_status IN ('claimed','pending')" : "claim_status = 'claimed'"
   const [rows] = await pool.query<RawObject[]>(
-    `SELECT ${COLS} FROM objects WHERE org_id = ? AND ${statusFilter} ORDER BY id DESC`,
+    `SELECT ${COLS} FROM objects WHERE org_id = ? AND ${statusFilter}
+      ORDER BY sort_order IS NULL, sort_order ASC, id DESC`,
     [orgId]
   )
   return rows as ObjectRow[]
+}
+
+/**
+ * 保存组织内目标顺序：按传入 NORAD 顺序写入 sort_order（1..n）。
+ * 事务保证整批生效，避免中途失败出现半套顺序。
+ */
+export async function saveObjectOrder(orgId: number, norads: number[]): Promise<number> {
+  const conn = await pool.getConnection()
+  try {
+    await conn.beginTransaction()
+    for (let i = 0; i < norads.length; i++) {
+      await conn.query('UPDATE objects SET sort_order = ? WHERE org_id = ? AND norad_id = ?', [
+        i + 1,
+        orgId,
+        norads[i]
+      ])
+    }
+    await conn.commit()
+    return norads.length
+  } catch (e) {
+    await conn.rollback()
+    throw e
+  } finally {
+    conn.release()
+  }
 }
 
 /** 平台账号只读视图：全平台已生效目标（带所属组织名） */
