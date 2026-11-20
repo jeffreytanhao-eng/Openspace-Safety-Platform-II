@@ -110,6 +110,18 @@ function bindHtmlFrameNav() {
     e.preventDefault()
     el.scrollIntoView({ behavior: 'smooth', block: 'start' })
   })
+  // 报告右上角「打印/另存为PDF」：sanitize 会剥离 inline onclick，改由父窗口绑定，
+  // 配合 sandbox 的 allow-modals 调起打印对话框（框架内脚本仍被禁用）。
+  const printBtn = doc.querySelector('.toolbar button')
+  if (printBtn && printBtn.getAttribute('data-osp-print-bound') !== '1') {
+    printBtn.setAttribute('data-osp-print-bound', '1')
+    printBtn.addEventListener('click', () => {
+      const win = htmlFrame.value?.contentWindow
+      if (!win) return
+      win.focus()
+      win.print()
+    })
+  }
 }
 
 function syncTitle() {
@@ -362,7 +374,7 @@ onMounted(() => {
             <iframe
               ref="htmlFrame"
               class="html-frame"
-              sandbox="allow-same-origin"
+              sandbox="allow-same-origin allow-modals"
               referrerpolicy="no-referrer"
               :src="htmlSrc"
               title="document-preview"
