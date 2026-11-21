@@ -1,6 +1,7 @@
 /**
- * 太空安全资讯日切任务（UTC 00:00，与发射预报同口径）：
+ * 太空安全资讯日切任务（UTC 02:00，上游约 01:30 生成当日热点）：
  *  - 每天从外部接口 /api/v1/open/hotspots 拉取当日热点资讯，增量并入本地库；
+ *  - 上游当日无数据时，每小时重试，最多 3 次（应对上游发布延迟）；
  *  - 新资讯按发布时间排在上层，历史资讯保留并顺延，始终只保留最新 8 条；
  *  - 无中文的标题/摘要/媒体用与发射相同的 LLM 翻译；
  *  - 新条目用 LLM 生成 100-150 字摘要与约 100 字影响分析并落库，页面只读库。
@@ -25,6 +26,11 @@ const KEEP_LIMIT = 8
 const TIMEOUT_MS = 20_000
 /** 缺数据时启动补抓的时效阈值（避免每次重启都重复抓） */
 const STALE_MS = 20 * 60 * 60 * 1000
+/** 日切时刻（UTC）：晚于上游约 01:30 的当日热点生成时间 */
+const CRON_HOUR_UTC = 2
+/** 上游当日暂无数据时的小时级重试间隔与次数 */
+const RETRY_MS = 60 * 60 * 1000
+const MAX_RETRY = 3
 const CJK_RE = /[\u4e00-\u9fa5]/
 
 let running = false
@@ -253,19 +259,41 @@ export async function refreshNewsIfStale(): Promise<void> {
   await runNewsRefresh('startup')
 }
 
-/** 每天 UTC 00:00 触发一次（30s 轮询，按日期去重；与发射预报同时段） */
+/** 上游当日无数据时，每小时重试，最多 MAX_RETRY 次 */
+function scheduleNewsRetry(attempt: number): void {
+  if (attempt > MAX_RETRY) return
+  setTimeout(() => {
+    if (running) return
+    console.log(`[news-refresh] retry ${attempt}/${MAX_RETRY}`)
+    void runNewsRefresh(`retry-${attempt}`)
+      .then((r) => {
+        if (r.fetched === 0) scheduleNewsRetry(attempt + 1)
+      })
+      .catch((e) => {
+        console.error('[news-refresh] retry failed:', (e as Error).message)
+        scheduleNewsRetry(attempt + 1)
+      })
+  }, RETRY_MS)
+}
+
+/** 每天 UTC 02:00 触发一次（30s 轮询，按日期去重）；当日无数据则小时级重试 */
 export function startNewsRefreshScheduler(): void {
   if (timer) return
   timer = setInterval(() => {
     const now = new Date()
     const key = now.toISOString().slice(0, 10)
-    if (now.getUTCHours() === 0 && now.getUTCMinutes() === 0 && lastRunDate !== key) {
+    if (now.getUTCHours() === CRON_HOUR_UTC && now.getUTCMinutes() === 0 && lastRunDate !== key) {
       lastRunDate = key
-      console.log('[news-refresh] cron 触发（UTC 00:00）')
-      void runNewsRefresh('cron').catch((e) => {
-        console.error('[news-refresh] cron run failed:', (e as Error).message)
-      })
+      console.log(`[news-refresh] cron 触发（UTC 0${CRON_HOUR_UTC}:00）`)
+      void runNewsRefresh('cron')
+        .then((r) => {
+          if (r.fetched === 0) scheduleNewsRetry(1)
+        })
+        .catch((e) => {
+          console.error('[news-refresh] cron run failed:', (e as Error).message)
+          scheduleNewsRetry(1)
+        })
     }
   }, 30_000)
-  console.log('[news-refresh] scheduler started (UTC 00:00 daily)')
+  console.log(`[news-refresh] scheduler started (UTC 0${CRON_HOUR_UTC}:00 daily)`)
 }
