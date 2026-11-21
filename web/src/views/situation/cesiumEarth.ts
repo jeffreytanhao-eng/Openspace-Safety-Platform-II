@@ -308,8 +308,10 @@ export async function initCesium(container: HTMLElement, hooks?: CesiumInitHooks
     // 仅当在线影像不可用时才用离线底图兜底，避免整颗球纯黑。
     const baseLayer = await createImageryLayer()
     const offlineBase = baseLayer ? null : await createOfflineBaseLayer()
-    // 南极补丁只给 Web Mercator 类底图（极区缺口）；内置 NaturalEarthII 已覆盖两极，不再叠纯白帽
-    const southCap = baseLayer ? await createSouthPolarCapLayer() : null
+    // 南极补丁只给 Web Mercator 形态的底图（切片止于 ±85.05°）；geodetic TMS 本身就
+    // 覆盖 ±90°（本项目 public/tiles/earth），再叠纯白帽反而会盖掉真实的南极影像。
+    const southCap =
+      baseLayer && baseCfg.imageryKind !== 'tms' ? await createSouthPolarCapLayer() : null
 
     widget = new Cs.CesiumWidget(container, {
       baseLayer: baseLayer ?? false,

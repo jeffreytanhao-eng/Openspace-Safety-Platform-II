@@ -578,7 +578,12 @@ function addOccluder() {
 async function applyCesiumBase(el: HTMLElement): Promise<boolean> {
   loading.value = true
   error.value = ''
-  configureEarthBase({})
+  // 离线高清底图：Natural Earth II 21600×10800 切成的 geodetic TMS 瓦片包
+  // （web/scripts/build-imagery-tiles.py 生成，随 public/tiles/earth 分发，覆盖 ±90° 无极区空缺）
+  configureEarthBase({
+    imageryUrl: `${import.meta.env.BASE_URL}tiles/earth/`,
+    imageryKind: 'tms'
+  })
   const ok = await initCesium(el, {
     // Old: ignore Cesium moveStart while tracking — track delta + orbit-focus drag own the camera;
     // setting interacting here would freeze sim on every micro-move and felt like “controls dead”.
