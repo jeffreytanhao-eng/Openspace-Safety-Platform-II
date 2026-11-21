@@ -74,6 +74,8 @@ export async function runLaunchRefresh(triggeredBy = 'cron'): Promise<LaunchRefr
   try {
     const data = await fetchUpstream<UpstreamList>(`/launches?window_days=${WINDOW_DAYS}`)
     const items = Array.isArray(data.items) ? data.items : []
+    // 上游偶发返回空列表时不做删除，避免把本地记录整表清空
+    if (!items.length) throw new Error('上游返回空列表，跳过本次刷新')
     const prev = await getLaunchHashes()
     const keep: string[] = []
     let added = 0
