@@ -1,9 +1,9 @@
 /**
  * 长按拖动排序（鼠标左键）：
- *  - 按下 100ms 且位移不超过 6px 进入拖动，避免与普通点击冲突；
+ *  - 按住 250ms 且位移不超过 6px 才可能进入拖动（长按阈值，避免把普通点击当成拖动）；
+ *  - 只有「真正发生位移」后才会切成拖动态并吞掉随后的 click，单纯按住不动仍算点击；
  *  - 拖动中根据指针位置找到目标条目，把源条目移动到目标位置；
- *  - 松开后回调 onDrop，由调用方决定是否落库；
- *  - 拖动结束后的 click 会在捕获阶段被吞掉，防止误触打开详情。
+ *  - 松开后回调 onDrop，由调用方决定是否落库。
  */
 import { onBeforeUnmount, ref } from 'vue'
 
@@ -18,7 +18,7 @@ interface DragSortOptions {
   disabled?: () => boolean
 }
 
-const HOLD_MS = 100
+const HOLD_MS = 250
 const MOVE_TOLERANCE = 6
 /** 拖动结束到 click 事件之间的保护窗口 */
 const CLICK_GUARD_MS = 120
@@ -29,7 +29,10 @@ export function useDragSort(opts: DragSortOptions) {
   let startX = 0
   let startY = 0
   let fromId = ''
+  /** 已按满长按阈值（此时还不知道用户是要点击还是要拖动） */
   let active = false
+  /** 真正进入拖动：已越过位移阈值，才会吞 click */
+  let dragging = false
   let prevUserSelect = ''
   let prevCursor = ''
 
@@ -55,9 +58,15 @@ export function useDragSort(opts: DragSortOptions) {
     window.addEventListener('pointercancel', onPressEnd)
   }
 
+  /** 按满阈值：只是获得「可能拖动」的资格，不改样式、不吞 click */
   function activate() {
     pressTimer = null
     active = true
+  }
+
+  /** 越过位移阈值后才真正进入拖动（视觉反馈 + 吞掉随后的 click） */
+  function beginDrag() {
+    dragging = true
     dragId.value = fromId
     prevUserSelect = document.body.style.userSelect
     prevCursor = document.body.style.cursor
@@ -67,12 +76,17 @@ export function useDragSort(opts: DragSortOptions) {
   }
 
   function onPressMove(e: PointerEvent) {
+    const moved =
+      Math.abs(e.clientX - startX) > MOVE_TOLERANCE || Math.abs(e.clientY - startY) > MOVE_TOLERANCE
     if (!active) {
       // 长按判定前发生明显位移：视为普通点击/选择，不进入拖动
-      if (Math.abs(e.clientX - startX) > MOVE_TOLERANCE || Math.abs(e.clientY - startY) > MOVE_TOLERANCE) {
-        clearPress()
-      }
+      if (moved) clearPress()
       return
+    }
+    if (!dragging) {
+      // 按满了但没动：仍然是一次普通点击，交给 click 事件打开详情
+      if (!moved) return
+      beginDrag()
     }
     e.preventDefault()
     const el = document.elementFromPoint(e.clientX, e.clientY) as HTMLElement | null
@@ -82,10 +96,11 @@ export function useDragSort(opts: DragSortOptions) {
   }
 
   function onPressEnd() {
-    const wasActive = active
+    const wasDragging = dragging
     clearPress()
-    if (!wasActive) return
     active = false
+    dragging = false
+    if (!wasDragging) return
     dragId.value = ''
     document.body.style.userSelect = prevUserSelect
     document.body.style.cursor = prevCursor
